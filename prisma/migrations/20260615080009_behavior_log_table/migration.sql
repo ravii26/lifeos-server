@@ -1,0 +1,16 @@
+-- CreateEnum
+CREATE TYPE "BehaviorEvent" AS ENUM ('APP_OPEN', 'TASK_COMPLETED', 'TASK_DEFERRED', 'HABIT_LOGGED', 'CAPTURE_CREATED', 'VAULT_ACCESSED', 'FOCUS_STARTED', 'FOCUS_COMPLETED', 'FOCUS_ABANDONED', 'AREA_VIEWED', 'REVIEW_OPENED');
+
+-- CreateTable
+CREATE TABLE "BehaviorLog" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "eventType" "BehaviorEvent" NOT NULL,
+    "metadata" JSONB,
+    "occurredAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "BehaviorLog_pkey" PRIMARY KEY ("id")
+);
+
+-- AddForeignKey
+ALTER TABLE "BehaviorLog" ADD CONSTRAINT "BehaviorLog_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;

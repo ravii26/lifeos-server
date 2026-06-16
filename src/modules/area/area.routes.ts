@@ -1,0 +1,24 @@
+import { Router } from "express"
+import {
+  createAreaController,
+  listAreasController,
+  getAreaController,
+  updateAreaController,
+  deleteAreaController,
+} from "./area.controller.js"
+import { validate } from "../../shared/middleware/validate.middleware.js"
+import { authenticate } from "../../shared/middleware/auth.middleware.js"
+import { createAreaSchema, updateAreaSchema } from "./area.schema.js"
+
+const router = Router()
+
+// All area routes are protected — areas are personal to each user.
+router.use(authenticate)
+
+router.post("/", validate(createAreaSchema), createAreaController)
+router.get("/", listAreasController)
+router.get("/:id", getAreaController)
+router.patch("/:id", validate(updateAreaSchema), updateAreaController)
+router.delete("/:id", deleteAreaController)
+
+export default router

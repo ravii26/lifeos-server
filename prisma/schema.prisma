@@ -1,0 +1,575 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  timezone     String    @default("Asia/Kolkata")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Relations
+  identity     Identity?
+  areas        Area[]
+  goals        Goal[]
+  projects     Project[]
+  tasks        Task[]
+  habits         Habit[]
+  habitLogs      HabitLog[]
+  calendarBlocks CalendarBlock[]
+  focusSessions  FocusSession[]
+  topics         Topic[]
+  notebooks      Notebook[]
+  resources      Resource[]
+  notes          Note[]
+  vaultItems     VaultItem[]
+  captures       Capture[]
+  reviews        Review[]
+  insightReviews InsightReview[]
+  behaviorLogs   BehaviorLog[]
+}
+
+model Identity {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // All optional — user fills gradually
+  personality  String?
+  values       String[]
+  strengths    String[]
+  weaknesses   String[]
+  purpose      String?
+
+  // Renamed to feel more human
+  thisYearGoal String?   // "What do you want to achieve this year?"
+  bigPicture   String?   // "Where do you want to be in 5 years?"
+  lifeVision   String?   // "What does your ideal life look like?"
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model Area {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name      String
+  type      AreaType @default(PRIMARY)
+  color     String
+  icon      String
+  order     Int
+  isDefault Boolean  @default(false)
+  isActive  Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  goals          Goal[]
+  projects       Project[]
+  tasks          Task[]
+  habits         Habit[]
+  calendarBlocks CalendarBlock[]
+  topics         Topic[]
+}
+
+enum AreaType {
+  PRIMARY
+  MAINTENANCE
+}
+
+model Goal {
+  id          String     @id @default(cuid())
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  areaId      String
+  area        Area       @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  priority    Priority   @default(MEDIUM)
+  status      GoalStatus @default(ACTIVE)
+  deadline    DateTime?
+
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relations
+  projects    Project[]
+  tasks       Task[]
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  areaId      String
+  area        Area          @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  goalId      String?
+  goal        Goal?         @relation(fields: [goalId], references: [id])
+
+  title       String
+  description String?
+  status      ProjectStatus @default(ACTIVE)
+  deadline    DateTime?
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  // Relations
+  tasks       Task[]
+}
+
+enum ProjectStatus {
+  ACTIVE
+  COMPLETED
+  PAUSED
+  ABANDONED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum GoalStatus {
+  ACTIVE
+  COMPLETED
+  PAUSED
+  ABANDONED
+}
+
+model Task {
+  id             String      @id @default(cuid())
+  userId         String
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  areaId         String?
+  area           Area?       @relation(fields: [areaId], references: [id])
+  goalId         String?
+  goal           Goal?       @relation(fields: [goalId], references: [id])
+  projectId      String?
+  project        Project?    @relation(fields: [projectId], references: [id])
+
+  title          String
+  description    String?
+  status         TaskStatus  @default(TODO)
+  priority       Priority    @default(MEDIUM)
+
+  taskType       TaskType    @default(BOOLEAN)
+  targetCount    Int?
+  completedCount Int         @default(0)
+  targetMinutes  Int?
+
+  dueDate        DateTime?
+
+  isRecurring    Boolean     @default(false)
+  recurrence     Recurrence?
+
+  source         TaskSource  @default(MANUAL)
+  sourceId       String?
+
+  completedAt    DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  // Relations
+  calendarBlocks CalendarBlock[]
+  focusSessions  FocusSession[]
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskType {
+  BOOLEAN
+  COUNT
+  TIMER
+}
+
+enum TaskSource {
+  MANUAL
+  DUMP
+  LEARN
+}
+
+enum Recurrence {
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+model Habit {
+  id            String        @id @default(cuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  areaId        String
+  area          Area          @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  title         String
+  description   String?
+  habitType     HabitType     @default(BOOLEAN)
+  targetCount   Int?
+  targetMinutes Int?
+
+  frequency     HabitFrequency @default(DAILY)
+  weeklyTarget  Int?
+  specificDays  String[]
+
+  reminderTime  String?
+  isActive      Boolean       @default(true)
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  // Relations
+  logs           HabitLog[]
+  calendarBlocks CalendarBlock[]
+  focusSessions  FocusSession[]
+}
+
+model HabitLog {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  habitId   String
+  habit     Habit    @relation(fields: [habitId], references: [id], onDelete: Cascade)
+
+  date      DateTime @db.Date
+  completed Boolean  @default(false)
+  count     Int      @default(0)
+  minutes   Int      @default(0)
+  notes     String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([habitId, date])
+}
+
+enum HabitType {
+  BOOLEAN
+  COUNT
+  TIMER
+}
+
+enum HabitFrequency {
+  DAILY
+  WEEKLY
+  CUSTOM
+}
+
+model Topic {
+  id           String       @id @default(cuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  areaId       String
+  area         Area         @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  title        String
+  description  String?
+  masteryLevel MasteryLevel @default(BEGINNER)
+
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  // Relations
+  notebooks    Notebook[]
+  resources    Resource[]
+  notes        Note[]
+}
+
+model Notebook {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId     String
+  topic       Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  tags        String[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  notes       Note[]
+}
+
+model Resource {
+  id           String         @id @default(cuid())
+  userId       String
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId      String
+  topic        Topic          @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  title        String
+  resourceType ResourceType
+  url          String?
+  platform     String?
+  status       ResourceStatus @default(NOT_STARTED)
+  rating       Int?
+  notes        String?
+
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  // Relations
+  linkedNotes  Note[]
+}
+
+model Note {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId    String
+  topic      Topic     @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  notebookId String?
+  notebook   Notebook? @relation(fields: [notebookId], references: [id])
+  resourceId String?
+  resource   Resource? @relation(fields: [resourceId], references: [id])
+
+  title      String
+  content    String
+  noteType   NoteType  @default(CONCEPT)
+  tags       String[]
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  // Relations
+  insightReviews InsightReview[]
+}
+
+enum MasteryLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  EXPERT
+}
+
+enum ResourceType {
+  BOOK
+  COURSE
+  VIDEO
+  ARTICLE
+  PODCAST
+  DOCUMENTATION
+  OTHER
+}
+
+enum ResourceStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum NoteType {
+  CONCEPT
+  INSIGHT
+  SUMMARY
+  QUOTE
+  OTHER
+}
+
+model VaultItem {
+  id          String      @id @default(cuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title       String
+  content     String
+  vaultType   VaultType
+  mediaType   MediaType   @default(TEXT)
+  url         String?
+  triggerTags String[]
+
+  usedCount    Int        @default(0)
+  helpfulCount Int        @default(0)
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+enum VaultType {
+  REFLECTION
+  MEMORY
+  MOTIVATION
+  RECOVERY
+}
+
+enum MediaType {
+  TEXT
+  QUOTE
+  VIDEO
+  AUDIO
+  IMAGE
+}
+
+model Capture {
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  rawText         String
+  detectedUrl     String?
+  urlMetadata     Json?
+
+  worthCheck      WorthCheck?
+  worthReason     String?
+
+  suggestedOutputs Json?
+  createdOutputs   Json?
+
+  status          CaptureStatus @default(PENDING)
+  confidence      Float?
+
+  createdAt       DateTime      @default(now())
+}
+
+enum CaptureStatus {
+  PENDING
+  CONVERTED
+  DISMISSED
+}
+
+enum WorthCheck {
+  WORTH_NOW
+  SAVE_LATER
+  NOT_RELEVANT
+}
+
+model Review {
+  id           String     @id @default(cuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  reviewType   ReviewType
+  periodStart  DateTime
+  periodEnd    DateTime
+
+  summary      String?
+  highlights   String?
+  improvements String?
+  userNote     String?
+  aiInsights   Json?
+
+  createdAt    DateTime   @default(now())
+
+  // Relations
+  insightReviews InsightReview[]
+}
+
+model InsightReview {
+  id           String              @id @default(cuid())
+  userId       String
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewId     String
+  review       Review              @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  noteId       String
+  note         Note                @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  status       InsightReviewStatus @default(PENDING)
+  userNote     String?
+
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+}
+
+enum ReviewType {
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+enum InsightReviewStatus {
+  PENDING
+  IMPLEMENTED
+  STILL_WORKING
+  NOT_APPLICABLE
+}
+
+model BehaviorLog {
+  id          String      @id @default(cuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  eventType   BehaviorEvent
+  metadata    Json?
+  occurredAt  DateTime    @default(now())
+}
+
+enum BehaviorEvent {
+  APP_OPEN
+  TASK_COMPLETED
+  TASK_DEFERRED
+  HABIT_LOGGED
+  CAPTURE_CREATED
+  VAULT_ACCESSED
+  FOCUS_STARTED
+  FOCUS_COMPLETED
+  FOCUS_ABANDONED
+  AREA_VIEWED
+  REVIEW_OPENED
+}
+
+model CalendarBlock {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskId    String?
+  task      Task?    @relation(fields: [taskId], references: [id])
+  habitId   String?
+  habit     Habit?   @relation(fields: [habitId], references: [id])
+  areaId    String?
+  area      Area?    @relation(fields: [areaId], references: [id])
+
+  title     String
+  startTime DateTime
+  endTime   DateTime
+  blockType String   @default("FOCUS")
+  isActual  Boolean  @default(false)
+  notes     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  focusSessions FocusSession[]
+}
+
+model FocusSession {
+  id              String         @id @default(cuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskId          String?
+  task            Task?          @relation(fields: [taskId], references: [id])
+  habitId         String?
+  habit           Habit?         @relation(fields: [habitId], references: [id])
+  calendarBlockId String?
+  calendarBlock   CalendarBlock? @relation(fields: [calendarBlockId], references: [id])
+
+  startedAt       DateTime
+  endedAt         DateTime?
+  durationMinutes Int?
+  notes           String?
+
+  createdAt       DateTime @default(now())
+}
