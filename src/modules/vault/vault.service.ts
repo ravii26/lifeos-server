@@ -1,10 +1,12 @@
 import { NotFoundError } from "../../shared/utils/errors.util.js"
+import { logBehavior } from "../behavior/behavior.service.js"
 import {
   createVaultItem,
   findVaultItemsByUser,
   findVaultItemById,
   updateVaultItem,
   deleteVaultItem,
+  incrementVaultUsed,
 } from "./vault.repository.js"
 import type {
   CreateVaultItemDto,
@@ -60,4 +62,15 @@ export const updateVaultItemService = async (
 export const deleteVaultItemService = async (id: string, userId: string): Promise<void> => {
   await getOwnedVaultItem(id, userId)
   await deleteVaultItem(id)
+}
+
+// Records that the item was surfaced/opened — bumps usedCount (B7).
+export const markVaultItemUsedService = async (
+  id: string,
+  userId: string,
+): Promise<VaultItemDto> => {
+  await getOwnedVaultItem(id, userId)
+  const item = await incrementVaultUsed(id)
+  logBehavior(userId, "VAULT_ACCESSED", { vaultItemId: id })
+  return item
 }

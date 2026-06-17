@@ -16,6 +16,25 @@ export const findHabitById = (id: string, userId: string) => {
   return prisma.habit.findFirst({ where: { id, userId } })
 }
 
+// Habits with their recent logs attached, for stat computation (B4).
+// Only the trailing window of logs is loaded to keep the payload small.
+export const findHabitsWithLogsByUser = (
+  userId: string,
+  since: Date,
+  filters: Prisma.HabitWhereInput = {},
+) => {
+  return prisma.habit.findMany({
+    where: { userId, ...filters },
+    orderBy: { createdAt: "desc" },
+    include: {
+      logs: {
+        where: { date: { gte: since } },
+        orderBy: { date: "desc" },
+      },
+    },
+  })
+}
+
 export const updateHabit = (id: string, data: Prisma.HabitUpdateInput) => {
   return prisma.habit.update({ where: { id }, data })
 }

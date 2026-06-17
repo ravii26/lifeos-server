@@ -26,3 +26,11 @@ export const updateVaultItem = (id: string, data: Prisma.VaultItemUpdateInput) =
 export const deleteVaultItem = (id: string) => {
   return prisma.vaultItem.delete({ where: { id } })
 }
+
+// Atomically bump usedCount when an item is surfaced/opened (B7).
+export const incrementVaultUsed = (id: string) => {
+  return prisma.vaultItem.update({
+    where: { id },
+    data: { usedCount: { increment: 1 } },
+  })
+}

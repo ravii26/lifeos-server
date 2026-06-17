@@ -4,6 +4,7 @@ const taskStatus = z.enum(["TODO", "IN_PROGRESS", "COMPLETED", "CANCELLED"])
 const priority = z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"])
 const taskType = z.enum(["BOOLEAN", "COUNT", "TIMER"])
 const recurrence = z.enum(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"])
+const taskSource = z.enum(["MANUAL", "DUMP", "LEARN"])
 
 export const createTaskSchema = z.object({
   title: z.string().min(1, "Title is required").max(200),
@@ -19,6 +20,10 @@ export const createTaskSchema = z.object({
   dueDate: z.coerce.date().optional(),
   isRecurring: z.boolean().optional(),
   recurrence: recurrence.optional(),
+  // Provenance — lets the client create a task "↳ from Learn" (a Note) or
+  // "↳ from Dump" (a Capture) and keep a back-reference (B6).
+  source: taskSource.optional(),
+  sourceId: z.string().optional(),
 })
 
 export const updateTaskSchema = z.object({

@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken"
 import { env } from "../../config/env.config.js"
 import { ConflictError, UnauthorizedError } from "../../shared/utils/errors.util.js"
 import type { AuthTokenPayload } from "../../shared/types/common.types.js"
-import { findUserByEmail, findUserById, createUser } from "./auth.repository.js"
+import { findUserByEmail, findUserById, createUser, getUserStats } from "./auth.repository.js"
 import type { RegisterDto, LoginDto } from "./auth.schema.js"
 import type { AuthResponseDto, UserDto } from "./auth.dto.js"
 
@@ -51,3 +51,6 @@ export const getMeService = async (id: string): Promise<UserDto> => {
   if (!user) throw new UnauthorizedError("User not found")
   return user
 }
+
+// Lifetime profile stats for the Settings/profile screen (B10).
+export const getStatsService = (id: string) => getUserStats(id)

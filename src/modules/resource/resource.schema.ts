@@ -26,6 +26,16 @@ export const updateResourceSchema = z.object({
   notes: z.string().max(2000).nullable().optional(),
 })
 
+export const updateProgressSchema = z.object({
+  lessonsCompleted: z.number().int().min(0).optional(),
+  totalLessons: z.number().int().min(1).nullable().optional(),
+  minutesConsumed: z.number().int().min(0).optional(),
+  // convenience: auto-mark COMPLETED when lessonsCompleted === totalLessons
+  autoComplete: z.boolean().optional(),
+})
+
+export type UpdateProgressDto = z.infer<typeof updateProgressSchema>
+
 export const listResourcesSchema = z.object({
   topicId: z.string().optional(),
   resourceType: resourceType.optional(),

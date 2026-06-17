@@ -5,6 +5,7 @@ import {
   getVaultItemController,
   updateVaultItemController,
   deleteVaultItemController,
+  markVaultItemUsedController,
 } from "./vault.controller.js"
 import { validate, validateQuery } from "../../shared/middleware/validate.middleware.js"
 import { authenticate } from "../../shared/middleware/auth.middleware.js"
@@ -22,6 +23,7 @@ router.post("/", validate(createVaultItemSchema), createVaultItemController)
 router.get("/", validateQuery(listVaultItemsSchema), listVaultItemsController)
 router.get("/:id", getVaultItemController)
 router.patch("/:id", validate(updateVaultItemSchema), updateVaultItemController)
+router.post("/:id/used", markVaultItemUsedController)
 router.delete("/:id", deleteVaultItemController)
 
 export default router

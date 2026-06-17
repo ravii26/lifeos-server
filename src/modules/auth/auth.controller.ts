@@ -1,5 +1,5 @@
 import type { Request, Response } from "express"
-import { registerService, loginService, getMeService } from "./auth.service.js"
+import { registerService, loginService, getMeService, getStatsService } from "./auth.service.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
 import { HttpStatus } from "../../shared/constants/httpStatus.js"
 
@@ -16,4 +16,9 @@ export const loginController = async (req: Request, res: Response) => {
 export const meController = async (req: Request, res: Response) => {
   const user = await getMeService(req.user!.id)
   sendSuccess(res, "Success", user)
+}
+
+export const statsController = async (req: Request, res: Response) => {
+  const stats = await getStatsService(req.user!.id)
+  sendSuccess(res, "Stats fetched", stats)
 }

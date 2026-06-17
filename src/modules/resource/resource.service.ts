@@ -11,6 +11,7 @@ import type {
   CreateResourceDto,
   UpdateResourceDto,
   ListResourcesDto,
+  UpdateProgressDto,
 } from "./resource.schema.js"
 import type { ResourceDto } from "./resource.dto.js"
 
@@ -71,4 +72,29 @@ export const updateResourceService = async (
 export const deleteResourceService = async (id: string, userId: string): Promise<void> => {
   await getOwnedResource(id, userId)
   await deleteResource(id)
+}
+
+// B8 — track lesson/minute progress
+export const updateResourceProgressService = async (
+  id: string,
+  userId: string,
+  input: UpdateProgressDto,
+): Promise<ResourceDto> => {
+  const resource = await getOwnedResource(id, userId)
+
+  const nextLessons = input.lessonsCompleted ?? resource.lessonsCompleted
+  const nextTotal = input.totalLessons !== undefined ? input.totalLessons : resource.totalLessons
+  const nextMins = input.minutesConsumed !== undefined
+    ? resource.minutesConsumed + input.minutesConsumed
+    : resource.minutesConsumed
+
+  const shouldComplete =
+    input.autoComplete && nextTotal != null && nextLessons >= nextTotal
+
+  return updateResource(id, {
+    lessonsCompleted: nextLessons,
+    totalLessons: nextTotal,
+    minutesConsumed: nextMins,
+    ...(shouldComplete && { status: "COMPLETED" }),
+  })
 }

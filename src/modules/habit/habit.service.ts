@@ -4,12 +4,14 @@ import { findAreaById } from "../area/area.repository.js"
 import {
   createHabit,
   findHabitsByUser,
+  findHabitsWithLogsByUser,
   findHabitById,
   updateHabit,
   deleteHabit,
   upsertHabitLog,
   findHabitLogs,
 } from "./habit.repository.js"
+import { computeHabitStats } from "./habit.stats.js"
 import type {
   CreateHabitDto,
   UpdateHabitDto,
@@ -17,7 +19,11 @@ import type {
   LogHabitDto,
   ListLogsDto,
 } from "./habit.schema.js"
-import type { HabitDto, HabitLogDto } from "./habit.dto.js"
+import type { HabitDto, HabitLogDto, HabitWithStatsDto } from "./habit.dto.js"
+
+// How many trailing days of logs to load + expose for stats/heat-strips.
+const STATS_WINDOW = 28
+const todayKey = (): string => new Date().toISOString().slice(0, 10)
 
 const getOwnedHabit = async (id: string, userId: string) => {
   const habit = await findHabitById(id, userId)
@@ -58,13 +64,23 @@ export const createHabitService = async (
   })
 }
 
-export const listHabitsService = (
+export const listHabitsService = async (
   userId: string,
   filters: ListHabitsDto,
-): Promise<HabitDto[]> => {
-  return findHabitsByUser(userId, {
+): Promise<HabitWithStatsDto[]> => {
+  const since = new Date()
+  since.setUTCDate(since.getUTCDate() - STATS_WINDOW)
+
+  const habits = await findHabitsWithLogsByUser(userId, since, {
     ...(filters.areaId && { areaId: filters.areaId }),
     ...(filters.isActive && { isActive: filters.isActive === "true" }),
+  })
+
+  const tk = todayKey()
+  return habits.map(({ logs, ...habit }) => {
+    const stats = computeHabitStats(logs, STATS_WINDOW)
+    const todayLog = logs.find((l) => l.date.toISOString().slice(0, 10) === tk) ?? null
+    return { ...habit, ...stats, todayLog }
   })
 }
 

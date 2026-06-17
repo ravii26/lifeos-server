@@ -26,3 +26,14 @@ export interface HabitLogDto {
   notes: string | null
   createdAt: Date
 }
+
+// Habit enriched with derived stats — returned by GET /habits so the
+// client doesn't need an N+1 call to /habits/:id/logs just to show
+// streaks and today's status (B4).
+export interface HabitWithStatsDto extends HabitDto {
+  currentStreak: number
+  longestStreak: number
+  todayDone: boolean
+  todayLog: HabitLogDto | null
+  history: boolean[]
+}

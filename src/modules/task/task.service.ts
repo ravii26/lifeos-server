@@ -61,6 +61,8 @@ export const createTaskService = async (
     dueDate: input.dueDate ?? null,
     isRecurring: input.isRecurring ?? false,
     recurrence: input.recurrence ?? null,
+    source: input.source ?? "MANUAL",
+    sourceId: input.sourceId ?? null,
   })
 }
 

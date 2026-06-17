@@ -15,6 +15,8 @@ import reviewRoutes from "./review/review.routes.js"
 import calendarRoutes from "./calendar/calendar.routes.js"
 import focusRoutes from "./focus/focus.routes.js"
 import behaviorRoutes from "./behavior/behavior.routes.js"
+import captureRoutes from "./capture/capture.routes.js"
+import settingsRoutes from "./settings/settings.routes.js"
 
 const router = Router()
 
@@ -36,5 +38,7 @@ router.use("/reviews", reviewRoutes)
 router.use("/calendar", calendarRoutes)
 router.use("/focus", focusRoutes)
 router.use("/behavior", behaviorRoutes)
+router.use("/captures", captureRoutes)
+router.use("/settings", settingsRoutes)
 
 export default router

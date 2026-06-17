@@ -5,6 +5,8 @@ import {
   getAreaController,
   updateAreaController,
   deleteAreaController,
+  snapshotAreaScoreController,
+  listAreaSnapshotsController,
 } from "./area.controller.js"
 import { validate } from "../../shared/middleware/validate.middleware.js"
 import { authenticate } from "../../shared/middleware/auth.middleware.js"
@@ -20,5 +22,9 @@ router.get("/", listAreasController)
 router.get("/:id", getAreaController)
 router.patch("/:id", validate(updateAreaSchema), updateAreaController)
 router.delete("/:id", deleteAreaController)
+
+// A3 — score history
+router.post("/:id/snapshot", snapshotAreaScoreController)
+router.get("/:id/snapshots", listAreaSnapshotsController)
 
 export default router

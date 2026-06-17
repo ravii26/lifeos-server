@@ -5,6 +5,7 @@ import {
   getResourceService,
   updateResourceService,
   deleteResourceService,
+  updateResourceProgressService,
 } from "./resource.service.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
 import { HttpStatus } from "../../shared/constants/httpStatus.js"
@@ -37,4 +38,10 @@ export const deleteResourceController = async (req: Request, res: Response) => {
   const { id } = req.params as { id: string }
   await deleteResourceService(id, req.user!.id)
   sendSuccess(res, "Resource deleted")
+}
+
+export const updateResourceProgressController = async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string }
+  const resource = await updateResourceProgressService(id, req.user!.id, req.body)
+  sendSuccess(res, "Progress updated", resource)
 }
