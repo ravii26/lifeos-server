@@ -1,4 +1,4 @@
-import { NotFoundError } from "../../shared/utils/errors.util.js"
+import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
 import { findAreaById } from "../area/area.repository.js"
 import { findTaskById } from "../task/task.repository.js"
 import { findHabitById } from "../habit/habit.repository.js"
@@ -8,9 +8,28 @@ import {
   findBlockById,
   updateBlock,
   deleteBlock,
+  upsertException,
+  deleteException,
+  reassignExceptions,
 } from "./calendar.repository.js"
-import type { CreateBlockDto, UpdateBlockDto, ListBlocksDto } from "./calendar.schema.js"
-import type { CalendarBlockDto } from "./calendar.dto.js"
+import {
+  expandRecurringBlock,
+  blockToDto,
+  assertValidRecurrenceRule,
+  capRecurrenceRule,
+} from "./calendar.recurrence.js"
+import type {
+  CreateBlockDto,
+  UpdateBlockDto,
+  ListBlocksDto,
+  UpsertExceptionDto,
+  SplitSeriesDto,
+} from "./calendar.schema.js"
+import type { CalendarBlockDto, CalendarBlockExceptionDto } from "./calendar.dto.js"
+
+// Default expansion window (days) when a recurring block is listed without a range.
+const DEFAULT_WINDOW_DAYS = 90
+const DAY_MS = 24 * 60 * 60 * 1000
 
 const getOwnedBlock = async (id: string, userId: string) => {
   const block = await findBlockById(id, userId)
@@ -43,7 +62,11 @@ export const createBlockService = async (
 ): Promise<CalendarBlockDto> => {
   await assertLinksOwned(userId, input)
 
-  return createBlock({
+  if (input.recurrenceRule) {
+    assertValidRecurrenceRule(input.recurrenceRule, input.startTime)
+  }
+
+  const block = await createBlock({
     userId,
     taskId: input.taskId ?? null,
     habitId: input.habitId ?? null,
@@ -54,27 +77,48 @@ export const createBlockService = async (
     blockType: input.blockType ?? "FOCUS",
     isActual: input.isActual ?? false,
     notes: input.notes ?? null,
+    recurrenceRule: input.recurrenceRule ?? null,
   })
+  return blockToDto(block)
 }
 
-export const listBlocksService = (
+export const listBlocksService = async (
   userId: string,
   filters: ListBlocksDto,
 ): Promise<CalendarBlockDto[]> => {
-  const timeRange: { gte?: Date; lte?: Date } = {}
-  if (filters.from) timeRange.gte = filters.from
-  if (filters.to) timeRange.lte = filters.to
-
-  return findBlocksByUser(userId, {
-    ...(Object.keys(timeRange).length && { startTime: timeRange }),
+  const blocks = await findBlocksByUser(userId, {
     ...(filters.areaId && { areaId: filters.areaId }),
     ...(filters.taskId && { taskId: filters.taskId }),
     ...(filters.habitId && { habitId: filters.habitId }),
   })
+
+  const hasRange = Boolean(filters.from || filters.to)
+  const from = filters.from ?? new Date()
+  const to = filters.to ?? new Date(from.getTime() + DEFAULT_WINDOW_DAYS * DAY_MS)
+
+  const result: CalendarBlockDto[] = []
+  for (const block of blocks) {
+    if (block.recurrenceRule) {
+      // Recurring templates are always expanded within the (resolved) window.
+      result.push(...expandRecurringBlock(block, from, to))
+    } else if (hasRange) {
+      // One-off block: keep it if it overlaps the requested range.
+      if (block.endTime >= from && block.startTime <= to) result.push(blockToDto(block))
+    } else {
+      result.push(blockToDto(block))
+    }
+  }
+
+  result.sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
+  return result
 }
 
-export const getBlockService = (id: string, userId: string): Promise<CalendarBlockDto> => {
-  return getOwnedBlock(id, userId)
+export const getBlockService = async (
+  id: string,
+  userId: string,
+): Promise<CalendarBlockDto> => {
+  const block = await getOwnedBlock(id, userId)
+  return blockToDto(block)
 }
 
 export const updateBlockService = async (
@@ -82,12 +126,102 @@ export const updateBlockService = async (
   userId: string,
   input: UpdateBlockDto,
 ): Promise<CalendarBlockDto> => {
-  await getOwnedBlock(id, userId)
+  const existing = await getOwnedBlock(id, userId)
   await assertLinksOwned(userId, input)
-  return updateBlock(id, input)
+
+  if (input.recurrenceRule) {
+    const dtstart = input.startTime ?? existing.startTime
+    assertValidRecurrenceRule(input.recurrenceRule, dtstart)
+  }
+
+  const block = await updateBlock(id, input)
+  return blockToDto(block)
 }
 
 export const deleteBlockService = async (id: string, userId: string): Promise<void> => {
   await getOwnedBlock(id, userId)
   await deleteBlock(id)
+}
+
+// --- Per-occurrence overrides ----------------------------------------------
+
+export const upsertExceptionService = async (
+  blockId: string,
+  userId: string,
+  input: UpsertExceptionDto,
+): Promise<CalendarBlockExceptionDto> => {
+  const block = await getOwnedBlock(blockId, userId)
+  if (!block.recurrenceRule) {
+    throw new ValidationError("Cannot add an occurrence override to a non-recurring block")
+  }
+
+  const exception = await upsertException(blockId, input.occurrenceDate, {
+    isCancelled: input.isCancelled ?? false,
+    title: input.title ?? null,
+    startTime: input.startTime ?? null,
+    endTime: input.endTime ?? null,
+    blockType: input.blockType ?? null,
+    notes: input.notes ?? null,
+  })
+  return exception
+}
+
+export const deleteExceptionService = async (
+  blockId: string,
+  userId: string,
+  occurrenceDate: Date,
+): Promise<void> => {
+  await getOwnedBlock(blockId, userId)
+  await deleteException(blockId, occurrenceDate)
+}
+
+// "This and following": cap the original series just before fromOccurrenceDate and
+// spin off a new recurring block (with any overrides) for that occurrence onward.
+export const splitSeriesService = async (
+  blockId: string,
+  userId: string,
+  input: SplitSeriesDto,
+): Promise<{ previous: CalendarBlockDto; following: CalendarBlockDto }> => {
+  const original = await getOwnedBlock(blockId, userId)
+  if (!original.recurrenceRule) {
+    throw new ValidationError("Cannot split a non-recurring block")
+  }
+  await assertLinksOwned(userId, input)
+
+  // The new series' first occurrence defines its time-of-day and duration.
+  const newStart = input.startTime ?? input.fromOccurrenceDate
+  const originalDurationMs = original.endTime.getTime() - original.startTime.getTime()
+  const newEnd = input.endTime ?? new Date(newStart.getTime() + originalDurationMs)
+  // Unchanged → reuse the original rule (preserving its own UNTIL/COUNT, if any).
+  const newRule = input.recurrenceRule ?? original.recurrenceRule
+  assertValidRecurrenceRule(newRule, newStart)
+
+  // Cap the original series to everything strictly before the split point.
+  const cappedUntil = new Date(input.fromOccurrenceDate.getTime() - 1000)
+  const cappedRule = capRecurrenceRule(
+    original.recurrenceRule,
+    original.startTime,
+    cappedUntil,
+  )
+
+  const previous = await updateBlock(blockId, { recurrenceRule: cappedRule })
+
+  const following = await createBlock({
+    userId,
+    taskId: input.taskId !== undefined ? input.taskId : original.taskId,
+    habitId: input.habitId !== undefined ? input.habitId : original.habitId,
+    areaId: input.areaId !== undefined ? input.areaId : original.areaId,
+    title: input.title ?? original.title,
+    startTime: newStart,
+    endTime: newEnd,
+    blockType: input.blockType ?? original.blockType,
+    isActual: original.isActual,
+    notes: input.notes !== undefined ? input.notes : original.notes,
+    recurrenceRule: newRule,
+  })
+
+  // Overrides on/after the split point belong to the new series.
+  await reassignExceptions(blockId, following.id, input.fromOccurrenceDate)
+
+  return { previous: blockToDto(previous), following: blockToDto(following) }
 }

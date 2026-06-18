@@ -585,11 +585,41 @@ model CalendarBlock {
   isActual  Boolean  @default(false)
   notes     String?
 
+  // Recurrence: when set, this row is a *template*. startTime/endTime define the
+  // first occurrence and the duration; recurrenceRule is an iCal RRULE string
+  // (e.g. "FREQ=WEEKLY;BYDAY=MO,WE,FR"). Occurrences are expanded virtually at
+  // list time and never stored as rows. Null = a one-off block.
+  recurrenceRule String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
   focusSessions FocusSession[]
+  exceptions    CalendarBlockException[]
+}
+
+// Per-occurrence override for a recurring CalendarBlock. Identified by the
+// parent template + the occurrence's original start instant (occurrenceDate).
+// isCancelled skips the occurrence entirely; the optional fields override the
+// expanded values for that single occurrence.
+model CalendarBlockException {
+  id             String        @id @default(cuid())
+  blockId        String
+  block          CalendarBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  occurrenceDate DateTime
+
+  isCancelled Boolean   @default(false)
+  title       String?
+  startTime   DateTime?
+  endTime     DateTime?
+  blockType   String?
+  notes       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([blockId, occurrenceDate])
 }
 
 model FocusSession {
