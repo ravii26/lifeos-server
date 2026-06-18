@@ -23,8 +23,6 @@ export interface AreaScore {
   focusMins: number
 }
 
-const todayKey = new Date().toISOString().slice(0, 10)
-
 // Neutral baselines when an area has no data of a given kind, so a brand
 // new area doesn't read as 0%.
 const BASE_TASK = 0.5
@@ -32,6 +30,9 @@ const BASE_HABIT = 0.5
 const BASE_LEARN = 0.4
 
 export const scoreArea = (areaId: string, input: ScoringInput): AreaScore => {
+  // Computed inside the function so long-running servers don't freeze the date
+  // at startup and wrong-score areas after midnight.
+  const todayKey = new Date().toISOString().slice(0, 10)
   // --- tasks ---
   const areaTasks = input.tasks.filter((t) => t.areaId === areaId)
   const tasksTotal = areaTasks.length

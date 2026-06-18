@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client"
+import type { Prisma, WorthCheck } from "@prisma/client"
 import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
 import { logBehavior } from "../behavior/behavior.service.js"
 import { findAreaById } from "../area/area.repository.js"
@@ -15,7 +15,8 @@ import {
   updateCapture,
   deleteCapture,
 } from "./capture.repository.js"
-import { classifyCapture, type CaptureType } from "./capture.ai.js"
+import { classifyCapture, type CaptureType, type Classification } from "./capture.ai.js"
+import { getUserRagContext } from "../../lib/rag.js"
 import type {
   CreateCaptureDto,
   UpdateCaptureDto,
@@ -32,19 +33,25 @@ const getOwnedCapture = async (id: string, userId: string) => {
   return capture
 }
 
-// Classification lives in the suggestedOutputs JSON column. This reads it
-// back out in a typed way.
+const mapWorthCheck = (val: string | null | undefined): WorthCheck => {
+  if (!val) return "SAVE_LATER"
+  const upper = val.toUpperCase()
+  if (upper === "YES" || upper === "WORTH_NOW") return "WORTH_NOW"
+  if (upper === "NO" || upper === "NOT_RELEVANT") return "NOT_RELEVANT"
+  return "SAVE_LATER"
+}
+
+// Classification lives in the suggestedOutputs JSON column.
 const readClassification = (
   capture: { suggestedOutputs: Prisma.JsonValue },
-): { type: CaptureType; meta: Record<string, unknown> } => {
+): { type: CaptureType; meta: Classification["meta"] } => {
   const raw = (capture.suggestedOutputs ?? {}) as {
     type?: CaptureType
-    meta?: Record<string, unknown>
+    meta?: Classification["meta"]
   }
   return { type: raw.type ?? "TASK", meta: raw.meta ?? {} }
 }
 
-// Flattens a DB row into the friendly client shape.
 const toDto = (capture: {
   id: string
   rawText: string
@@ -72,13 +79,65 @@ const toDto = (capture: {
 
 // ---- create / read -------------------------------------------------
 
+// Auto-convert threshold: only TASK and VAULT can be created without parent IDs.
+const AUTO_CONVERT_THRESHOLD = 0.85
+
+const autoConvert = async (
+  captureId: string,
+  userId: string,
+  rawText: string,
+  type: CaptureType,
+  meta: Classification["meta"],
+  detectedUrl: string | null,
+): Promise<void> => {
+  let createdId: string
+
+  const title = meta.title ?? rawText.slice(0, 200)
+
+  if (type === "TASK") {
+    const task = await createTask({
+      userId,
+      title,
+      priority: (meta.priority as never) ?? "MEDIUM",
+      status: "TODO",
+      taskType: "BOOLEAN",
+      source: "DUMP",
+      sourceId: captureId,
+      areaId: meta.suggestedAreaId ?? null,
+      dueDate: meta.dueDate ? new Date(meta.dueDate) : undefined,
+    })
+    createdId = task.id
+  } else if (type === "VAULT") {
+    const item = await createVaultItem({
+      userId,
+      title,
+      content: rawText,
+      vaultType: "REFLECTION",
+      mediaType: "TEXT",
+    })
+    createdId = item.id
+  } else {
+    return
+  }
+
+  await updateCapture(captureId, {
+    status: "CONVERTED",
+    createdOutputs: { type, id: createdId } as Prisma.InputJsonValue,
+  })
+}
+
 export const createCaptureService = async (
   userId: string,
   input: CreateCaptureDto,
 ): Promise<CaptureDto> => {
-  // The "AI triage" — heuristic today, a Claude call tomorrow (see capture.ai.ts).
-  const result = await classifyCapture(input.text)
+  // Fetch user context in parallel with nothing (classification needs it).
+  const ragContext = await getUserRagContext(userId)
+  const result = await classifyCapture(input.text, ragContext)
+
   const detectedUrl = (result.meta.url as string | undefined) ?? null
+
+  const canAutoConvert = result.confidence >= AUTO_CONVERT_THRESHOLD &&
+    (result.type === "TASK" || result.type === "VAULT")
 
   const capture = await createCapture({
     userId,
@@ -86,10 +145,19 @@ export const createCaptureService = async (
     detectedUrl,
     confidence: result.confidence,
     status: "PENDING",
+    worthCheck: mapWorthCheck(result.worthCheck),
+    worthReason: result.worthReason,
     suggestedOutputs: { type: result.type, meta: result.meta } as Prisma.InputJsonValue,
   })
 
   logBehavior(userId, "CAPTURE_CREATED", { captureId: capture.id, type: result.type })
+
+  if (canAutoConvert) {
+    void autoConvert(capture.id, userId, input.text, result.type, result.meta, detectedUrl)
+      .catch(() => {
+        // Swallow — the capture stays PENDING and the user can convert manually
+      })
+  }
   return toDto(capture)
 }
 
@@ -97,7 +165,6 @@ export const listCapturesService = async (
   userId: string,
   filters: ListCapturesDto,
 ): Promise<CaptureDto[]> => {
-  // processed === !PENDING. Filter on status accordingly.
   const statusFilter =
     filters.processed === "false"
       ? { status: "PENDING" as const }
@@ -109,7 +176,6 @@ export const listCapturesService = async (
   return captures.map(toDto)
 }
 
-// Override the AI's guessed type before converting.
 export const updateCaptureTypeService = async (
   id: string,
   userId: string,
@@ -137,8 +203,30 @@ const assertTopicOwned = async (topicId: string, userId: string) => {
   if (!(await findTopicById(topicId, userId))) throw new NotFoundError("Topic not found")
 }
 
-// Turns a capture into a real Task / Habit / Note / Resource / VaultItem,
-// marks it CONVERTED, and records what was created. Returns the new entity.
+// Resolves the effective areaId: user override → AI suggestion → null.
+// Validates ownership when an id is used.
+const resolveAreaId = async (
+  overrideId: string | undefined,
+  suggestedId: string | undefined,
+  userId: string,
+): Promise<string | null> => {
+  const id = overrideId ?? suggestedId ?? null
+  if (id) await assertAreaOwned(id, userId)
+  return id
+}
+
+const resolveTopicId = async (
+  overrideId: string | undefined,
+  suggestedId: string | undefined,
+  userId: string,
+  required: boolean,
+): Promise<string | null> => {
+  const id = overrideId ?? suggestedId ?? null
+  if (required && !id) throw new ValidationError("topicId is required (or couldn't be inferred from context)")
+  if (id) await assertTopicOwned(id, userId)
+  return id
+}
+
 export const convertCaptureService = async (
   id: string,
   userId: string,
@@ -151,50 +239,52 @@ export const convertCaptureService = async (
 
   const { type, meta } = readClassification(capture)
   const text = capture.rawText
+  const title = meta.title ?? text.slice(0, 200)
+
   let createdId: string
   let entity: unknown
 
   switch (type) {
     case "TASK": {
-      const areaId = overrides.areaId ?? null
-      if (areaId) await assertAreaOwned(areaId, userId)
+      const areaId = await resolveAreaId(overrides.areaId, meta.suggestedAreaId, userId)
       const task = await createTask({
         userId,
         areaId,
-        title: text,
+        title,
         priority: overrides.priority ?? (meta.priority as never) ?? "MEDIUM",
         status: "TODO",
         taskType: "BOOLEAN",
         source: "DUMP",
         sourceId: capture.id,
+        dueDate: meta.dueDate ? new Date(meta.dueDate) : undefined,
       })
       createdId = task.id
       entity = task
       break
     }
     case "HABIT": {
-      // A habit must live in an area.
-      if (!overrides.areaId) throw new ValidationError("areaId is required to convert to a habit")
-      await assertAreaOwned(overrides.areaId, userId)
+      const areaId = overrides.areaId ?? meta.suggestedAreaId
+      if (!areaId) throw new ValidationError("areaId is required to convert to a habit")
+      await assertAreaOwned(areaId, userId)
       const habit = await createHabit({
         userId,
-        areaId: overrides.areaId,
-        title: text,
+        areaId,
+        title,
         habitType: "BOOLEAN",
-        frequency: "DAILY",
+        frequency: (meta.frequency as never) ?? "DAILY",
+        targetCount: meta.targetCount,
+        targetMinutes: meta.targetMinutes,
       })
       createdId = habit.id
       entity = habit
       break
     }
     case "NOTE": {
-      // A note must live under a topic.
-      if (!overrides.topicId) throw new ValidationError("topicId is required to convert to a note")
-      await assertTopicOwned(overrides.topicId, userId)
+      const topicId = await resolveTopicId(overrides.topicId, meta.suggestedTopicId, userId, true)
       const note = await createNote({
         userId,
-        topicId: overrides.topicId,
-        title: text.slice(0, 200),
+        topicId: topicId!,
+        title,
         content: text,
         noteType: "CONCEPT",
         tags: (meta.tags as string[]) ?? [],
@@ -204,14 +294,14 @@ export const convertCaptureService = async (
       break
     }
     case "RESOURCE": {
-      if (!overrides.topicId) throw new ValidationError("topicId is required to convert to a resource")
-      await assertTopicOwned(overrides.topicId, userId)
+      const topicId = await resolveTopicId(overrides.topicId, meta.suggestedTopicId, userId, true)
       const resource = await createResource({
         userId,
-        topicId: overrides.topicId,
-        title: text.slice(0, 200),
-        resourceType: capture.detectedUrl ? "ARTICLE" : "OTHER",
+        topicId: topicId!,
+        title,
+        resourceType: (meta.resourceType as never) ?? (capture.detectedUrl ? "ARTICLE" : "OTHER"),
         url: capture.detectedUrl,
+        platform: meta.platform,
       })
       createdId = resource.id
       entity = resource
@@ -220,7 +310,7 @@ export const convertCaptureService = async (
     case "VAULT": {
       const item = await createVaultItem({
         userId,
-        title: text.slice(0, 200),
+        title,
         content: text,
         vaultType: "REFLECTION",
         mediaType: "TEXT",

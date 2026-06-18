@@ -83,3 +83,13 @@ export const getMaxOrder = async (userId: string): Promise<number> => {
   })
   return result._max.order ?? -1
 }
+
+// ---- trends (last N snapshots for all areas owned by user) ----------------
+
+export const findAllAreaSnapshots = (userId: string, perAreaLimit = 7) => {
+  return prisma.areaScoreSnapshot.findMany({
+    where: { userId },
+    orderBy: { snapshotAt: "desc" },
+    take: perAreaLimit * 20, // generous cap — grouped in service
+  })
+}

@@ -16,8 +16,8 @@ app.use(cors(corsOptions))
 
 // Rate limiting
 app.use(rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 1000,
   message: "Too many requests, please try again later"
 }))
 

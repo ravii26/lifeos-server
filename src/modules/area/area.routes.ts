@@ -7,6 +7,7 @@ import {
   deleteAreaController,
   snapshotAreaScoreController,
   listAreaSnapshotsController,
+  getAreaTrendsController,
 } from "./area.controller.js"
 import { validate } from "../../shared/middleware/validate.middleware.js"
 import { authenticate } from "../../shared/middleware/auth.middleware.js"
@@ -22,6 +23,9 @@ router.get("/", listAreasController)
 router.get("/:id", getAreaController)
 router.patch("/:id", validate(updateAreaSchema), updateAreaController)
 router.delete("/:id", deleteAreaController)
+
+// Trends across all areas (direction, delta, weakness) — must be before /:id
+router.get("/trends", getAreaTrendsController)
 
 // A3 — score history
 router.post("/:id/snapshot", snapshotAreaScoreController)

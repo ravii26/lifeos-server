@@ -7,6 +7,7 @@ import {
   deleteAreaService,
   snapshotAreaScoreService,
   listAreaSnapshotsService,
+  getAreaTrendsService,
 } from "./area.service.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
 import { HttpStatus } from "../../shared/constants/httpStatus.js"
@@ -50,4 +51,9 @@ export const listAreaSnapshotsController = async (req: Request, res: Response) =
   const limit = Number((req.query as Record<string, string>).limit ?? "30")
   const snapshots = await listAreaSnapshotsService(id, req.user!.id, limit)
   sendSuccess(res, "Score history fetched", snapshots)
+}
+
+export const getAreaTrendsController = async (req: Request, res: Response) => {
+  const trends = await getAreaTrendsService(req.user!.id)
+  sendSuccess(res, "Area trends fetched", trends)
 }
