@@ -103,6 +103,14 @@ model Goal {
   status      GoalStatus @default(ACTIVE)
   deadline    DateTime?
 
+  // Decision Engine — focus management. Only a small number of goals may be
+  // ACTIVE at once (see MAX_ACTIVE_GOALS). Everything else lives as PARKED:
+  // still here, queryable, but excluded from the daily "what should I do now"
+  // surface so the user is never spread thin. These timestamps power the UX
+  // ("active for 6 days", "parked 3 weeks ago") and ordering.
+  activatedAt DateTime?
+  parkedAt    DateTime?
+
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
@@ -148,6 +156,7 @@ enum Priority {
 
 enum GoalStatus {
   ACTIVE
+  PARKED
   COMPLETED
   PAUSED
   ABANDONED
