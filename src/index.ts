@@ -10,9 +10,26 @@ async function main() {
     await prisma.$connect()
     logger.info("Database connected successfully")
 
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
       logger.info(`Server running on port ${PORT} in ${env.NODE_ENV} mode`)
     })
+
+    // Graceful shutdown so deploys/restarts drain connections cleanly.
+    const shutdown = async (signal: string) => {
+      logger.info(`${signal} received, shutting down gracefully...`)
+      server.close(async () => {
+        await prisma.$disconnect()
+        logger.info("Server closed, database disconnected")
+        process.exit(0)
+      })
+      setTimeout(() => {
+        logger.error("Forced shutdown after timeout")
+        process.exit(1)
+      }, 10_000).unref()
+    }
+
+    process.on("SIGTERM", () => void shutdown("SIGTERM"))
+    process.on("SIGINT", () => void shutdown("SIGINT"))
   } catch (error) {
     logger.error("Failed to start server:", error)
     await prisma.$disconnect()
