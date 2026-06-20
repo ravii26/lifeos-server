@@ -18,14 +18,35 @@ import {
   assertValidRecurrenceRule,
   capRecurrenceRule,
 } from "./calendar.recurrence.js"
+import { conflictsForBlock, detectConflictPairs } from "./calendar.conflicts.js"
+import type { ConflictDto, ConflictPairDto } from "./calendar.conflicts.js"
 import type {
   CreateBlockDto,
   UpdateBlockDto,
   ListBlocksDto,
+  ListConflictsDto,
   UpsertExceptionDto,
   SplitSeriesDto,
 } from "./calendar.schema.js"
 import type { CalendarBlockDto, CalendarBlockExceptionDto } from "./calendar.dto.js"
+import type { CalendarBlock } from "@prisma/client"
+
+// A block plus the (non-fatal) overlaps it has with other blocks — soft-warn.
+export type CalendarBlockWithConflictsDto = CalendarBlockDto & { conflicts: ConflictDto[] }
+
+// Window to scan when checking a saved block for overlaps: its own span for a
+// one-off, or the default expansion horizon for a recurring template.
+const computeBlockConflicts = async (
+  userId: string,
+  block: CalendarBlock,
+): Promise<ConflictDto[]> => {
+  const from = block.startTime
+  const to = block.recurrenceRule
+    ? new Date(block.startTime.getTime() + DEFAULT_WINDOW_DAYS * DAY_MS)
+    : block.endTime
+  const occurrences = await listBlocksService(userId, { from, to })
+  return conflictsForBlock(block.id, occurrences)
+}
 
 // Default expansion window (days) when a recurring block is listed without a range.
 const DEFAULT_WINDOW_DAYS = 90
@@ -59,7 +80,7 @@ const assertLinksOwned = async (
 export const createBlockService = async (
   userId: string,
   input: CreateBlockDto,
-): Promise<CalendarBlockDto> => {
+): Promise<CalendarBlockWithConflictsDto> => {
   await assertLinksOwned(userId, input)
 
   if (input.recurrenceRule) {
@@ -79,7 +100,8 @@ export const createBlockService = async (
     notes: input.notes ?? null,
     recurrenceRule: input.recurrenceRule ?? null,
   })
-  return blockToDto(block)
+  const conflicts = await computeBlockConflicts(userId, block)
+  return { ...blockToDto(block), conflicts }
 }
 
 export const listBlocksService = async (
@@ -125,7 +147,7 @@ export const updateBlockService = async (
   id: string,
   userId: string,
   input: UpdateBlockDto,
-): Promise<CalendarBlockDto> => {
+): Promise<CalendarBlockWithConflictsDto> => {
   const existing = await getOwnedBlock(id, userId)
   await assertLinksOwned(userId, input)
 
@@ -135,12 +157,29 @@ export const updateBlockService = async (
   }
 
   const block = await updateBlock(id, input)
-  return blockToDto(block)
+  const conflicts = await computeBlockConflicts(userId, block)
+  return { ...blockToDto(block), conflicts }
 }
 
 export const deleteBlockService = async (id: string, userId: string): Promise<void> => {
   await getOwnedBlock(id, userId)
   await deleteBlock(id)
+}
+
+// On-demand overlap checker for a window. Expands all blocks (recurring
+// included) and returns every overlapping pair. Defaults to a 90-day horizon.
+export const listConflictsService = async (
+  userId: string,
+  filters: ListConflictsDto,
+): Promise<ConflictPairDto[]> => {
+  const from = filters.from ?? new Date()
+  const to = filters.to ?? new Date(from.getTime() + DEFAULT_WINDOW_DAYS * DAY_MS)
+  const occurrences = await listBlocksService(userId, {
+    from,
+    to,
+    ...(filters.areaId && { areaId: filters.areaId }),
+  })
+  return detectConflictPairs(occurrences)
 }
 
 // --- Per-occurrence overrides ----------------------------------------------

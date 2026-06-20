@@ -40,6 +40,7 @@ export const findDecisionContext = async (userId: string) => {
           areaId: true,
           status: true,
           isRecurring: true,
+          targetMinutes: true,
         },
       }),
 
@@ -67,6 +68,7 @@ export const findDecisionContext = async (userId: string) => {
           title: true,
           areaId: true,
           frequency: true,
+          targetMinutes: true,
           logs: {
             where: { date: { gte: since28d } },
             orderBy: { date: "desc" },

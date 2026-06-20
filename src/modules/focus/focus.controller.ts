@@ -6,10 +6,11 @@ import {
   getFocusService,
   updateFocusService,
   deleteFocusService,
+  dailyFocusService,
 } from "./focus.service.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
 import { HttpStatus } from "../../shared/constants/httpStatus.js"
-import type { ListFocusDto } from "./focus.schema.js"
+import type { ListFocusDto, DailyFocusDto } from "./focus.schema.js"
 
 export const startFocusController = async (req: Request, res: Response) => {
   const session = await startFocusService(req.user!.id, req.body)
@@ -26,6 +27,12 @@ export const listFocusController = async (req: Request, res: Response) => {
   const filters = (res.locals.query ?? {}) as ListFocusDto
   const sessions = await listFocusService(req.user!.id, filters)
   sendSuccess(res, "Focus sessions fetched", sessions)
+}
+
+export const dailyFocusController = async (req: Request, res: Response) => {
+  const filters = (res.locals.query ?? {}) as DailyFocusDto
+  const days = await dailyFocusService(req.user!.id, filters)
+  sendSuccess(res, "Daily focus fetched", days)
 }
 
 export const getFocusController = async (req: Request, res: Response) => {

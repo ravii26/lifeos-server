@@ -8,11 +8,12 @@ import {
   upsertExceptionService,
   deleteExceptionService,
   splitSeriesService,
+  listConflictsService,
 } from "./calendar.service.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
 import { HttpStatus } from "../../shared/constants/httpStatus.js"
 import { ValidationError } from "../../shared/utils/errors.util.js"
-import type { ListBlocksDto } from "./calendar.schema.js"
+import type { ListBlocksDto, ListConflictsDto } from "./calendar.schema.js"
 
 export const createBlockController = async (req: Request, res: Response) => {
   const block = await createBlockService(req.user!.id, req.body)
@@ -23,6 +24,12 @@ export const listBlocksController = async (req: Request, res: Response) => {
   const filters = (res.locals.query ?? {}) as ListBlocksDto
   const blocks = await listBlocksService(req.user!.id, filters)
   sendSuccess(res, "Calendar blocks fetched", blocks)
+}
+
+export const listConflictsController = async (req: Request, res: Response) => {
+  const filters = (res.locals.query ?? {}) as ListConflictsDto
+  const conflicts = await listConflictsService(req.user!.id, filters)
+  sendSuccess(res, "Calendar conflicts fetched", conflicts)
 }
 
 export const getBlockController = async (req: Request, res: Response) => {

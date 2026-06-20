@@ -28,7 +28,22 @@ export interface StreakAlert {
   message: string
 }
 
+export type Tone = "encouraging" | "firm" | "celebratory" | "neutral"
+
+// The single most important thing to do right now — drives the hero card.
+export interface PrimaryAction {
+  type: SuggestionType
+  refId: string | null
+  title: string
+  why: string                 // one human sentence: why THIS, right now
+  estimatedMinutes: number | null
+}
+
 export interface DecisionResult {
+  headline: string             // punchy human one-liner for the top of the screen
+  briefing: string             // 2-3 sentence coach-style narrative tying it together
+  tone: Tone                   // lets the UI theme the card (color/emoji/voice)
+  primaryAction: PrimaryAction | null  // the ONE thing — hero CTA
   suggestions: Suggestion[]
   neglectedArea: { id: string; name: string; score: number; insight: string } | null
   todayFocus: string
@@ -54,8 +69,8 @@ const todayKey = (): string => new Date().toISOString().slice(0, 10)
 interface ContextSummary {
   timeOfDay: string
   areas: { id: string; name: string; score: number; tasksDone: number; tasksTotal: number; streak: number }[]
-  topPendingTasks: { id: string; title: string; priority: string; daysOverdue: number | null; areaName: string | null }[]
-  habitsNotDoneToday: { id: string; title: string; areaName: string | null; currentStreak: number }[]
+  topPendingTasks: { id: string; title: string; priority: string; daysOverdue: number | null; areaName: string | null; targetMinutes: number | null }[]
+  habitsNotDoneToday: { id: string; title: string; areaName: string | null; currentStreak: number; targetMinutes: number | null }[]
   activeGoals: { id: string; title: string; areaName: string | null; daysUntilDeadline: number | null }[]
   recentActivity: { tasksCompleted7d: number; habitsLogged7d: number; focusSessions7d: number; mostActiveAreaId: string | null }
   identity: { purpose: string | null; thisYearGoal: string | null; values: string[] }
@@ -104,6 +119,7 @@ const buildContextSummary = (raw: RawContext): ContextSummary => {
       title: habit.title,
       areaName: areaMap.get(habit.areaId) ?? null,
       currentStreak: stats.currentStreak,
+      targetMinutes: habit.targetMinutes ?? null,
     }))
 
   const streakAlertsFixed: StreakAlert[] = habitStatsList
@@ -126,6 +142,7 @@ const buildContextSummary = (raw: RawContext): ContextSummary => {
       priority: t.priority,
       daysOverdue: daysOverdue !== null && daysOverdue > 0 ? daysOverdue : null,
       areaName: t.areaId ? (areaMap.get(t.areaId) ?? null) : null,
+      targetMinutes: t.targetMinutes ?? null,
     }
   })
 
@@ -183,6 +200,21 @@ const buildContextSummary = (raw: RawContext): ContextSummary => {
     streakAlerts: streakAlertsFixed,
     weeklyPattern,
   }
+}
+
+// Prefer the entity's real targetMinutes; fall back to type-based defaults.
+const estimateMinutesFor = (
+  type: SuggestionType,
+  refId: string | null,
+  ctx: ContextSummary,
+): number | null => {
+  if (type === "TASK") {
+    return ctx.topPendingTasks.find((t) => t.id === refId)?.targetMinutes ?? 25
+  }
+  if (type === "HABIT") {
+    return ctx.habitsNotDoneToday.find((h) => h.id === refId)?.targetMinutes ?? 10
+  }
+  return null
 }
 
 // ── Heuristic fallback ────────────────────────────────────────────────────────
@@ -275,7 +307,54 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
       ? "No tasks or habits logged in the last 7 days — the system needs your attention."
       : `You've completed ${tasksCompleted7d} task(s) and logged ${habitsLogged7d} habit(s) this week. Keep the momentum going.`
 
+  // ── Derive the coach-style top layer from the ranked suggestions ──
+  const top = suggestions[0] ?? null
+
+  const primaryAction: PrimaryAction | null = top
+    ? {
+      type: top.type,
+      refId: top.refId,
+      title: top.title,
+      why: top.reason,
+      estimatedMinutes: estimateMinutesFor(top.type, top.refId, ctx),
+    }
+    : null
+
+  let tone: Tone
+  let headline: string
+  let briefing: string
+
+  const idle = tasksCompleted7d === 0 && habitsLogged7d === 0
+  const hasOverdue = overdueTasks.length > 0
+  const atRiskStreaks = ctx.streakAlerts.length
+
+  if (!top) {
+    tone = "celebratory"
+    headline = "You're all caught up — nice work."
+    briefing =
+      "Nothing urgent is on your plate right now. This is the perfect window to review your goals or reflect on the week before new work piles up."
+  } else if (hasOverdue) {
+    tone = "firm"
+    headline = `${overdueTasks.length} thing${overdueTasks.length > 1 ? "s" : ""} slipped past due — let's clear the decks.`
+    briefing =
+      `Start with "${top.title}". ${atRiskStreaks > 0 ? `You also have ${atRiskStreaks} habit streak${atRiskStreaks > 1 ? "s" : ""} on the line today. ` : ""}Knock out the overdue item first, then keep the streaks alive.`
+  } else if (idle) {
+    tone = "encouraging"
+    headline = "Quiet week so far — one small win restarts the momentum."
+    briefing =
+      `It's been quiet for 7 days. Don't aim for everything — just do "${top.title}". One completion is all it takes to get the flywheel turning again.`
+  } else {
+    tone = "encouraging"
+    headline = `Your ${ctx.timeOfDay}: start with "${top.title}".`
+    briefing =
+      `You're ${tasksCompleted7d + habitsLogged7d} actions deep this week. ${atRiskStreaks > 0 ? `Protect your streak${atRiskStreaks > 1 ? "s" : ""} today, then ` : "Now "}focus on the one thing above — it moves the needle most right now.`
+  }
+
   return {
+    headline,
+    briefing,
+    tone,
+    primaryAction,
     suggestions: suggestions.slice(0, 5),
     neglectedArea,
     todayFocus,
@@ -306,10 +385,23 @@ You will receive a JSON snapshot of the user's current context: area scores, pen
    - Neglected life areas (low scores)
 5. Include 1-3 concrete next steps for each recommendation (short, actionable phrases of max 10 words each).
 6. If the user's dashboard is completely clear, recommend reviewing active goals or performing a reflection.
+7. VOICE: Write "headline" and "briefing" like a sharp, warm human coach talking directly to the user — second person ("you"), specific, never corporate or generic. The headline is a punchy one-liner (max ~12 words). The briefing is 2-3 sentences that tie their state together and point at the one thing that matters most. Reference the time of day where natural.
+8. "primaryAction" is the single most important thing to do RIGHT NOW. It must correspond to suggestions[0]. Set "estimatedMinutes" to a realistic effort estimate (habits ~5-15, tasks ~25-45) or null if unknowable.
+9. "tone" must match reality: "celebratory" when caught up / on a hot streak, "firm" when overdue or slipping, "encouraging" when restarting momentum, "neutral" otherwise.
 </rules>
 
 <output_schema>
 {
+  "headline": "string", // Punchy human one-liner for the top of the screen, max ~12 words
+  "briefing": "string", // 2-3 sentence coach-style narrative tying their state together
+  "tone": "encouraging" | "firm" | "celebratory" | "neutral",
+  "primaryAction": {
+    "type": "TASK" | "HABIT" | "AREA_FOCUS" | "REVIEW" | "GOAL",
+    "refId": "string" | null, // ID of the referenced entity; must match suggestions[0].refId
+    "title": "string", // The one thing to do now
+    "why": "string", // One human sentence: why THIS, right now
+    "estimatedMinutes": number | null
+  } | null, // null only when there is genuinely nothing to do
   "suggestions": [
     {
       "rank": number, // 1 to 5 sequential recommendation rank
@@ -332,6 +424,58 @@ You will receive a JSON snapshot of the user's current context: area scores, pen
 }
 </output_schema>`
 
+// Shared shape the model returns, and a single place to normalize it into a
+// DecisionResult (fills coach fields / primaryAction if the model omits them).
+interface ParsedAiDecision {
+  headline?: string
+  briefing?: string
+  tone?: Tone
+  primaryAction?: PrimaryAction | null
+  suggestions: Suggestion[]
+  neglectedArea: { id: string; name: string; score: number; insight: string } | null
+  todayFocus: string
+  behaviorInsight: string
+}
+
+const finalizeAiDecision = (parsed: ParsedAiDecision, ctx: ContextSummary): DecisionResult => {
+  // Ensure actionableSteps always exists (older prompts may omit it)
+  const suggestions = parsed.suggestions.slice(0, 5).map((s) => ({
+    ...s,
+    actionableSteps: Array.isArray(s.actionableSteps) ? s.actionableSteps : [],
+  }))
+
+  const top = suggestions[0] ?? null
+
+  // Fall back to suggestions[0] if the model didn't return a primaryAction.
+  // Either way, trust the entity's real targetMinutes over the model's guess
+  // when we have it (model estimate is only used if no entity match exists).
+  const base = parsed.primaryAction ?? (top
+    ? { type: top.type, refId: top.refId, title: top.title, why: top.reason, estimatedMinutes: null }
+    : null)
+
+  const primaryAction: PrimaryAction | null = base
+    ? {
+      ...base,
+      estimatedMinutes: estimateMinutesFor(base.type, base.refId, ctx) ?? base.estimatedMinutes ?? null,
+    }
+    : null
+
+  return {
+    headline: parsed.headline?.trim() || (top ? `Start with "${top.title}".` : "You're all caught up."),
+    briefing: parsed.briefing?.trim() || parsed.todayFocus || "",
+    tone: parsed.tone ?? "neutral",
+    primaryAction,
+    suggestions,
+    neglectedArea: parsed.neglectedArea ?? null,
+    todayFocus: parsed.todayFocus ?? "",
+    behaviorInsight: parsed.behaviorInsight ?? "",
+    weeklyPattern: ctx.weeklyPattern,
+    streakAlerts: ctx.streakAlerts,
+    generatedAt: new Date(),
+    source: "ai",
+  }
+}
+
 const geminiGetDecisions = async (ctx: ContextSummary): Promise<DecisionResult> => {
   if (!geminiClient) throw new Error("Gemini client not initialized")
 
@@ -346,33 +490,13 @@ const geminiGetDecisions = async (ctx: ContextSummary): Promise<DecisionResult> 
       { text: `User context: ${JSON.stringify(ctx)}` },
     ])
 
-    const parsed = JSON.parse(result.response.text()) as {
-      suggestions: Suggestion[]
-      neglectedArea: { id: string; name: string; score: number; insight: string } | null
-      todayFocus: string
-      behaviorInsight: string
-    }
+    const parsed = JSON.parse(result.response.text()) as ParsedAiDecision
 
     if (!parsed || !Array.isArray(parsed.suggestions) || parsed.suggestions.length === 0) {
       throw new Error("Empty suggestions from Gemini")
     }
 
-    // Ensure actionableSteps always exists (older prompts may omit it)
-    const suggestions = parsed.suggestions.slice(0, 5).map((s) => ({
-      ...s,
-      actionableSteps: Array.isArray(s.actionableSteps) ? s.actionableSteps : [],
-    }))
-
-    return {
-      suggestions,
-      neglectedArea: parsed.neglectedArea ?? null,
-      todayFocus: parsed.todayFocus ?? "",
-      behaviorInsight: parsed.behaviorInsight ?? "",
-      weeklyPattern: ctx.weeklyPattern,
-      streakAlerts: ctx.streakAlerts,
-      generatedAt: new Date(),
-      source: "ai",
-    }
+    return finalizeAiDecision(parsed, ctx)
   } catch (error) {
     logger.error("Gemini decisions generation failed:", error)
     throw error
@@ -393,33 +517,13 @@ const groqGetDecisions = async (ctx: ContextSummary): Promise<DecisionResult> =>
     })
 
     const text = response.choices[0]?.message?.content || ""
-    const parsed = JSON.parse(text) as {
-      suggestions: Suggestion[]
-      neglectedArea: { id: string; name: string; score: number; insight: string } | null
-      todayFocus: string
-      behaviorInsight: string
-    }
+    const parsed = JSON.parse(text) as ParsedAiDecision
 
     if (!parsed || !Array.isArray(parsed.suggestions) || parsed.suggestions.length === 0) {
       throw new Error("Empty suggestions from Groq")
     }
 
-    // Ensure actionableSteps always exists (older prompts may omit it)
-    const suggestions = parsed.suggestions.slice(0, 5).map((s) => ({
-      ...s,
-      actionableSteps: Array.isArray(s.actionableSteps) ? s.actionableSteps : [],
-    }))
-
-    return {
-      suggestions,
-      neglectedArea: parsed.neglectedArea ?? null,
-      todayFocus: parsed.todayFocus ?? "",
-      behaviorInsight: parsed.behaviorInsight ?? "",
-      weeklyPattern: ctx.weeklyPattern,
-      streakAlerts: ctx.streakAlerts,
-      generatedAt: new Date(),
-      source: "ai",
-    }
+    return finalizeAiDecision(parsed, ctx)
   } catch (error) {
     logger.error("Groq decisions generation failed:", error)
     throw error

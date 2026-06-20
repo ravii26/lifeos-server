@@ -19,6 +19,25 @@ export const findSessionById = (id: string, userId: string) => {
   return prisma.focusSession.findFirst({ where: { id, userId } })
 }
 
+// Sessions that overlap the window [from, to): started before `to` and either
+// still running (endedAt null) or ended after `from`. Used by the daily split.
+export const findSessionsOverlapping = (
+  userId: string,
+  from: Date,
+  to: Date,
+  extra: Prisma.FocusSessionWhereInput = {},
+) => {
+  return prisma.focusSession.findMany({
+    where: {
+      userId,
+      startedAt: { lt: to },
+      OR: [{ endedAt: { gt: from } }, { endedAt: null }],
+      ...extra,
+    },
+    select: { startedAt: true, endedAt: true },
+  })
+}
+
 export const updateSession = (id: string, data: Prisma.FocusSessionUpdateInput) => {
   return prisma.focusSession.update({ where: { id }, data })
 }

@@ -7,10 +7,12 @@ import {
   createSession,
   findSessionsByUser,
   findSessionById,
+  findSessionsOverlapping,
   updateSession,
   deleteSession,
 } from "./focus.repository.js"
-import type { StartFocusDto, UpdateFocusDto, ListFocusDto } from "./focus.schema.js"
+import { aggregateDailyFocus, type DailyFocusBucket } from "./focus.daily.js"
+import type { StartFocusDto, UpdateFocusDto, ListFocusDto, DailyFocusDto } from "./focus.schema.js"
 import type { FocusSessionDto } from "./focus.dto.js"
 
 const getOwnedSession = async (id: string, userId: string) => {
@@ -91,6 +93,24 @@ export const listFocusService = (
 
 export const getFocusService = (id: string, userId: string): Promise<FocusSessionDto> => {
   return getOwnedSession(id, userId)
+}
+
+// Per-day focus minutes, splitting sessions that cross midnight across the
+// days they actually span. Defaults to the last 7 days (UTC) when no range
+// is given. Days with zero focus are omitted from the result.
+export const dailyFocusService = async (
+  userId: string,
+  filters: DailyFocusDto,
+): Promise<DailyFocusBucket[]> => {
+  const to = filters.to ?? new Date()
+  const from = filters.from ?? new Date(to.getTime() - 7 * 86_400_000)
+
+  const sessions = await findSessionsOverlapping(userId, from, to, {
+    ...(filters.taskId && { taskId: filters.taskId }),
+    ...(filters.habitId && { habitId: filters.habitId }),
+  })
+
+  return aggregateDailyFocus(sessions, from, to)
 }
 
 export const updateFocusService = async (

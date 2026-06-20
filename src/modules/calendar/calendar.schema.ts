@@ -41,6 +41,12 @@ export const listBlocksSchema = z.object({
   habitId: z.string().optional(),
 })
 
+export const listConflictsSchema = z.object({
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+  areaId: z.string().optional(),
+})
+
 // Create or update a single per-occurrence override on a recurring block.
 // occurrenceDate must match the original start instant of the occurrence.
 export const upsertExceptionSchema = z
@@ -82,5 +88,6 @@ export const splitSeriesSchema = z
 export type CreateBlockDto = z.infer<typeof createBlockSchema>
 export type UpdateBlockDto = z.infer<typeof updateBlockSchema>
 export type ListBlocksDto = z.infer<typeof listBlocksSchema>
+export type ListConflictsDto = z.infer<typeof listConflictsSchema>
 export type UpsertExceptionDto = z.infer<typeof upsertExceptionSchema>
 export type SplitSeriesDto = z.infer<typeof splitSeriesSchema>

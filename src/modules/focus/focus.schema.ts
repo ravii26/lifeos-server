@@ -22,6 +22,14 @@ export const listFocusSchema = z.object({
   habitId: z.string().optional(),
 })
 
+export const dailyFocusSchema = z.object({
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+  taskId: z.string().optional(),
+  habitId: z.string().optional(),
+})
+
 export type StartFocusDto = z.infer<typeof startFocusSchema>
 export type UpdateFocusDto = z.infer<typeof updateFocusSchema>
 export type ListFocusDto = z.infer<typeof listFocusSchema>
+export type DailyFocusDto = z.infer<typeof dailyFocusSchema>
