@@ -5,6 +5,7 @@ import {
   getReviewService,
   updateReviewService,
   deleteReviewService,
+  generateReviewDraftService,
   createInsightService,
   listInsightsService,
   updateInsightService,
@@ -12,7 +13,7 @@ import {
 } from "./review.service.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
 import { HttpStatus } from "../../shared/constants/httpStatus.js"
-import type { ListReviewsDto } from "./review.schema.js"
+import type { ListReviewsDto, DraftReviewDto } from "./review.schema.js"
 
 // --- Review ---
 export const createReviewController = async (req: Request, res: Response) => {
@@ -24,6 +25,12 @@ export const listReviewsController = async (req: Request, res: Response) => {
   const filters = (res.locals.query ?? {}) as ListReviewsDto
   const reviews = await listReviewsService(req.user!.id, filters)
   sendSuccess(res, "Reviews fetched", reviews)
+}
+
+export const draftReviewController = async (req: Request, res: Response) => {
+  const { reviewType } = (res.locals.query ?? {}) as DraftReviewDto
+  const draft = await generateReviewDraftService(req.user!.id, reviewType)
+  sendSuccess(res, "Review draft generated", draft)
 }
 
 export const getReviewController = async (req: Request, res: Response) => {

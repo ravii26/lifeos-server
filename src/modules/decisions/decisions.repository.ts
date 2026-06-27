@@ -13,8 +13,23 @@ export const findDecisionContext = async (userId: string) => {
   const todayStart = new Date()
   todayStart.setUTCHours(0, 0, 0, 0)
 
-  const [areas, pendingTasks, overdueTasks, activeGoals, habits, recentBehavior, identity] =
-    await Promise.all([
+  const [
+    areas,
+    pendingTasks,
+    overdueTasks,
+    activeGoals,
+    habits,
+    recentBehavior,
+    identity,
+    user,
+    goalLinkedTasks,
+    pendingCaptures,
+    lastReview,
+    activeProjects,
+    continueResources,
+    vaultItems,
+    insightNotes,
+  ] = await Promise.all([
       // Areas with scoring data
       prisma.area.findMany({
         where: { userId, isActive: true },
@@ -51,7 +66,14 @@ export const findDecisionContext = async (userId: string) => {
           status: { in: ["TODO", "IN_PROGRESS"] },
           dueDate: { lt: new Date() },
         },
-        select: { id: true, title: true, dueDate: true, areaId: true, priority: true },
+        select: {
+          id: true,
+          title: true,
+          dueDate: true,
+          areaId: true,
+          priority: true,
+          targetMinutes: true,
+        },
       }),
 
       // Active goals
@@ -90,7 +112,79 @@ export const findDecisionContext = async (userId: string) => {
         where: { userId },
         select: { purpose: true, thisYearGoal: true, values: true },
       }),
+
+      // User timezone — so the coach computes "today"/streaks/scores locally.
+      prisma.user.findUnique({ where: { id: userId }, select: { timezone: true } }),
+
+      // Tasks linked to any goal (all statuses) — powers live goal confidence
+      // inside the coach so a stalling active goal can be surfaced, not just one
+      // with a near deadline.
+      prisma.task.findMany({
+        where: { userId, goalId: { not: null } },
+        select: { goalId: true, status: true, completedAt: true },
+      }),
+
+      // Count of unsorted brain-dumps — so the coach can nudge inbox processing.
+      prisma.capture.count({ where: { userId, status: "PENDING" } }),
+
+      // Most recent review — to detect "it's been a while since you reflected".
+      prisma.review.findFirst({
+        where: { userId },
+        orderBy: { periodEnd: "desc" },
+        select: { periodEnd: true, reviewType: true },
+      }),
+
+      // Active projects with their tasks — to flag a stalling project.
+      prisma.project.findMany({
+        where: { userId, status: "ACTIVE" },
+        select: {
+          id: true,
+          title: true,
+          areaId: true,
+          tasks: { select: { status: true, completedAt: true, dueDate: true } },
+        },
+      }),
+
+      // In-progress learning resources — "keep going on what you started".
+      prisma.resource.findMany({
+        where: { userId, status: "IN_PROGRESS" },
+        orderBy: { updatedAt: "desc" },
+        take: 5,
+        select: { id: true, title: true, topic: { select: { areaId: true } } },
+      }),
+
+      // A few vault items — motivation/recovery the coach can resurface.
+      prisma.vaultItem.findMany({
+        where: { userId },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        select: { id: true, title: true, vaultType: true, usedCount: true, helpfulCount: true },
+      }),
+
+      // Recent insight notes — to nudge revisiting an idea worth developing.
+      prisma.note.findMany({
+        where: { userId, noteType: "INSIGHT" },
+        orderBy: { createdAt: "desc" },
+        take: 3,
+        select: { id: true, title: true },
+      }),
     ])
 
-  return { areas, pendingTasks, overdueTasks, activeGoals, habits, recentBehavior, identity }
+  return {
+    areas,
+    pendingTasks,
+    overdueTasks,
+    activeGoals,
+    habits,
+    recentBehavior,
+    identity,
+    timezone: user?.timezone ?? "UTC",
+    goalLinkedTasks,
+    pendingCaptures,
+    lastReview,
+    activeProjects,
+    continueResources,
+    vaultItems,
+    insightNotes,
+  }
 }

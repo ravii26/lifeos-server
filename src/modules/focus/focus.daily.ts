@@ -1,34 +1,42 @@
-// Splits a focus session across the UTC calendar days it spans.
+// Splits a focus session across the calendar days it spans, in the USER's
+// timezone.
 //
 // A session from 23:00 to 09:00 next day is one DB row with durationMinutes=600,
-// but for a per-day view those 600 minutes belong partly to each day. This
-// returns fractional minutes per day-key (YYYY-MM-DD); callers sum across
+// but for a per-day view those 600 minutes belong partly to each LOCAL day. This
+// returns fractional minutes per local day-key (YYYY-MM-DD); callers sum across
 // sessions and round once at the end to avoid per-session rounding drift.
-//
-// Day boundaries are UTC, matching the rest of the codebase (todayKey, scoring).
+
+import {
+  dayKeyInTz,
+  utcDayKey,
+  dateFromKey,
+  addUtcDays,
+  localDayStartMs,
+} from "../../shared/utils/time.util.js"
 
 export interface DailyFocusBucket {
-  date: string // YYYY-MM-DD (UTC)
+  date: string // YYYY-MM-DD (user's local day)
   minutes: number
 }
 
-const dayKey = (ms: number): string => new Date(ms).toISOString().slice(0, 10)
-
-const nextUtcMidnight = (ms: number): number => {
-  const d = new Date(ms)
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1)
-}
-
-// Returns { "YYYY-MM-DD": fractionalMinutes } for the span [startedAt, endedAt).
-export const splitFocusByDay = (startedAt: Date, endedAt: Date): Record<string, number> => {
+// Returns { "YYYY-MM-DD": fractionalMinutes } for the span [startedAt, endedAt),
+// keyed and split on the user's LOCAL day boundaries.
+export const splitFocusByDay = (
+  startedAt: Date,
+  endedAt: Date,
+  timeZone: string,
+): Record<string, number> => {
   const buckets: Record<string, number> = {}
   let cursor = startedAt.getTime()
   const end = endedAt.getTime()
   if (!(end > cursor)) return buckets
 
   while (cursor < end) {
-    const segEnd = Math.min(nextUtcMidnight(cursor), end)
-    const key = dayKey(cursor)
+    const key = dayKeyInTz(new Date(cursor), timeZone)
+    const nextKey = utcDayKey(addUtcDays(dateFromKey(key), 1))
+    const segEnd = Math.min(localDayStartMs(nextKey, timeZone), end)
+    // Safety against pathological offset math — never loop without advancing.
+    if (segEnd <= cursor) break
     buckets[key] = (buckets[key] ?? 0) + (segEnd - cursor) / 60000
     cursor = segEnd
   }
@@ -42,6 +50,7 @@ export const aggregateDailyFocus = (
   sessions: { startedAt: Date; endedAt: Date | null }[],
   windowStart: Date,
   windowEnd: Date,
+  timeZone: string,
   now: Date = new Date(),
 ): DailyFocusBucket[] => {
   const totals: Record<string, number> = {}
@@ -54,7 +63,7 @@ export const aggregateDailyFocus = (
     const end = Math.min(rawEnd, winEnd)
     if (!(end > start)) continue
 
-    const split = splitFocusByDay(new Date(start), new Date(end))
+    const split = splitFocusByDay(new Date(start), new Date(end), timeZone)
     for (const [date, mins] of Object.entries(split)) {
       totals[date] = (totals[date] ?? 0) + mins
     }

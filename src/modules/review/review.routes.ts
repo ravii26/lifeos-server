@@ -5,6 +5,7 @@ import {
   getReviewController,
   updateReviewController,
   deleteReviewController,
+  draftReviewController,
   createInsightController,
   listInsightsController,
   updateInsightController,
@@ -16,6 +17,7 @@ import {
   createReviewSchema,
   updateReviewSchema,
   listReviewsSchema,
+  draftReviewSchema,
   createInsightSchema,
   updateInsightSchema,
 } from "./review.schema.js"
@@ -31,6 +33,8 @@ router.delete("/insights/:insightId", deleteInsightController)
 // Reviews
 router.post("/", validate(createReviewSchema), createReviewController)
 router.get("/", validateQuery(listReviewsSchema), listReviewsController)
+// Auto-draft generator — declared before "/:id" so the literal path wins.
+router.get("/draft", validateQuery(draftReviewSchema), draftReviewController)
 router.get("/:id", getReviewController)
 router.patch("/:id", validate(updateReviewSchema), updateReviewController)
 router.delete("/:id", deleteReviewController)

@@ -151,6 +151,16 @@ export const updateBlockService = async (
   const existing = await getOwnedBlock(id, userId)
   await assertLinksOwned(userId, input)
 
+  // Guard temporal validity against the MERGED result. The update schema can't
+  // cross-check a single-field change (e.g. moving only startTime past the stored
+  // endTime) against the existing row, and a non-positive duration breaks
+  // recurrence expansion + conflict math.
+  const effectiveStart = input.startTime ?? existing.startTime
+  const effectiveEnd = input.endTime ?? existing.endTime
+  if (effectiveEnd <= effectiveStart) {
+    throw new ValidationError("endTime must be after startTime")
+  }
+
   if (input.recurrenceRule) {
     const dtstart = input.startTime ?? existing.startTime
     assertValidRecurrenceRule(input.recurrenceRule, dtstart)

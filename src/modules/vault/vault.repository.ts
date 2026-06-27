@@ -34,3 +34,12 @@ export const incrementVaultUsed = (id: string) => {
     data: { usedCount: { increment: 1 } },
   })
 }
+
+// Atomically bump helpfulCount when the user marks an item as having helped —
+// the signal the coach uses to resurface what actually works.
+export const incrementVaultHelpful = (id: string) => {
+  return prisma.vaultItem.update({
+    where: { id },
+    data: { helpfulCount: { increment: 1 } },
+  })
+}

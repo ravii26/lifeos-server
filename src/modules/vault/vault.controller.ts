@@ -6,6 +6,7 @@ import {
   updateVaultItemService,
   deleteVaultItemService,
   markVaultItemUsedService,
+  markVaultItemHelpfulService,
 } from "./vault.service.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
 import { HttpStatus } from "../../shared/constants/httpStatus.js"
@@ -44,4 +45,10 @@ export const markVaultItemUsedController = async (req: Request, res: Response) =
   const { id } = req.params as { id: string }
   const item = await markVaultItemUsedService(id, req.user!.id)
   sendSuccess(res, "Vault item marked used", item)
+}
+
+export const markVaultItemHelpfulController = async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string }
+  const item = await markVaultItemHelpfulService(id, req.user!.id)
+  sendSuccess(res, "Vault item marked helpful", item)
 }

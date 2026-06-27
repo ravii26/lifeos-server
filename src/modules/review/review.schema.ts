@@ -11,6 +11,13 @@ export const createReviewSchema = z.object({
   highlights: z.string().max(5000).optional(),
   improvements: z.string().max(5000).optional(),
   userNote: z.string().max(5000).optional(),
+  // Optional AI narrative carried over when saving an auto-drafted review.
+  aiInsights: z.any().optional(),
+})
+
+// Query for the auto-draft generator: which period to summarise.
+export const draftReviewSchema = z.object({
+  reviewType: reviewType.default("WEEKLY"),
 })
 
 export const updateReviewSchema = z.object({
@@ -40,6 +47,7 @@ export const updateInsightSchema = z.object({
 })
 
 export type CreateReviewDto = z.infer<typeof createReviewSchema>
+export type DraftReviewDto = z.infer<typeof draftReviewSchema>
 export type UpdateReviewDto = z.infer<typeof updateReviewSchema>
 export type ListReviewsDto = z.infer<typeof listReviewsSchema>
 export type CreateInsightDto = z.infer<typeof createInsightSchema>

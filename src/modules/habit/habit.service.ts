@@ -1,6 +1,8 @@
 import { NotFoundError } from "../../shared/utils/errors.util.js"
 import { logBehavior } from "../behavior/behavior.service.js"
 import { findAreaById } from "../area/area.repository.js"
+import { getUserTimezone } from "../auth/auth.repository.js"
+import { todayKeyInTz, utcDayKey, localDateOnly } from "../../shared/utils/time.util.js"
 import {
   createHabit,
   findHabitsByUser,
@@ -23,7 +25,6 @@ import type { HabitDto, HabitLogDto, HabitWithStatsDto } from "./habit.dto.js"
 
 // How many trailing days of logs to load + expose for stats/heat-strips.
 const STATS_WINDOW = 28
-const todayKey = (): string => new Date().toISOString().slice(0, 10)
 
 const getOwnedHabit = async (id: string, userId: string) => {
   const habit = await findHabitById(id, userId)
@@ -71,15 +72,18 @@ export const listHabitsService = async (
   const since = new Date()
   since.setUTCDate(since.getUTCDate() - STATS_WINDOW)
 
-  const habits = await findHabitsWithLogsByUser(userId, since, {
-    ...(filters.areaId && { areaId: filters.areaId }),
-    ...(filters.isActive && { isActive: filters.isActive === "true" }),
-  })
+  const [timeZone, habits] = await Promise.all([
+    getUserTimezone(userId),
+    findHabitsWithLogsByUser(userId, since, {
+      ...(filters.areaId && { areaId: filters.areaId }),
+      ...(filters.isActive && { isActive: filters.isActive === "true" }),
+    }),
+  ])
 
-  const tk = todayKey()
+  const tk = todayKeyInTz(timeZone)
   return habits.map(({ logs, ...habit }) => {
-    const stats = computeHabitStats(logs, STATS_WINDOW)
-    const todayLog = logs.find((l) => l.date.toISOString().slice(0, 10) === tk) ?? null
+    const stats = computeHabitStats(logs, STATS_WINDOW, timeZone)
+    const todayLog = logs.find((l) => utcDayKey(l.date) === tk) ?? null
     return { ...habit, ...stats, todayLog }
   })
 }
@@ -109,7 +113,11 @@ export const logHabitService = async (
   input: LogHabitDto,
 ): Promise<HabitLogDto> => {
   await getOwnedHabit(id, userId)
-  const date = toDateOnly(input.date ?? new Date())
+  // A logged-for-now entry lands on the user's LOCAL day; an explicit date the
+  // client sends is treated as the calendar date it already is.
+  const date = input.date
+    ? toDateOnly(input.date)
+    : localDateOnly(new Date(), await getUserTimezone(userId))
 
   const log = await upsertHabitLog(id, userId, date, {
     completed: input.completed ?? true,

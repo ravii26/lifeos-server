@@ -8,11 +8,33 @@
    When a momentum-history table lands (A3), snapshot this output daily.
    =================================================================== */
 import { computeHabitStats } from "../habit/habit.stats.js"
+import { dayKeyInTz, utcDayKey } from "../../shared/utils/time.util.js"
 
 export interface ScoringInput {
   tasks: { areaId: string | null; status: string }[]
   habits: { areaId: string; logs: { date: Date; completed: boolean; minutes: number }[] }[]
-  resources: { status: string; topic: { areaId: string } | null }[]
+  resources: {
+    status: string
+    lessonsCompleted?: number
+    totalLessons?: number | null
+    topic: { areaId: string } | null
+  }[]
+}
+
+// Progress-weighted learning credit for one resource: a completed resource is
+// full credit, an in-progress one earns partial credit from lessons done (or a
+// flat 0.3 if it has no lesson count) — so the progress the user logs actually
+// moves their area score instead of counting for nothing until completion.
+const resourceCredit = (r: {
+  status: string
+  lessonsCompleted?: number
+  totalLessons?: number | null
+}): number => {
+  if (r.status === "COMPLETED") return 1
+  if (r.totalLessons && r.totalLessons > 0) {
+    return Math.min(1, Math.max(0, (r.lessonsCompleted ?? 0) / r.totalLessons))
+  }
+  return r.status === "IN_PROGRESS" ? 0.3 : 0
 }
 
 export interface AreaScore {
@@ -29,10 +51,15 @@ const BASE_TASK = 0.5
 const BASE_HABIT = 0.5
 const BASE_LEARN = 0.4
 
-export const scoreArea = (areaId: string, input: ScoringInput): AreaScore => {
-  // Computed inside the function so long-running servers don't freeze the date
-  // at startup and wrong-score areas after midnight.
-  const todayKey = new Date().toISOString().slice(0, 10)
+export const scoreArea = (
+  areaId: string,
+  input: ScoringInput,
+  timeZone = "UTC",
+  now: Date = new Date(),
+): AreaScore => {
+  // "Today" follows the user's timezone, not server UTC, so scores don't flip
+  // at the wrong hour after midnight.
+  const todayKey = dayKeyInTz(now, timeZone)
   // --- tasks ---
   const areaTasks = input.tasks.filter((t) => t.areaId === areaId)
   const tasksTotal = areaTasks.length
@@ -47,20 +74,20 @@ export const scoreArea = (areaId: string, input: ScoringInput): AreaScore => {
   if (areaHabits.length) {
     let consistencySum = 0
     for (const h of areaHabits) {
-      const stats = computeHabitStats(h.logs, 7)
+      const stats = computeHabitStats(h.logs, 7, timeZone, now)
       consistencySum += stats.history.filter(Boolean).length / 7
       if (stats.currentStreak > streak) streak = stats.currentStreak
       focusMins += h.logs
-        .filter((l) => l.date.toISOString().slice(0, 10) === todayKey)
+        .filter((l) => utcDayKey(l.date) === todayKey)
         .reduce((s, l) => s + (l.minutes || 0), 0)
     }
     habitRate = consistencySum / areaHabits.length
   }
 
-  // --- learning (completed resources fraction) ---
+  // --- learning (progress-weighted across the area's resources) ---
   const areaResources = input.resources.filter((r) => r.topic?.areaId === areaId)
   const learnFrac = areaResources.length
-    ? areaResources.filter((r) => r.status === "COMPLETED").length / areaResources.length
+    ? areaResources.reduce((sum, r) => sum + resourceCredit(r), 0) / areaResources.length
     : BASE_LEARN
 
   const score = Math.round((0.4 * taskRate + 0.4 * habitRate + 0.2 * learnFrac) * 100)

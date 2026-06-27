@@ -7,6 +7,7 @@ import {
   updateVaultItem,
   deleteVaultItem,
   incrementVaultUsed,
+  incrementVaultHelpful,
 } from "./vault.repository.js"
 import type {
   CreateVaultItemDto,
@@ -73,4 +74,14 @@ export const markVaultItemUsedService = async (
   const item = await incrementVaultUsed(id)
   logBehavior(userId, "VAULT_ACCESSED", { vaultItemId: id })
   return item
+}
+
+// Records that the item genuinely helped — bumps helpfulCount, so the coach can
+// resurface what actually works over what's merely recent.
+export const markVaultItemHelpfulService = async (
+  id: string,
+  userId: string,
+): Promise<VaultItemDto> => {
+  await getOwnedVaultItem(id, userId)
+  return incrementVaultHelpful(id)
 }

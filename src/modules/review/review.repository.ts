@@ -25,6 +25,35 @@ export const deleteReview = (id: string) => {
   return prisma.review.delete({ where: { id } })
 }
 
+// Factual activity in a [start, end] window — the raw material for an
+// auto-drafted review. Counts are exact; titles are a small sample.
+export const findReviewPeriodStats = async (userId: string, start: Date, end: Date) => {
+  const [tasksCompleted, taskTitles, habitsLogged, focus] = await Promise.all([
+    prisma.task.count({
+      where: { userId, status: "COMPLETED", completedAt: { gte: start, lte: end } },
+    }),
+    prisma.task.findMany({
+      where: { userId, status: "COMPLETED", completedAt: { gte: start, lte: end } },
+      select: { title: true },
+      orderBy: { completedAt: "desc" },
+      take: 5,
+    }),
+    prisma.habitLog.count({
+      where: { userId, completed: true, date: { gte: start, lte: end } },
+    }),
+    prisma.focusSession.aggregate({
+      where: { userId, startedAt: { gte: start, lte: end } },
+      _sum: { durationMinutes: true },
+    }),
+  ])
+  return {
+    tasksCompleted,
+    taskTitles: taskTitles.map((t) => t.title),
+    habitsLogged,
+    focusMinutes: focus._sum.durationMinutes ?? 0,
+  }
+}
+
 // --- InsightReview ---
 export const createInsight = (data: Prisma.InsightReviewUncheckedCreateInput) => {
   return prisma.insightReview.create({ data })

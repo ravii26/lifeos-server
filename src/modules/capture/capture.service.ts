@@ -17,6 +17,7 @@ import {
 } from "./capture.repository.js"
 import { classifyCapture, type CaptureType, type Classification } from "./capture.ai.js"
 import { getUserRagContext } from "../../lib/rag.js"
+import logger from "../../lib/logger.js"
 import type {
   CreateCaptureDto,
   UpdateCaptureDto,
@@ -57,6 +58,8 @@ const toDto = (capture: {
   rawText: string
   confidence: number | null
   status: string
+  worthCheck: WorthCheck | null
+  worthReason: string | null
   detectedUrl: string | null
   suggestedOutputs: Prisma.JsonValue
   createdOutputs: Prisma.JsonValue
@@ -70,6 +73,8 @@ const toDto = (capture: {
     confidence: capture.confidence,
     processed: capture.status !== "PENDING",
     status: capture.status,
+    worthCheck: capture.worthCheck,
+    worthReason: capture.worthReason,
     meta,
     detectedUrl: capture.detectedUrl,
     createdOutput: (capture.createdOutputs as CaptureDto["createdOutput"]) ?? null,
@@ -126,38 +131,59 @@ const autoConvert = async (
   })
 }
 
-export const createCaptureService = async (
+// Classify the dump with the AI (RAG context) and write the result back onto
+// the capture; high-confidence TASK/VAULT items auto-convert. Runs in the
+// background so the create request can return instantly.
+const classifyAndApply = async (
+  captureId: string,
   userId: string,
-  input: CreateCaptureDto,
-): Promise<CaptureDto> => {
-  // Fetch user context in parallel with nothing (classification needs it).
+  rawText: string,
+): Promise<void> => {
   const ragContext = await getUserRagContext(userId)
-  const result = await classifyCapture(input.text, ragContext)
+  const result = await classifyCapture(rawText, ragContext)
 
   const detectedUrl = (result.meta.url as string | undefined) ?? null
 
-  const canAutoConvert = result.confidence >= AUTO_CONVERT_THRESHOLD &&
-    (result.type === "TASK" || result.type === "VAULT")
-
-  const capture = await createCapture({
-    userId,
-    rawText: input.text,
+  await updateCapture(captureId, {
     detectedUrl,
     confidence: result.confidence,
-    status: "PENDING",
     worthCheck: mapWorthCheck(result.worthCheck),
     worthReason: result.worthReason,
     suggestedOutputs: { type: result.type, meta: result.meta } as Prisma.InputJsonValue,
   })
 
-  logBehavior(userId, "CAPTURE_CREATED", { captureId: capture.id, type: result.type })
+  const canAutoConvert =
+    result.confidence >= AUTO_CONVERT_THRESHOLD &&
+    (result.type === "TASK" || result.type === "VAULT")
 
   if (canAutoConvert) {
-    void autoConvert(capture.id, userId, input.text, result.type, result.meta, detectedUrl)
-      .catch(() => {
+    await autoConvert(captureId, userId, rawText, result.type, result.meta, detectedUrl).catch(
+      () => {
         // Swallow — the capture stays PENDING and the user can convert manually
-      })
+      },
+    )
   }
+}
+
+export const createCaptureService = async (
+  userId: string,
+  input: CreateCaptureDto,
+): Promise<CaptureDto> => {
+  // Capture must feel instant: persist the raw dump and return immediately.
+  // Classification (an LLM round-trip) and any auto-convert run in the
+  // background so the user never waits on the AI to add a thought.
+  const capture = await createCapture({
+    userId,
+    rawText: input.text,
+    status: "PENDING",
+  })
+
+  logBehavior(userId, "CAPTURE_CREATED", { captureId: capture.id })
+
+  void classifyAndApply(capture.id, userId, input.text).catch((err) => {
+    logger.error("Background capture classification failed:", err)
+  })
+
   return toDto(capture)
 }
 

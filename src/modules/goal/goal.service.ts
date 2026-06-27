@@ -12,6 +12,7 @@ import {
   findGoalScoringData,
 } from "./goal.repository.js"
 import { scoreGoalConfidence } from "./goal.confidence.js"
+import { getUserTimezone } from "../auth/auth.repository.js"
 import type {
   CreateGoalDto,
   UpdateGoalDto,
@@ -111,17 +112,23 @@ const enrichWithConfidence = async (
   since.setUTCDate(since.getUTCDate() - HABIT_WINDOW_DAYS)
   const goalIds = goals.map((g) => g.id)
   const areaIds = [...new Set(goals.map((g) => g.areaId))]
-  const { tasks, habits } = await findGoalScoringData(userId, goalIds, areaIds, since)
+  const [timeZone, { tasks, habits }] = await Promise.all([
+    getUserTimezone(userId),
+    findGoalScoringData(userId, goalIds, areaIds, since),
+  ])
 
   return goals.map((g) => ({
     ...g,
-    confidence: scoreGoalConfidence({
-      goalId: g.id,
-      areaId: g.areaId,
-      deadline: g.deadline,
-      tasks: tasks.filter((t) => t.goalId === g.id),
-      habits: habits.filter((h) => h.areaId === g.areaId),
-    }),
+    confidence: scoreGoalConfidence(
+      {
+        goalId: g.id,
+        areaId: g.areaId,
+        deadline: g.deadline,
+        tasks: tasks.filter((t) => t.goalId === g.id),
+        habits: habits.filter((h) => h.areaId === g.areaId),
+      },
+      timeZone,
+    ),
   }))
 }
 
@@ -170,21 +177,22 @@ export const getGoalConfidenceService = async (
   const goal = await getOwnedGoal(id, userId)
   const since = new Date()
   since.setUTCDate(since.getUTCDate() - HABIT_WINDOW_DAYS)
-  const { tasks, habits } = await findGoalScoringData(
-    userId,
-    [goal.id],
-    [goal.areaId],
-    since,
-  )
+  const [timeZone, { tasks, habits }] = await Promise.all([
+    getUserTimezone(userId),
+    findGoalScoringData(userId, [goal.id], [goal.areaId], since),
+  ])
   return {
     ...goal,
-    confidence: scoreGoalConfidence({
-      goalId: goal.id,
-      areaId: goal.areaId,
-      deadline: goal.deadline,
-      tasks,
-      habits,
-    }),
+    confidence: scoreGoalConfidence(
+      {
+        goalId: goal.id,
+        areaId: goal.areaId,
+        deadline: goal.deadline,
+        tasks,
+        habits,
+      },
+      timeZone,
+    ),
   }
 }
 

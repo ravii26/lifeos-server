@@ -533,6 +533,11 @@ model UserSettings {
   font      String   @default("inter")    // inter | mono | serif
   startTab  String   @default("today")    // today | areas | dump
 
+  // Optional modules the user has enabled. Empty == all optional modules on
+  // (so existing rows and brand-new accounts behave identically). Core modules
+  // (areas/tasks/capture) are always on and never stored here.
+  enabledModules String[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

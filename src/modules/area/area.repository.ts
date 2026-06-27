@@ -50,7 +50,12 @@ export const findHabitsWithLogsForScoring = (userId: string, since: Date) => {
 export const findResourcesForScoring = (userId: string) => {
   return prisma.resource.findMany({
     where: { userId },
-    select: { status: true, topic: { select: { areaId: true } } },
+    select: {
+      status: true,
+      lessonsCompleted: true,
+      totalLessons: true,
+      topic: { select: { areaId: true } },
+    },
   })
 }
 

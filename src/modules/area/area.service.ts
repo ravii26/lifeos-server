@@ -14,6 +14,7 @@ import {
   findAllAreaSnapshots,
 } from "./area.repository.js"
 import { scoreArea } from "./area.scoring.js"
+import { getUserTimezone } from "../auth/auth.repository.js"
 import type { CreateAreaDto, UpdateAreaDto } from "./area.schema.js"
 import type { AreaDto, AreaWithScoreDto } from "./area.dto.js"
 
@@ -50,7 +51,8 @@ export const listAreasService = async (userId: string): Promise<AreaWithScoreDto
   const since = new Date()
   since.setUTCDate(since.getUTCDate() - 28)
 
-  const [areas, tasks, habits, resources] = await Promise.all([
+  const [timeZone, areas, tasks, habits, resources] = await Promise.all([
+    getUserTimezone(userId),
     findAreasByUser(userId),
     findTasksForScoring(userId),
     findHabitsWithLogsForScoring(userId, since),
@@ -58,7 +60,7 @@ export const listAreasService = async (userId: string): Promise<AreaWithScoreDto
   ])
 
   const input = { tasks, habits, resources }
-  return areas.map((area) => ({ ...area, ...scoreArea(area.id, input) }))
+  return areas.map((area) => ({ ...area, ...scoreArea(area.id, input, timeZone) }))
 }
 
 export const getAreaService = (id: string, userId: string): Promise<AreaDto> => {
@@ -86,13 +88,14 @@ export const snapshotAreaScoreService = async (id: string, userId: string) => {
   const since = new Date()
   since.setUTCDate(since.getUTCDate() - 28)
 
-  const [tasks, habits, resources] = await Promise.all([
+  const [timeZone, tasks, habits, resources] = await Promise.all([
+    getUserTimezone(userId),
     findTasksForScoring(userId),
     findHabitsWithLogsForScoring(userId, since),
     findResourcesForScoring(userId),
   ])
 
-  const scored = scoreArea(id, { tasks, habits, resources })
+  const scored = scoreArea(id, { tasks, habits, resources }, timeZone)
   return createScoreSnapshot({ userId, areaId: id, ...scored })
 }
 

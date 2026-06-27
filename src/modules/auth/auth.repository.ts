@@ -18,6 +18,17 @@ export const findUserById = (id: string) => {
   })
 }
 
+// The user's IANA timezone — used everywhere "today"/streaks/scores are
+// computed so day boundaries follow the user, not server UTC. Defaults to UTC
+// if the user somehow has none.
+export const getUserTimezone = async (userId: string): Promise<string> => {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { timezone: true },
+  })
+  return user?.timezone ?? "UTC"
+}
+
 export const createUser = (data: CreateUserData) => {
   return prisma.user.create({
     data,

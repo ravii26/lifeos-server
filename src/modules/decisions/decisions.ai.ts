@@ -2,13 +2,25 @@ import { geminiClient } from "../../lib/gemini.js"
 import { groqClient } from "../../lib/groq.js"
 import { computeHabitStats } from "../habit/habit.stats.js"
 import { scoreArea, type ScoringInput } from "../area/area.scoring.js"
+import { scoreGoalConfidence } from "../goal/goal.confidence.js"
+import { dayKeyInTz, hourInTz, utcDayKey } from "../../shared/utils/time.util.js"
 import type { findDecisionContext } from "./decisions.repository.js"
 import logger from "../../lib/logger.js"
 import { env } from "../../config/env.config.js"
 
 type RawContext = Awaited<ReturnType<typeof findDecisionContext>>
 
-export type SuggestionType = "TASK" | "HABIT" | "AREA_FOCUS" | "REVIEW" | "GOAL"
+export type SuggestionType =
+  | "TASK"
+  | "HABIT"
+  | "AREA_FOCUS"
+  | "REVIEW"
+  | "GOAL"
+  | "PROJECT"
+  | "CAPTURE"
+  | "RESOURCE"
+  | "VAULT"
+  | "NOTE"
 export type Urgency = "HIGH" | "MEDIUM" | "LOW"
 
 export interface Suggestion {
@@ -56,32 +68,57 @@ export interface DecisionResult {
 
 // ── Build a lean context summary for the Gemini prompt ───────────────────────
 
-const hourOfDay = (): string => {
-  const h = new Date().getUTCHours()
+const timeOfDayLabel = (timeZone: string, now: Date): string => {
+  const h = hourInTz(timeZone, now)
   if (h < 6) return "night"
   if (h < 12) return "morning"
   if (h < 17) return "afternoon"
   return "evening"
 }
 
-const todayKey = (): string => new Date().toISOString().slice(0, 10)
-
 interface ContextSummary {
   timeOfDay: string
   areas: { id: string; name: string; score: number; tasksDone: number; tasksTotal: number; streak: number }[]
   topPendingTasks: { id: string; title: string; priority: string; daysOverdue: number | null; areaName: string | null; targetMinutes: number | null }[]
   habitsNotDoneToday: { id: string; title: string; areaName: string | null; currentStreak: number; targetMinutes: number | null }[]
-  activeGoals: { id: string; title: string; areaName: string | null; daysUntilDeadline: number | null }[]
+  activeGoals: {
+    id: string
+    title: string
+    areaName: string | null
+    daysUntilDeadline: number | null
+    confidence: number
+    confidenceLabel: "ON_TRACK" | "AT_RISK" | "OFF_TRACK"
+    daysSinceProgress: number | null
+  }[]
   recentActivity: { tasksCompleted7d: number; habitsLogged7d: number; focusSessions7d: number; mostActiveAreaId: string | null }
   identity: { purpose: string | null; thisYearGoal: string | null; values: string[] }
   streakAlerts: StreakAlert[]
   weeklyPattern: string
+  pendingCaptures: number
+  daysSinceReview: number | null
+  stalledProjects: {
+    id: string
+    title: string
+    areaName: string | null
+    openTasks: number
+    daysSinceProgress: number | null
+  }[]
+  continueResources: { id: string; title: string; areaName: string | null }[]
+  vaultPicks: {
+    id: string
+    title: string
+    vaultType: string
+    usedCount: number
+    helpfulCount: number
+  }[]
+  insightNotes: { id: string; title: string }[]
 }
 
 const buildContextSummary = (raw: RawContext): ContextSummary => {
   const areaMap = new Map(raw.areas.map((a) => [a.id, a.name]))
-  const tk = todayKey()
+  const tz = raw.timezone
   const now = new Date()
+  const tk = dayKeyInTz(now, tz)
 
   // Compute area scores
   const scoringInput: ScoringInput = {
@@ -94,7 +131,7 @@ const buildContextSummary = (raw: RawContext): ContextSummary => {
   }
 
   const areas = raw.areas.map((a) => {
-    const scored = scoreArea(a.id, scoringInput)
+    const scored = scoreArea(a.id, scoringInput, tz, now)
     return {
       id: a.id,
       name: a.name,
@@ -107,8 +144,8 @@ const buildContextSummary = (raw: RawContext): ContextSummary => {
 
   // Compute habit stats once, reuse for both notDoneToday and streakAlerts
   const habitStatsList = raw.habits.map((h) => {
-    const stats = computeHabitStats(h.logs)
-    const todayDone = h.logs.some((l) => l.date.toISOString().slice(0, 10) === tk && l.completed)
+    const stats = computeHabitStats(h.logs, 28, tz, now)
+    const todayDone = h.logs.some((l) => utcDayKey(l.date) === tk && l.completed)
     return { habit: h, stats, todayDone }
   })
 
@@ -131,8 +168,15 @@ const buildContextSummary = (raw: RawContext): ContextSummary => {
       message: `${stats.currentStreak}-day streak — log today to keep it alive!`,
     }))
 
-  // Top pending tasks with overdue info
-  const topPendingTasks = raw.pendingTasks.slice(0, 10).map((t) => {
+  // Map a raw task row to the lean shape the coach reasons over.
+  const mapTask = (t: {
+    id: string
+    title: string
+    priority: string
+    dueDate: Date | null
+    areaId: string | null
+    targetMinutes?: number | null
+  }) => {
     const daysOverdue = t.dueDate
       ? Math.floor((now.getTime() - new Date(t.dueDate).getTime()) / 86_400_000)
       : null
@@ -144,18 +188,44 @@ const buildContextSummary = (raw: RawContext): ContextSummary => {
       areaName: t.areaId ? (areaMap.get(t.areaId) ?? null) : null,
       targetMinutes: t.targetMinutes ?? null,
     }
-  })
+  }
+
+  // Overdue tasks are fetched authoritatively (any priority, no top-N cutoff) so
+  // an overdue but low-priority task can't slip past the priority-sorted pending
+  // window. Surface them first (most overdue first), then fill with the rest.
+  const overdueMapped = raw.overdueTasks
+    .map(mapTask)
+    .sort((a, b) => (b.daysOverdue ?? 0) - (a.daysOverdue ?? 0))
+  const overdueIds = new Set(overdueMapped.map((t) => t.id))
+  const topPendingTasks = [
+    ...overdueMapped,
+    ...raw.pendingTasks.filter((t) => !overdueIds.has(t.id)).map(mapTask),
+  ].slice(0, 10)
 
   // Goals with deadline proximity
   const activeGoals = raw.activeGoals.slice(0, 5).map((g) => {
     const daysUntilDeadline = g.deadline
       ? Math.floor((new Date(g.deadline).getTime() - now.getTime()) / 86_400_000)
       : null
+    // Live goal confidence — the accountability number — so the coach can call
+    // out an active goal that's stalling, not only one with a near deadline.
+    const conf = scoreGoalConfidence({
+      goalId: g.id,
+      areaId: g.areaId,
+      deadline: g.deadline,
+      tasks: raw.goalLinkedTasks.filter((t) => t.goalId === g.id),
+      habits: raw.habits
+        .filter((h) => h.areaId === g.areaId)
+        .map((h) => ({ logs: h.logs })),
+    }, tz, now)
     return {
       id: g.id,
       title: g.title,
       areaName: g.areaId ? (areaMap.get(g.areaId) ?? null) : null,
       daysUntilDeadline,
+      confidence: conf.confidence,
+      confidenceLabel: conf.label,
+      daysSinceProgress: conf.daysSinceProgress,
     }
   })
 
@@ -185,8 +255,65 @@ const buildContextSummary = (raw: RawContext): ContextSummary => {
 
   const mostActiveAreaId = raw.areas[0]?.id ?? null
 
+  // ── Projects, inbox, reviews, resources, vault, notes ──
+
+  // Stalled active project: has open work but no recent progress, or overdue tasks.
+  const stalledProjects = raw.activeProjects
+    .map((p) => {
+      const openTasks = p.tasks.filter(
+        (t) => t.status === "TODO" || t.status === "IN_PROGRESS",
+      ).length
+      const completedDates = p.tasks
+        .filter((t) => t.completedAt)
+        .map((t) => t.completedAt as Date)
+      const lastProgress = completedDates.length
+        ? completedDates.reduce((a, b) => (a > b ? a : b))
+        : null
+      const daysSinceProgress = lastProgress
+        ? Math.floor((now.getTime() - lastProgress.getTime()) / 86_400_000)
+        : null
+      const hasOverdue = p.tasks.some(
+        (t) =>
+          (t.status === "TODO" || t.status === "IN_PROGRESS") &&
+          t.dueDate != null &&
+          t.dueDate < now,
+      )
+      const stalled =
+        openTasks > 0 && (hasOverdue || daysSinceProgress === null || daysSinceProgress >= 7)
+      return {
+        id: p.id,
+        title: p.title,
+        areaName: p.areaId ? (areaMap.get(p.areaId) ?? null) : null,
+        openTasks,
+        daysSinceProgress,
+        stalled,
+      }
+    })
+    .filter((p) => p.stalled)
+    .map(({ stalled, ...p }) => p)
+
+  const daysSinceReview = raw.lastReview?.periodEnd
+    ? Math.floor((now.getTime() - new Date(raw.lastReview.periodEnd).getTime()) / 86_400_000)
+    : null
+
+  const continueResources = raw.continueResources.map((r) => ({
+    id: r.id,
+    title: r.title,
+    areaName: r.topic?.areaId ? (areaMap.get(r.topic.areaId) ?? null) : null,
+  }))
+
+  const vaultPicks = raw.vaultItems.map((v) => ({
+    id: v.id,
+    title: v.title,
+    vaultType: v.vaultType,
+    usedCount: v.usedCount,
+    helpfulCount: v.helpfulCount,
+  }))
+
+  const insightNotes = raw.insightNotes.map((n) => ({ id: n.id, title: n.title }))
+
   return {
-    timeOfDay: hourOfDay(),
+    timeOfDay: timeOfDayLabel(tz, now),
     areas,
     topPendingTasks,
     habitsNotDoneToday,
@@ -199,6 +326,12 @@ const buildContextSummary = (raw: RawContext): ContextSummary => {
     },
     streakAlerts: streakAlertsFixed,
     weeklyPattern,
+    pendingCaptures: raw.pendingCaptures,
+    daysSinceReview,
+    stalledProjects,
+    continueResources,
+    vaultPicks,
+    insightNotes,
   }
 }
 
@@ -221,6 +354,8 @@ const estimateMinutesFor = (
 
 const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
   const suggestions: Suggestion[] = []
+  const idle =
+    ctx.recentActivity.tasksCompleted7d === 0 && ctx.recentActivity.habitsLogged7d === 0
 
   // 1. Overdue tasks first
   const overdueTasks = ctx.topPendingTasks.filter((t) => (t.daysOverdue ?? 0) > 0)
@@ -269,6 +404,33 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
     })
   }
 
+  // 3.5 Active goal losing momentum — surface the single worst stalling goal,
+  // so the accountability number actually changes what the coach recommends.
+  const atRiskGoal = [...ctx.activeGoals]
+    .filter(
+      (g) =>
+        g.confidenceLabel === "OFF_TRACK" ||
+        (g.confidenceLabel === "AT_RISK" && (g.daysSinceProgress ?? 0) >= 5),
+    )
+    .sort((a, b) => a.confidence - b.confidence)[0]
+  if (atRiskGoal) {
+    suggestions.push({
+      rank: suggestions.length + 1,
+      type: "GOAL",
+      refId: atRiskGoal.id,
+      title: `Move "${atRiskGoal.title}" forward`,
+      reason:
+        atRiskGoal.daysSinceProgress != null
+          ? `Confidence ${atRiskGoal.confidence}/100 — ${atRiskGoal.daysSinceProgress} day(s) since real progress on this goal.`
+          : `Confidence ${atRiskGoal.confidence}/100 — this goal needs attention.`,
+      urgency: atRiskGoal.confidenceLabel === "OFF_TRACK" ? "HIGH" : "MEDIUM",
+      actionableSteps: [
+        "Do one task or habit tied to this goal today",
+        "Or break it into a concrete next step",
+      ],
+    })
+  }
+
   // 4. Neglected area
   const neglected = [...ctx.areas].sort((a, b) => a.score - b.score)[0]
   if (neglected && neglected.score < 40) {
@@ -284,6 +446,107 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
         `Log one habit in ${neglected.name}`,
         "Take a snapshot to track progress",
       ],
+    })
+  }
+
+  // 5. A stalling active project
+  const stalledProject = ctx.stalledProjects[0]
+  if (stalledProject) {
+    suggestions.push({
+      rank: suggestions.length + 1,
+      type: "PROJECT",
+      refId: stalledProject.id,
+      title: `Nudge "${stalledProject.title}" forward`,
+      reason:
+        stalledProject.daysSinceProgress != null
+          ? `${stalledProject.openTasks} open task(s), no progress in ${stalledProject.daysSinceProgress} day(s).`
+          : `${stalledProject.openTasks} open task(s) and no progress logged yet.`,
+      urgency: "MEDIUM",
+      actionableSteps: ["Open the project", "Complete or schedule its next task"],
+    })
+  }
+
+  // 6. Unsorted captures piling up in the inbox
+  if (ctx.pendingCaptures >= 3) {
+    suggestions.push({
+      rank: suggestions.length + 1,
+      type: "CAPTURE",
+      refId: null,
+      title: `Process your inbox (${ctx.pendingCaptures} items)`,
+      reason: `${ctx.pendingCaptures} brain-dumps are waiting to be sorted into your life.`,
+      urgency: "MEDIUM",
+      actionableSteps: ["Open the inbox", "Convert or dismiss each item"],
+    })
+  }
+
+  // 7. Reflection overdue
+  if (ctx.daysSinceReview === null || ctx.daysSinceReview >= 7) {
+    suggestions.push({
+      rank: suggestions.length + 1,
+      type: "REVIEW",
+      refId: null,
+      title: ctx.daysSinceReview === null ? "Do your first review" : "Time for a weekly review",
+      reason:
+        ctx.daysSinceReview === null
+          ? "You haven't reflected yet — a review turns activity into learning."
+          : `It's been ${ctx.daysSinceReview} day(s) since your last review.`,
+      urgency: "LOW",
+      actionableSteps: ["Open Review", "Generate a draft from your week", "Note one win and one fix"],
+    })
+  }
+
+  // 8. Continue a learning resource you already started
+  const resource = ctx.continueResources[0]
+  if (resource) {
+    suggestions.push({
+      rank: suggestions.length + 1,
+      type: "RESOURCE",
+      refId: resource.id,
+      title: `Continue: ${resource.title}`,
+      reason: "You started this and haven't finished — keep the momentum.",
+      urgency: "LOW",
+      actionableSteps: ["Spend 15 minutes on it", "Log your progress"],
+    })
+  }
+
+  // 9. Revisit a vault item — only when slipping/idle, and pick the RIGHT one:
+  // prefer a MOTIVATION/RECOVERY item (the tool for this moment), and among
+  // candidates favour what has actually helped before and hasn't been
+  // over-surfaced (helpfulCount desc, then usedCount asc) — not just the newest.
+  if (idle || atRiskGoal) {
+    const slippingPicks = ctx.vaultPicks.filter(
+      (v) => v.vaultType === "RECOVERY" || v.vaultType === "MOTIVATION",
+    )
+    const vaultPick = (slippingPicks.length ? slippingPicks : ctx.vaultPicks)
+      .slice()
+      .sort((a, b) => b.helpfulCount - a.helpfulCount || a.usedCount - b.usedCount)[0]
+    if (vaultPick) {
+      suggestions.push({
+        rank: suggestions.length + 1,
+        type: "VAULT",
+        refId: vaultPick.id,
+        title: `Revisit: ${vaultPick.title}`,
+        reason:
+          vaultPick.vaultType === "RECOVERY" || vaultPick.vaultType === "MOTIVATION"
+            ? "A bit of motivation from your vault for exactly this moment."
+            : "A moment of perspective from your vault to reset and refocus.",
+        urgency: "LOW",
+        actionableSteps: ["Open it", "Take a breath and re-read it"],
+      })
+    }
+  }
+
+  // 10. Develop a recent insight before it fades
+  const insight = ctx.insightNotes[0]
+  if (insight) {
+    suggestions.push({
+      rank: suggestions.length + 1,
+      type: "NOTE",
+      refId: insight.id,
+      title: `Develop your insight: ${insight.title}`,
+      reason: "A recent idea worth turning into action before it fades.",
+      urgency: "LOW",
+      actionableSteps: ["Re-read the note", "Turn it into a task or expand it"],
     })
   }
 
@@ -324,7 +587,6 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
   let headline: string
   let briefing: string
 
-  const idle = tasksCompleted7d === 0 && habitsLogged7d === 0
   const hasOverdue = overdueTasks.length > 0
   const atRiskStreaks = ctx.streakAlerts.length
 
@@ -371,7 +633,7 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
 const SYSTEM_PROMPT = `You are the executive advisor AI of LifeOS, a personal operating system.
 Your goal is to analyze the user's current state and recommend exactly what they should focus on next to achieve their goals, build consistent habits, and maintain balanced life areas.
 
-You will receive a JSON snapshot of the user's current context: area scores, pending tasks, incomplete daily habits, active goals, recent behavior patterns, and core identity traits (purpose, values, yearly goals).
+You will receive a JSON snapshot of the user's current context: area scores, pending tasks, incomplete daily habits, active goals (each with a live confidence 0-100, a label ON_TRACK/AT_RISK/OFF_TRACK, and days since real progress), recent behavior patterns, core identity traits (purpose, values, yearly goals), stalling active projects, the count of unsorted captures in the inbox (pendingCaptures), days since the last review (daysSinceReview), in-progress learning resources, saved vault items (motivation/memory), and recent insight notes.
 
 <rules>
 1. Output raw JSON only. Do NOT format with markdown code blocks (e.g. \`\`\`json).
@@ -381,8 +643,13 @@ You will receive a JSON snapshot of the user's current context: area scores, pen
    - Overdue tasks
    - Incomplete habits with active streaks (highest streak first)
    - High-priority tasks
+   - Active goals losing momentum (OFF_TRACK/AT_RISK confidence, many days since progress)
+   - A stalling active project (open tasks, no recent progress)
    - Goals with approaching deadlines
    - Neglected life areas (low scores)
+   - A full inbox of unsorted captures (nudge processing it)
+   - An overdue review (nudge reflecting), when little else is urgent
+   - Continuing an in-progress resource, or revisiting a vault item / insight note — only when the user is otherwise idle
 5. Include 1-3 concrete next steps for each recommendation (short, actionable phrases of max 10 words each).
 6. If the user's dashboard is completely clear, recommend reviewing active goals or performing a reflection.
 7. VOICE: Write "headline" and "briefing" like a sharp, warm human coach talking directly to the user — second person ("you"), specific, never corporate or generic. The headline is a punchy one-liner (max ~12 words). The briefing is 2-3 sentences that tie their state together and point at the one thing that matters most. Reference the time of day where natural.
@@ -396,7 +663,7 @@ You will receive a JSON snapshot of the user's current context: area scores, pen
   "briefing": "string", // 2-3 sentence coach-style narrative tying their state together
   "tone": "encouraging" | "firm" | "celebratory" | "neutral",
   "primaryAction": {
-    "type": "TASK" | "HABIT" | "AREA_FOCUS" | "REVIEW" | "GOAL",
+    "type": "TASK" | "HABIT" | "AREA_FOCUS" | "REVIEW" | "GOAL" | "PROJECT" | "CAPTURE" | "RESOURCE" | "VAULT" | "NOTE",
     "refId": "string" | null, // ID of the referenced entity; must match suggestions[0].refId
     "title": "string", // The one thing to do now
     "why": "string", // One human sentence: why THIS, right now
@@ -405,7 +672,7 @@ You will receive a JSON snapshot of the user's current context: area scores, pen
   "suggestions": [
     {
       "rank": number, // 1 to 5 sequential recommendation rank
-      "type": "TASK" | "HABIT" | "AREA_FOCUS" | "REVIEW" | "GOAL",
+      "type": "TASK" | "HABIT" | "AREA_FOCUS" | "REVIEW" | "GOAL" | "PROJECT" | "CAPTURE" | "RESOURCE" | "VAULT" | "NOTE",
       "refId": "string" | null, // ID of the referenced task, habit, area, or goal (null for REVIEW)
       "title": "string", // Concise, action-oriented title (e.g., "Complete task: draft report")
       "reason": "string", // Single sentence explaining why this is prioritized right now

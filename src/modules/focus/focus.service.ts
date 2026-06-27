@@ -1,5 +1,6 @@
 import { NotFoundError, ConflictError } from "../../shared/utils/errors.util.js"
 import { logBehavior } from "../behavior/behavior.service.js"
+import { getUserTimezone } from "../auth/auth.repository.js"
 import { findTaskById } from "../task/task.repository.js"
 import { findHabitById } from "../habit/habit.repository.js"
 import { findBlockById } from "../calendar/calendar.repository.js"
@@ -105,12 +106,15 @@ export const dailyFocusService = async (
   const to = filters.to ?? new Date()
   const from = filters.from ?? new Date(to.getTime() - 7 * 86_400_000)
 
-  const sessions = await findSessionsOverlapping(userId, from, to, {
-    ...(filters.taskId && { taskId: filters.taskId }),
-    ...(filters.habitId && { habitId: filters.habitId }),
-  })
+  const [timeZone, sessions] = await Promise.all([
+    getUserTimezone(userId),
+    findSessionsOverlapping(userId, from, to, {
+      ...(filters.taskId && { taskId: filters.taskId }),
+      ...(filters.habitId && { habitId: filters.habitId }),
+    }),
+  ])
 
-  return aggregateDailyFocus(sessions, from, to)
+  return aggregateDailyFocus(sessions, from, to, timeZone)
 }
 
 export const updateFocusService = async (
@@ -124,6 +128,11 @@ export const updateFocusService = async (
 }
 
 export const deleteFocusService = async (id: string, userId: string): Promise<void> => {
-  await getOwnedSession(id, userId)
+  const session = await getOwnedSession(id, userId)
   await deleteSession(id)
+  // A session deleted while still running was abandoned — record it so the
+  // behaviour analytics can surface "started but didn't finish".
+  if (!session.endedAt) {
+    logBehavior(userId, "FOCUS_ABANDONED", { focusId: id })
+  }
 }

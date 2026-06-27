@@ -34,22 +34,28 @@ const assertLinksOwned = async (
     const goal = await findGoalById(links.goalId, userId)
     if (!goal) throw new NotFoundError("Goal not found")
   }
+  let project: Awaited<ReturnType<typeof findProjectById>> = null
   if (links.projectId) {
-    const project = await findProjectById(links.projectId, userId)
+    project = await findProjectById(links.projectId, userId)
     if (!project) throw new NotFoundError("Project not found")
   }
+  return { project }
 }
 
 export const createTaskService = async (
   userId: string,
   input: CreateTaskDto,
 ): Promise<TaskDto> => {
-  await assertLinksOwned(userId, input)
+  const { project } = await assertLinksOwned(userId, input)
+
+  // Inherit the project's goal when a task is filed under a project but no goal
+  // was given explicitly — so project work rolls up to the goal's confidence.
+  const goalId = input.goalId ?? project?.goalId ?? null
 
   return createTask({
     userId,
     areaId: input.areaId ?? null,
-    goalId: input.goalId ?? null,
+    goalId,
     projectId: input.projectId ?? null,
     title: input.title,
     description: input.description ?? null,
@@ -88,9 +94,30 @@ export const updateTaskService = async (
   userId: string,
   input: UpdateTaskDto,
 ): Promise<TaskDto> => {
-  await getOwnedTask(id, userId)
-  await assertLinksOwned(userId, input)
-  return updateTask(id, input)
+  const existing = await getOwnedTask(id, userId)
+  const { project } = await assertLinksOwned(userId, input)
+
+  // If the task is being filed under a project and still has no goal of its own,
+  // inherit the project's goal. Never overwrite an explicit or existing goal.
+  const data: UpdateTaskDto = { ...input }
+  if (input.goalId === undefined && existing.goalId === null && project?.goalId) {
+    data.goalId = project.goalId
+  }
+
+  const updated = await updateTask(id, data)
+
+  // Pushing an existing due date further out is a deferral — record it so the
+  // coach can notice procrastination patterns (e.g. an area whose tasks keep
+  // slipping). Only counts when a real prior due date moved later.
+  if (
+    input.dueDate &&
+    existing.dueDate &&
+    input.dueDate.getTime() > existing.dueDate.getTime()
+  ) {
+    logBehavior(userId, "TASK_DEFERRED", { taskId: id })
+  }
+
+  return updated
 }
 
 export const completeTaskService = async (

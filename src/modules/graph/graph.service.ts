@@ -5,13 +5,25 @@
    entities so the frontend can render a force-directed or hierarchical
    graph visualization.
 
-   Node types:  AREA · GOAL · PROJECT · TASK · HABIT · TOPIC · NOTEBOOK · NOTE
-   Edge types:  AREA_GOAL · AREA_HABIT · AREA_TOPIC · GOAL_PROJECT ·
-                PROJECT_TASK · AREA_TASK · TOPIC_NOTEBOOK · TOPIC_NOTE
+   Node types:  AREA · GOAL · PROJECT · TASK · HABIT · TOPIC · NOTEBOOK · NOTE · RESOURCE
+   Edge types:  AREA_GOAL · AREA_HABIT · AREA_TOPIC · GOAL_PROJECT · PROJECT_TASK ·
+                AREA_TASK · TOPIC_TASK · TOPIC_NOTEBOOK · TOPIC_NOTE · TOPIC_RESOURCE ·
+                RESOURCE_NOTE
+   (Vault items are intentionally excluded — they have no structural links and
+    would render as floating nodes in a connections graph.)
    ===================================================================== */
 import prisma from "../../lib/prisma.js"
 
-export type NodeType = "AREA" | "GOAL" | "PROJECT" | "TASK" | "HABIT" | "TOPIC" | "NOTEBOOK" | "NOTE"
+export type NodeType =
+  | "AREA"
+  | "GOAL"
+  | "PROJECT"
+  | "TASK"
+  | "HABIT"
+  | "TOPIC"
+  | "NOTEBOOK"
+  | "NOTE"
+  | "RESOURCE"
 export type EdgeType =
   | "AREA_GOAL"
   | "AREA_HABIT"
@@ -22,6 +34,8 @@ export type EdgeType =
   | "TOPIC_TASK"     // task linked to topic via LEARN source
   | "TOPIC_NOTEBOOK"
   | "TOPIC_NOTE"
+  | "TOPIC_RESOURCE"
+  | "RESOURCE_NOTE"
 
 export interface GraphNode {
   id: string
@@ -44,7 +58,8 @@ export interface GraphResult {
 }
 
 export const getGraphService = async (userId: string): Promise<GraphResult> => {
-  const [areas, goals, projects, tasks, habits, topics, notebooks, notes] = await Promise.all([
+  const [areas, goals, projects, tasks, habits, topics, notebooks, notes, resources] =
+    await Promise.all([
     prisma.area.findMany({
       where: { userId },
       select: { id: true, name: true, type: true, color: true, icon: true, isActive: true },
@@ -59,7 +74,7 @@ export const getGraphService = async (userId: string): Promise<GraphResult> => {
     }),
     prisma.task.findMany({
       where: { userId },
-      select: { id: true, title: true, areaId: true, goalId: true, projectId: true, status: true, source: true },
+      select: { id: true, title: true, areaId: true, goalId: true, projectId: true, status: true, source: true, sourceId: true },
       take: 50, // cap tasks to keep the graph renderable
       orderBy: { createdAt: "desc" },
     }),
@@ -77,7 +92,13 @@ export const getGraphService = async (userId: string): Promise<GraphResult> => {
     }),
     prisma.note.findMany({
       where: { userId },
-      select: { id: true, title: true, topicId: true, noteType: true },
+      select: { id: true, title: true, topicId: true, noteType: true, resourceId: true },
+      take: 50,
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.resource.findMany({
+      where: { userId },
+      select: { id: true, title: true, topicId: true, resourceType: true, status: true },
       take: 50,
       orderBy: { createdAt: "desc" },
     }),
@@ -132,6 +153,12 @@ export const getGraphService = async (userId: string): Promise<GraphResult> => {
       label: n.title,
       data: { noteType: n.noteType, topicId: n.topicId },
     })),
+    ...resources.map((r) => ({
+      id: r.id,
+      type: "RESOURCE" as NodeType,
+      label: r.title,
+      data: { resourceType: r.resourceType, status: r.status, topicId: r.topicId },
+    })),
   ]
 
   const edges: GraphEdge[] = []
@@ -159,6 +186,33 @@ export const getGraphService = async (userId: string): Promise<GraphResult> => {
   for (const n of notes) {
     edges.push({ source: n.topicId, target: n.id, relation: "TOPIC_NOTE" })
   }
+  for (const r of resources) {
+    edges.push({ source: r.topicId, target: r.id, relation: "TOPIC_RESOURCE" })
+  }
+
+  // Note → its source resource, only when that resource is a node in this graph
+  // (resources are capped, so guard against a dangling edge).
+  const resourceIds = new Set(resources.map((r) => r.id))
+  for (const n of notes) {
+    if (n.resourceId && resourceIds.has(n.resourceId)) {
+      edges.push({ source: n.resourceId, target: n.id, relation: "RESOURCE_NOTE" })
+    }
+  }
+
+  // LEARN-sourced tasks → the topic of the note they were created from. The
+  // source note may be outside the capped notes set, so look it up directly.
+  const learnTasks = tasks.filter((t) => t.source === "LEARN" && t.sourceId)
+  if (learnTasks.length) {
+    const sourceNotes = await prisma.note.findMany({
+      where: { userId, id: { in: learnTasks.map((t) => t.sourceId!) } },
+      select: { id: true, topicId: true },
+    })
+    const topicByNote = new Map(sourceNotes.map((sn) => [sn.id, sn.topicId]))
+    for (const t of learnTasks) {
+      const topicId = topicByNote.get(t.sourceId!)
+      if (topicId) edges.push({ source: topicId, target: t.id, relation: "TOPIC_TASK" })
+    }
+  }
 
   const counts: Record<NodeType, number> = {
     AREA: areas.length,
@@ -169,6 +223,7 @@ export const getGraphService = async (userId: string): Promise<GraphResult> => {
     TOPIC: topics.length,
     NOTEBOOK: notebooks.length,
     NOTE: notes.length,
+    RESOURCE: resources.length,
   }
 
   return { nodes, edges, counts, generatedAt: new Date() }

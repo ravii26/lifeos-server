@@ -20,12 +20,14 @@ router.use(authenticate)
 
 router.post("/", validate(createAreaSchema), createAreaController)
 router.get("/", listAreasController)
+
+// Trends across all areas (direction, delta, weakness) — must be before /:id
+// so the literal "/trends" path isn't captured by the ":id" param route.
+router.get("/trends", getAreaTrendsController)
+
 router.get("/:id", getAreaController)
 router.patch("/:id", validate(updateAreaSchema), updateAreaController)
 router.delete("/:id", deleteAreaController)
-
-// Trends across all areas (direction, delta, weakness) — must be before /:id
-router.get("/trends", getAreaTrendsController)
 
 // A3 — score history
 router.post("/:id/snapshot", snapshotAreaScoreController)

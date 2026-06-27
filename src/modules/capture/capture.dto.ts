@@ -11,6 +11,10 @@ export interface CaptureDto {
   confidence: number | null
   processed: boolean
   status: string // PENDING | CONVERTED | DISMISSED
+  // AI worth-triage: is this worth acting on now, later, or not at all — and why.
+  // null until background classification has run.
+  worthCheck: string | null // WORTH_NOW | SAVE_LATER | NOT_RELEVANT
+  worthReason: string | null
   meta: Record<string, unknown>
   detectedUrl: string | null
   // Set after conversion — { type, id } pointing at the created entity.
