@@ -6,7 +6,7 @@ import { scoreGoalConfidence } from "../goal/goal.confidence.js"
 import { dayKeyInTz, hourInTz, utcDayKey } from "../../shared/utils/time.util.js"
 import type { findDecisionContext } from "./decisions.repository.js"
 import logger from "../../lib/logger.js"
-import { env } from "../../config/env.config.js"
+import { runWithAiFallback } from "../../lib/ai-fallback.js"
 
 type RawContext = Awaited<ReturnType<typeof findDecisionContext>>
 
@@ -800,26 +800,12 @@ const groqGetDecisions = async (ctx: ContextSummary): Promise<DecisionResult> =>
 export const getDecisions = async (raw: RawContext): Promise<DecisionResult> => {
   const ctx = buildContextSummary(raw)
 
-  const preferred = env.PREFERRED_AI_PROVIDER
-  const providers = preferred === "groq" ? ["groq", "gemini"] : ["gemini", "groq"]
-
-  for (const provider of providers) {
-    if (provider === "gemini" && geminiClient) {
-      try {
-        return await geminiGetDecisions(ctx)
-      } catch (err) {
-        logger.warn("Falling back from Gemini decisions generator...")
-      }
-    }
-    if (provider === "groq" && groqClient) {
-      try {
-        return await groqGetDecisions(ctx)
-      } catch (err) {
-        logger.warn("Falling back from Groq decisions generator...")
-      }
-    }
-  }
-
-  logger.info("Using heuristic decisions generator fallback")
-  return { ...heuristicDecision(ctx), source: "heuristic" }
+  return runWithAiFallback(
+    "Decisions generator",
+    {
+      gemini: geminiClient ? () => geminiGetDecisions(ctx) : undefined,
+      groq: groqClient ? () => groqGetDecisions(ctx) : undefined,
+    },
+    () => ({ ...heuristicDecision(ctx), source: "heuristic" as const }),
+  )
 }

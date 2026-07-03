@@ -22,10 +22,14 @@ export const findHabitsWithLogsByUser = (
   userId: string,
   since: Date,
   filters: Prisma.HabitWhereInput = {},
+  skip?: number,
+  take?: number,
 ) => {
   return prisma.habit.findMany({
     where: { userId, ...filters },
     orderBy: { createdAt: "desc" },
+    skip,
+    take,
     include: {
       logs: {
         where: { date: { gte: since } },
@@ -35,12 +39,16 @@ export const findHabitsWithLogsByUser = (
   })
 }
 
-export const updateHabit = (id: string, data: Prisma.HabitUpdateInput) => {
-  return prisma.habit.update({ where: { id }, data })
+export const countHabitsByUser = (userId: string, filters: Prisma.HabitWhereInput = {}) => {
+  return prisma.habit.count({ where: { userId, ...filters } })
 }
 
-export const deleteHabit = (id: string) => {
-  return prisma.habit.delete({ where: { id } })
+export const updateHabit = (id: string, userId: string, data: Prisma.HabitUpdateInput) => {
+  return prisma.habit.updateMany({ where: { id, userId }, data })
+}
+
+export const deleteHabit = (id: string, userId: string) => {
+  return prisma.habit.deleteMany({ where: { id, userId } })
 }
 
 // Idempotent per-day log: same habit + date updates the existing row.

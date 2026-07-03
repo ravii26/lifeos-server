@@ -34,9 +34,11 @@ export const sendError = (
   errors: unknown = null,
 ) => {
   const lang = getRequestLanguage(res)
+  const requestId = res.req?.id
   return res.status(statusCode).json({
     success: false,
     message: translate(message, lang),
     errors,
+    ...(requestId ? { requestId } : {}),
   })
 }

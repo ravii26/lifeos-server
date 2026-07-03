@@ -1,4 +1,4 @@
-import type { Prisma, WorthCheck } from "@prisma/client"
+import type { MediaType, Prisma, WorthCheck } from "@prisma/client"
 import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
 import { logBehavior } from "../behavior/behavior.service.js"
 import { findAreaById } from "../area/area.repository.js"
@@ -11,15 +11,22 @@ import { createVaultItem } from "../vault/vault.repository.js"
 import {
   createCapture,
   findCapturesByUser,
+  countCapturesByUser,
   findCaptureById,
   updateCapture,
   deleteCapture,
 } from "./capture.repository.js"
-import { classifyCapture, type CaptureType, type Classification } from "./capture.ai.js"
+import { getPagination, paginatedResponse } from "../../shared/utils/pagination.util.js"
+import {
+  classifyCapture,
+  classifyMediaCapture,
+  type CaptureType,
+  type Classification,
+} from "./capture.ai.js"
 import { getUserRagContext } from "../../lib/rag.js"
+import { storage, extFromMime } from "../../lib/storage.js"
 import logger from "../../lib/logger.js"
 import type {
-  CreateCaptureDto,
   UpdateCaptureDto,
   ConvertCaptureDto,
   ListCapturesDto,
@@ -61,6 +68,8 @@ const toDto = (capture: {
   worthCheck: WorthCheck | null
   worthReason: string | null
   detectedUrl: string | null
+  mediaType: MediaType
+  mediaUrl: string | null
   suggestedOutputs: Prisma.JsonValue
   createdOutputs: Prisma.JsonValue
   createdAt: Date
@@ -77,9 +86,26 @@ const toDto = (capture: {
     worthReason: capture.worthReason,
     meta,
     detectedUrl: capture.detectedUrl,
+    // Captures only ever use TEXT/IMAGE/AUDIO of the shared MediaType enum.
+    mediaType: capture.mediaType as CaptureDto["mediaType"],
+    mediaUrl: capture.mediaUrl,
     createdOutput: (capture.createdOutputs as CaptureDto["createdOutput"]) ?? null,
     createdAt: capture.createdAt,
   }
+}
+
+// A media file handed off by the controller. Held in memory so we can both
+// persist it and forward it to the multimodal AI in the same flow.
+export interface CaptureMediaInput {
+  buffer: Buffer
+  mimeType: string
+}
+
+export interface CreateCaptureInput {
+  text?: string
+  file?: CaptureMediaInput
+  // Absolute origin used to build the public media URL (request-derived or env).
+  baseUrl: string
 }
 
 // ---- create / read -------------------------------------------------
@@ -125,7 +151,7 @@ const autoConvert = async (
     return
   }
 
-  await updateCapture(captureId, {
+  await updateCapture(captureId, userId, {
     status: "CONVERTED",
     createdOutputs: { type, id: createdId } as Prisma.InputJsonValue,
   })
@@ -134,17 +160,27 @@ const autoConvert = async (
 // Classify the dump with the AI (RAG context) and write the result back onto
 // the capture; high-confidence TASK/VAULT items auto-convert. Runs in the
 // background so the create request can return instantly.
+//
+// For media captures `text` is the optional caption and `media` carries the
+// image/audio bytes; the AI transcribes it and the transcript becomes the
+// capture's rawText (used for the title and any auto-convert).
 const classifyAndApply = async (
   captureId: string,
   userId: string,
-  rawText: string,
+  text: string,
+  media?: CaptureMediaInput,
 ): Promise<void> => {
   const ragContext = await getUserRagContext(userId)
-  const result = await classifyCapture(rawText, ragContext)
+  const result = media
+    ? await classifyMediaCapture(media.buffer, media.mimeType, text || undefined, ragContext)
+    : await classifyCapture(text, ragContext)
 
   const detectedUrl = (result.meta.url as string | undefined) ?? null
+  // The effective text: transcript for media, else the typed dump.
+  const effectiveText = result.transcript ?? text
 
-  await updateCapture(captureId, {
+  await updateCapture(captureId, userId, {
+    ...(media && effectiveText ? { rawText: effectiveText } : {}),
     detectedUrl,
     confidence: result.confidence,
     worthCheck: mapWorthCheck(result.worthCheck),
@@ -157,7 +193,7 @@ const classifyAndApply = async (
     (result.type === "TASK" || result.type === "VAULT")
 
   if (canAutoConvert) {
-    await autoConvert(captureId, userId, rawText, result.type, result.meta, detectedUrl).catch(
+    await autoConvert(captureId, userId, effectiveText, result.type, result.meta, detectedUrl).catch(
       () => {
         // Swallow — the capture stays PENDING and the user can convert manually
       },
@@ -165,22 +201,43 @@ const classifyAndApply = async (
   }
 }
 
+const mediaTypeFromMime = (mime: string): MediaType =>
+  mime.toLowerCase().startsWith("image/") ? "IMAGE" : "AUDIO"
+
 export const createCaptureService = async (
   userId: string,
-  input: CreateCaptureDto,
+  input: CreateCaptureInput,
 ): Promise<CaptureDto> => {
   // Capture must feel instant: persist the raw dump and return immediately.
   // Classification (an LLM round-trip) and any auto-convert run in the
   // background so the user never waits on the AI to add a thought.
+  const caption = input.text?.trim() ?? ""
+
+  // Media capture: store the file first, then classify the bytes in the
+  // background. rawText starts as the caption (often empty) and is replaced by
+  // the AI transcript once classification lands.
+  let mediaType: MediaType = "TEXT"
+  let mediaUrl: string | null = null
+  if (input.file) {
+    mediaType = mediaTypeFromMime(input.file.mimeType)
+    const stored = await storage.save(input.file.buffer, {
+      ext: extFromMime(input.file.mimeType),
+      subdir: "captures",
+    })
+    mediaUrl = `${input.baseUrl}${stored.url}`
+  }
+
   const capture = await createCapture({
     userId,
-    rawText: input.text,
+    rawText: caption,
+    mediaType,
+    mediaUrl,
     status: "PENDING",
   })
 
-  logBehavior(userId, "CAPTURE_CREATED", { captureId: capture.id })
+  logBehavior(userId, "CAPTURE_CREATED", { captureId: capture.id, mediaType })
 
-  void classifyAndApply(capture.id, userId, input.text).catch((err) => {
+  void classifyAndApply(capture.id, userId, caption, input.file).catch((err) => {
     logger.error("Background capture classification failed:", err)
   })
 
@@ -190,13 +247,22 @@ export const createCaptureService = async (
 export const listCapturesService = async (
   userId: string,
   filters: ListCapturesDto,
-): Promise<CaptureDto[]> => {
+): Promise<CaptureDto[] | ReturnType<typeof paginatedResponse>> => {
   const statusFilter =
     filters.processed === "false"
       ? { status: "PENDING" as const }
       : filters.processed === "true"
         ? { status: { not: "PENDING" as const } }
         : {}
+
+  if (filters.page || filters.limit) {
+    const params = getPagination(filters.page, filters.limit)
+    const [captures, total] = await Promise.all([
+      findCapturesByUser(userId, statusFilter, params.skip, params.limit),
+      countCapturesByUser(userId, statusFilter),
+    ])
+    return paginatedResponse(captures.map(toDto), total, params)
+  }
 
   const captures = await findCapturesByUser(userId, statusFilter)
   return captures.map(toDto)
@@ -209,15 +275,16 @@ export const updateCaptureTypeService = async (
 ): Promise<CaptureDto> => {
   const capture = await getOwnedCapture(id, userId)
   const { meta } = readClassification(capture)
-  const updated = await updateCapture(id, {
+  await updateCapture(id, userId, {
     suggestedOutputs: { type: input.type, meta } as Prisma.InputJsonValue,
   })
+  const updated = await getOwnedCapture(id, userId)
   return toDto(updated)
 }
 
 export const deleteCaptureService = async (id: string, userId: string): Promise<void> => {
   await getOwnedCapture(id, userId)
-  await deleteCapture(id)
+  await deleteCapture(id, userId)
 }
 
 // ---- convert (the hero step) ---------------------------------------
@@ -349,10 +416,11 @@ export const convertCaptureService = async (
       throw new ValidationError("Unknown capture type")
   }
 
-  const updated = await updateCapture(id, {
+  await updateCapture(id, userId, {
     status: "CONVERTED",
     createdOutputs: { type, id: createdId } as Prisma.InputJsonValue,
   })
+  const updated = await getOwnedCapture(id, userId)
 
   return { capture: toDto(updated), created: { type, entity } }
 }

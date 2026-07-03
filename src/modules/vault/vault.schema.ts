@@ -24,6 +24,8 @@ export const updateVaultItemSchema = z.object({
 export const listVaultItemsSchema = z.object({
   vaultType: vaultType.optional(),
   triggerTag: z.string().optional(),
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
 })
 
 export type CreateVaultItemDto = z.infer<typeof createVaultItemSchema>

@@ -3,10 +3,12 @@ import { findTopicById } from "../topic/topic.repository.js"
 import {
   createNotebook,
   findNotebooksByUser,
+  countNotebooksByUser,
   findNotebookById,
   updateNotebook,
   deleteNotebook,
 } from "./notebook.repository.js"
+import { getPagination, paginatedResponse } from "../../shared/utils/pagination.util.js"
 import type {
   CreateNotebookDto,
   UpdateNotebookDto,
@@ -40,13 +42,24 @@ export const createNotebookService = async (
   })
 }
 
-export const listNotebooksService = (
+export const listNotebooksService = async (
   userId: string,
   filters: ListNotebooksDto,
-): Promise<NotebookDto[]> => {
-  return findNotebooksByUser(userId, {
+): Promise<NotebookDto[] | ReturnType<typeof paginatedResponse>> => {
+  const where = {
     ...(filters.topicId && { topicId: filters.topicId }),
-  })
+  }
+
+  if (filters.page || filters.limit) {
+    const params = getPagination(filters.page, filters.limit)
+    const [items, total] = await Promise.all([
+      findNotebooksByUser(userId, where, params.skip, params.limit),
+      countNotebooksByUser(userId, where),
+    ])
+    return paginatedResponse(items, total, params)
+  }
+
+  return findNotebooksByUser(userId, where)
 }
 
 export const getNotebookService = (id: string, userId: string): Promise<NotebookDto> => {
@@ -59,10 +72,11 @@ export const updateNotebookService = async (
   input: UpdateNotebookDto,
 ): Promise<NotebookDto> => {
   await getOwnedNotebook(id, userId)
-  return updateNotebook(id, input)
+  await updateNotebook(id, userId, input)
+  return getOwnedNotebook(id, userId)
 }
 
 export const deleteNotebookService = async (id: string, userId: string): Promise<void> => {
   await getOwnedNotebook(id, userId)
-  await deleteNotebook(id)
+  await deleteNotebook(id, userId)
 }

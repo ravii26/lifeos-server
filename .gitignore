@@ -4,3 +4,4 @@ dist/
 *.log
 md_files/
 postman/
+uploads/

@@ -2,6 +2,7 @@ import { NotFoundError } from "../../shared/utils/errors.util.js"
 import {
   createArea,
   findAreasByUser,
+  countAreasByUser,
   findAreaById,
   updateArea,
   deleteArea,
@@ -15,7 +16,8 @@ import {
 } from "./area.repository.js"
 import { scoreArea } from "./area.scoring.js"
 import { getUserTimezone } from "../auth/auth.repository.js"
-import type { CreateAreaDto, UpdateAreaDto } from "./area.schema.js"
+import { getPagination, paginatedResponse } from "../../shared/utils/pagination.util.js"
+import type { CreateAreaDto, UpdateAreaDto, ListAreasDto } from "./area.schema.js"
 import type { AreaDto, AreaWithScoreDto } from "./area.dto.js"
 
 // Loads an area and confirms it belongs to the user. Throws if not found
@@ -47,20 +49,32 @@ export const createAreaService = async (
 
 // Returns every area with its live computed score (A2). Pulls all the
 // scoring inputs in three flat queries, then blends in memory.
-export const listAreasService = async (userId: string): Promise<AreaWithScoreDto[]> => {
+export const listAreasService = async (
+  userId: string,
+  filters: ListAreasDto = {},
+): Promise<AreaWithScoreDto[] | ReturnType<typeof paginatedResponse>> => {
   const since = new Date()
   since.setUTCDate(since.getUTCDate() - 28)
 
-  const [timeZone, areas, tasks, habits, resources] = await Promise.all([
+  const paginate = Boolean(filters.page || filters.limit)
+  const params = paginate ? getPagination(filters.page, filters.limit) : undefined
+
+  const [timeZone, areas, total, tasks, habits, resources] = await Promise.all([
     getUserTimezone(userId),
-    findAreasByUser(userId),
+    findAreasByUser(userId, params?.skip, params?.limit),
+    paginate ? countAreasByUser(userId) : Promise.resolve(undefined),
     findTasksForScoring(userId),
     findHabitsWithLogsForScoring(userId, since),
     findResourcesForScoring(userId),
   ])
 
   const input = { tasks, habits, resources }
-  return areas.map((area) => ({ ...area, ...scoreArea(area.id, input, timeZone) }))
+  const scored = areas.map((area) => ({ ...area, ...scoreArea(area.id, input, timeZone) }))
+
+  if (params) {
+    return paginatedResponse(scored, total ?? scored.length, params)
+  }
+  return scored
 }
 
 export const getAreaService = (id: string, userId: string): Promise<AreaDto> => {
@@ -73,12 +87,13 @@ export const updateAreaService = async (
   input: UpdateAreaDto,
 ): Promise<AreaDto> => {
   await getOwnedArea(id, userId)
-  return updateArea(id, input)
+  await updateArea(id, userId, input)
+  return getOwnedArea(id, userId)
 }
 
 export const deleteAreaService = async (id: string, userId: string): Promise<void> => {
   await getOwnedArea(id, userId)
-  await deleteArea(id)
+  await deleteArea(id, userId)
 }
 
 // A3 — snapshot the live score for a single area and persist it.

@@ -8,6 +8,7 @@ import {
 } from "./capture.controller.js"
 import { validate, validateQuery } from "../../shared/middleware/validate.middleware.js"
 import { authenticate } from "../../shared/middleware/auth.middleware.js"
+import { uploadCaptureMedia } from "../../shared/middleware/upload.middleware.js"
 import {
   createCaptureSchema,
   updateCaptureSchema,
@@ -19,7 +20,9 @@ const router = Router()
 
 router.use(authenticate)
 
-router.post("/", validate(createCaptureSchema), createCaptureController)
+// uploadCaptureMedia parses an optional "file" field (image/audio) for
+// multipart requests and passes plain-JSON text captures straight through.
+router.post("/", uploadCaptureMedia, validate(createCaptureSchema), createCaptureController)
 router.get("/", validateQuery(listCapturesSchema), listCapturesController)
 router.patch("/:id", validate(updateCaptureSchema), updateCaptureController)
 router.post("/:id/convert", validate(convertCaptureSchema), convertCaptureController)

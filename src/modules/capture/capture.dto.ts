@@ -17,6 +17,9 @@ export interface CaptureDto {
   worthReason: string | null
   meta: Record<string, unknown>
   detectedUrl: string | null
+  // Input modality + stored file URL for image/audio captures.
+  mediaType: "TEXT" | "IMAGE" | "AUDIO"
+  mediaUrl: string | null
   // Set after conversion — { type, id } pointing at the created entity.
   createdOutput: { type: CaptureType; id: string } | null
   createdAt: Date

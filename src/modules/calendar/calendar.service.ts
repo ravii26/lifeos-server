@@ -166,14 +166,15 @@ export const updateBlockService = async (
     assertValidRecurrenceRule(input.recurrenceRule, dtstart)
   }
 
-  const block = await updateBlock(id, input)
+  await updateBlock(id, userId, input)
+  const block = await getOwnedBlock(id, userId)
   const conflicts = await computeBlockConflicts(userId, block)
   return { ...blockToDto(block), conflicts }
 }
 
 export const deleteBlockService = async (id: string, userId: string): Promise<void> => {
   await getOwnedBlock(id, userId)
-  await deleteBlock(id)
+  await deleteBlock(id, userId)
 }
 
 // On-demand overlap checker for a window. Expands all blocks (recurring
@@ -253,7 +254,8 @@ export const splitSeriesService = async (
     cappedUntil,
   )
 
-  const previous = await updateBlock(blockId, { recurrenceRule: cappedRule })
+  await updateBlock(blockId, userId, { recurrenceRule: cappedRule })
+  const previous = await getOwnedBlock(blockId, userId)
 
   const following = await createBlock({
     userId,

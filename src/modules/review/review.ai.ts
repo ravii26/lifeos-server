@@ -1,7 +1,6 @@
 import { geminiClient } from "../../lib/gemini.js"
 import { groqClient } from "../../lib/groq.js"
-import logger from "../../lib/logger.js"
-import { env } from "../../config/env.config.js"
+import { runWithAiFallback } from "../../lib/ai-fallback.js"
 
 // The period stats the narrative is written from. Pure data in, prose out.
 export interface ReviewStatsForAi {
@@ -121,19 +120,12 @@ const groqInsights = async (s: ReviewStatsForAi): Promise<ReviewInsights> => {
  * Generate the review narrative + observations. Mirrors the capture/decisions
  * pattern: preferred provider → fallback provider → deterministic heuristic.
  */
-export const generateReviewInsights = async (s: ReviewStatsForAi): Promise<ReviewInsights> => {
-  const preferred = env.PREFERRED_AI_PROVIDER
-  const providers = preferred === "groq" ? ["groq", "gemini"] : ["gemini", "groq"]
-
-  for (const provider of providers) {
-    try {
-      if (provider === "gemini" && geminiClient) return await geminiInsights(s)
-      if (provider === "groq" && groqClient) return await groqInsights(s)
-    } catch (err) {
-      logger.warn(`Review insights: falling back from ${provider}...`)
-    }
-  }
-
-  logger.info("Using heuristic review insights fallback")
-  return heuristicInsights(s)
-}
+export const generateReviewInsights = async (s: ReviewStatsForAi): Promise<ReviewInsights> =>
+  runWithAiFallback(
+    "Review insights",
+    {
+      gemini: geminiClient ? () => geminiInsights(s) : undefined,
+      groq: groqClient ? () => groqInsights(s) : undefined,
+    },
+    () => heuristicInsights(s),
+  )

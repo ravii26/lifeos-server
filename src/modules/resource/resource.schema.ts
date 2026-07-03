@@ -40,6 +40,8 @@ export const listResourcesSchema = z.object({
   topicId: z.string().optional(),
   resourceType: resourceType.optional(),
   status: resourceStatus.optional(),
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
 })
 
 export type CreateResourceDto = z.infer<typeof createResourceSchema>

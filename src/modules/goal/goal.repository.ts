@@ -5,23 +5,34 @@ export const createGoal = (data: Prisma.GoalUncheckedCreateInput) => {
   return prisma.goal.create({ data })
 }
 
-export const findGoalsByUser = (userId: string, filters: Prisma.GoalWhereInput = {}) => {
+export const findGoalsByUser = (
+  userId: string,
+  filters: Prisma.GoalWhereInput = {},
+  skip?: number,
+  take?: number,
+) => {
   return prisma.goal.findMany({
     where: { userId, ...filters },
     orderBy: { createdAt: "desc" },
+    skip,
+    take,
   })
+}
+
+export const countGoalsByUser = (userId: string, filters: Prisma.GoalWhereInput = {}) => {
+  return prisma.goal.count({ where: { userId, ...filters } })
 }
 
 export const findGoalById = (id: string, userId: string) => {
   return prisma.goal.findFirst({ where: { id, userId } })
 }
 
-export const updateGoal = (id: string, data: Prisma.GoalUpdateInput) => {
-  return prisma.goal.update({ where: { id }, data })
+export const updateGoal = (id: string, userId: string, data: Prisma.GoalUpdateInput) => {
+  return prisma.goal.updateMany({ where: { id, userId }, data })
 }
 
-export const deleteGoal = (id: string) => {
-  return prisma.goal.delete({ where: { id } })
+export const deleteGoal = (id: string, userId: string) => {
+  return prisma.goal.deleteMany({ where: { id, userId } })
 }
 
 /* --- Focus management (priority cap + parking) --- */
@@ -42,15 +53,15 @@ export const findActiveGoals = (userId: string) => {
 
 // Atomic swap: park one goal and activate another in a single transaction so
 // the cap is never momentarily violated.
-export const swapActiveGoal = (activateId: string, parkId: string) => {
+export const swapActiveGoal = (activateId: string, parkId: string, userId: string) => {
   const now = new Date()
   return prisma.$transaction([
-    prisma.goal.update({
-      where: { id: parkId },
+    prisma.goal.updateMany({
+      where: { id: parkId, userId },
       data: { status: "PARKED", parkedAt: now },
     }),
-    prisma.goal.update({
-      where: { id: activateId },
+    prisma.goal.updateMany({
+      where: { id: activateId, userId },
       data: { status: "ACTIVE", activatedAt: now, parkedAt: null },
     }),
   ])

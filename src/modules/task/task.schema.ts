@@ -48,6 +48,8 @@ export const listTasksSchema = z.object({
   areaId: z.string().optional(),
   goalId: z.string().optional(),
   projectId: z.string().optional(),
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
 })
 
 export type CreateTaskDto = z.infer<typeof createTaskSchema>

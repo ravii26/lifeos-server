@@ -4,8 +4,11 @@ import { z } from "zod"
 // in capture.ai.ts.
 export const captureType = z.enum(["TASK", "HABIT", "NOTE", "RESOURCE", "VAULT"])
 
+// Text is optional because a capture can be media-only (image/audio). The
+// controller enforces "text OR file" since the uploaded file isn't visible to
+// this body schema. For multipart requests `text` arrives as a caption string.
 export const createCaptureSchema = z.object({
-  text: z.string().min(1, "Text is required").max(2000),
+  text: z.string().min(1, "Text is required").max(2000).optional(),
 })
 
 // Override the AI's guessed type before converting.
@@ -24,6 +27,8 @@ export const convertCaptureSchema = z.object({
 
 export const listCapturesSchema = z.object({
   processed: z.enum(["true", "false"]).optional(),
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
 })
 
 export type CreateCaptureDto = z.infer<typeof createCaptureSchema>

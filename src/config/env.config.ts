@@ -10,9 +10,10 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   // Comma-separated list of allowed browser origins (e.g. "https://app.lifeos.app,https://lifeos.app")
   CORS_ORIGINS: z.string().optional(),
-  GEMINI_API_KEY: z.string().optional(), // optional — falls back when absent or fails
-  GROQ_API_KEY: z.string().optional(),   // optional — falls back when absent or fails
+  GEMINI_API_KEY: z.string().optional(),
+  GROQ_API_KEY: z.string().optional(),
   PREFERRED_AI_PROVIDER: z.enum(["gemini", "groq"]).default("gemini"),
+  PUBLIC_BASE_URL: z.string().url().optional(),
 })
 
 const parsed = envSchema.safeParse(process.env)

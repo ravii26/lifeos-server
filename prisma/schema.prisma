@@ -83,6 +83,8 @@ model Area {
   calendarBlocks CalendarBlock[]
   topics         Topic[]
   scoreSnapshots AreaScoreSnapshot[]
+
+  @@index([userId])
 }
 
 enum AreaType {
@@ -117,6 +119,8 @@ model Goal {
   // Relations
   projects    Project[]
   tasks       Task[]
+
+  @@index([userId, status])
 }
 
 model Project {
@@ -138,6 +142,8 @@ model Project {
 
   // Relations
   tasks       Task[]
+
+  @@index([userId, status])
 }
 
 enum ProjectStatus {
@@ -198,6 +204,8 @@ model Task {
   // Relations
   calendarBlocks CalendarBlock[]
   focusSessions  FocusSession[]
+
+  @@index([userId, status])
 }
 
 enum TaskStatus {
@@ -253,6 +261,8 @@ model Habit {
   logs           HabitLog[]
   calendarBlocks CalendarBlock[]
   focusSessions  FocusSession[]
+
+  @@index([userId])
 }
 
 model HabitLog {
@@ -271,6 +281,7 @@ model HabitLog {
   createdAt DateTime @default(now())
 
   @@unique([habitId, date])
+  @@index([userId])
 }
 
 enum HabitType {
@@ -303,6 +314,8 @@ model Topic {
   notebooks    Notebook[]
   resources    Resource[]
   notes        Note[]
+
+  @@index([userId])
 }
 
 model Notebook {
@@ -321,6 +334,8 @@ model Notebook {
 
   // Relations
   notes       Note[]
+
+  @@index([userId])
 }
 
 model Resource {
@@ -348,6 +363,8 @@ model Resource {
 
   // Relations
   linkedNotes      Note[]
+
+  @@index([userId])
 }
 
 model Note {
@@ -371,6 +388,8 @@ model Note {
 
   // Relations
   insightReviews InsightReview[]
+
+  @@index([userId])
 }
 
 enum MasteryLevel {
@@ -421,6 +440,8 @@ model VaultItem {
 
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
+
+  @@index([userId])
 }
 
 enum VaultType {
@@ -443,9 +464,16 @@ model Capture {
   userId          String
   user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // For media captures rawText starts empty and is filled with the AI
+  // transcript/description once background classification runs.
   rawText         String
   detectedUrl     String?
   urlMetadata     Json?
+
+  // Input modality. TEXT keeps the original behaviour; IMAGE/AUDIO captures
+  // carry a mediaUrl pointing at the stored file.
+  mediaType       MediaType     @default(TEXT)
+  mediaUrl        String?
 
   worthCheck      WorthCheck?
   worthReason     String?
@@ -457,6 +485,8 @@ model Capture {
   confidence      Float?
 
   createdAt       DateTime      @default(now())
+
+  @@index([userId, status])
 }
 
 enum CaptureStatus {
@@ -490,6 +520,8 @@ model Review {
 
   // Relations
   insightReviews InsightReview[]
+
+  @@index([userId])
 }
 
 model InsightReview {
@@ -506,6 +538,8 @@ model InsightReview {
 
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
+
+  @@index([userId])
 }
 
 enum ReviewType {
@@ -555,6 +589,8 @@ model AreaScoreSnapshot {
   focusMins  Int
 
   snapshotAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 model BehaviorLog {
@@ -565,6 +601,8 @@ model BehaviorLog {
   eventType   BehaviorEvent
   metadata    Json?
   occurredAt  DateTime    @default(now())
+
+  @@index([userId])
 }
 
 enum BehaviorEvent {
@@ -611,6 +649,8 @@ model CalendarBlock {
   // Relations
   focusSessions FocusSession[]
   exceptions    CalendarBlockException[]
+
+  @@index([userId, startTime])
 }
 
 // Per-occurrence override for a recurring CalendarBlock. Identified by the
@@ -653,4 +693,6 @@ model FocusSession {
   notes           String?
 
   createdAt       DateTime @default(now())
+
+  @@index([userId, startedAt])
 }

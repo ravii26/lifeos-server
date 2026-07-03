@@ -1,8 +1,9 @@
+import { toFile } from "groq-sdk"
 import { geminiClient } from "../../lib/gemini.js"
 import { groqClient } from "../../lib/groq.js"
 import { formatRagContextForPrompt, type UserRagContext } from "../../lib/rag.js"
 import logger from "../../lib/logger.js"
-import { env } from "../../config/env.config.js"
+import { runWithAiFallback } from "../../lib/ai-fallback.js"
 
 export type CaptureType = "TASK" | "HABIT" | "NOTE" | "RESOURCE" | "VAULT"
 
@@ -11,6 +12,9 @@ export interface Classification {
   confidence: number
   worthCheck: "YES" | "MAYBE" | "NO"
   worthReason: string
+  // For media captures (image/audio): the text the AI transcribed/extracted
+  // from the file. Becomes the capture's rawText. Undefined for text captures.
+  transcript?: string
   meta: {
     // All types
     title?: string              // AI-cleaned short title (better than the raw dump)
@@ -287,31 +291,141 @@ const groqClassify = async (rawText: string, ctx?: UserRagContext): Promise<Clas
   }
 }
 
+// ── Multimodal (image / audio) classifier ─────────────────────────────────
+
+// Extra instruction appended to the system prompt for media captures. Gemini
+// 2.0 Flash is natively multimodal, so it transcribes/describes the file AND
+// classifies it in a single round-trip.
+const MEDIA_PROMPT_ADDENDUM = `
+
+<media_capture>
+The user's brain-dump is provided as an attached IMAGE or AUDIO file instead of text.
+- AUDIO: transcribe the speech verbatim (the user's own words).
+- IMAGE: extract any readable text (OCR). If there is no meaningful text, write a concise one-line description of what the image shows.
+Put that transcription/description in the top-level "transcript" field, then classify it exactly as you would a text dump. Base "meta.title" and the classification on the transcribed content.
+</media_capture>`
+
+const buildMediaSystemPrompt = (ctx?: UserRagContext): string =>
+  buildSystemPrompt(ctx).replace(
+    "<output_schema>",
+    `${MEDIA_PROMPT_ADDENDUM}\n\n<output_schema>`,
+  ) + `\n\nNote: include a top-level "transcript" string field in your JSON output.`
+
+const geminiClassifyMedia = async (
+  buffer: Buffer,
+  mimeType: string,
+  caption: string | undefined,
+  ctx?: UserRagContext,
+): Promise<Classification> => {
+  if (!geminiClient) throw new Error("Gemini client not initialized")
+
+  const model = geminiClient.getGenerativeModel({
+    model: "gemini-2.0-flash",
+    generationConfig: { responseMimeType: "application/json" },
+  })
+
+  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
+    { text: buildMediaSystemPrompt(ctx) },
+    { inlineData: { mimeType, data: buffer.toString("base64") } },
+  ]
+  if (caption?.trim()) {
+    parts.push({ text: `The user also added this note alongside the file: "${caption.trim()}"` })
+  }
+
+  const result = await model.generateContent(parts)
+  logger.debug(`Gemini media response: ${result.response.text()}`)
+
+  const parsed = JSON.parse(result.response.text()) as {
+    type: CaptureType
+    confidence: number
+    worthCheck?: "YES" | "MAYBE" | "NO"
+    worthReason?: string
+    transcript?: string
+    meta: Classification["meta"]
+  }
+
+  const validTypes: CaptureType[] = ["TASK", "HABIT", "NOTE", "RESOURCE", "VAULT"]
+  if (!validTypes.includes(parsed.type)) throw new Error("invalid type from Gemini media")
+
+  return {
+    type: parsed.type,
+    confidence: Math.min(1, Math.max(0, parsed.confidence ?? 0.8)),
+    worthCheck: parsed.worthCheck ?? "MAYBE",
+    worthReason: parsed.worthReason ?? "",
+    transcript: parsed.transcript?.trim() || caption?.trim() || undefined,
+    meta: parsed.meta ?? {},
+  }
+}
+
+// Transcribe audio with Groq Whisper. Used as the audio fallback when Gemini is
+// unavailable, rate-limited, or can't handle the container (e.g. webm/m4a).
+// Groq Whisper accepts flac/mp3/mp4/mpeg/mpga/m4a/ogg/wav/webm.
+const groqTranscribe = async (buffer: Buffer, mimeType: string): Promise<string> => {
+  if (!groqClient) throw new Error("Groq client not initialized")
+  const ext = mimeType.split("/")[1]?.split(";")[0] || "wav"
+  const file = await toFile(buffer, `audio.${ext}`, { type: mimeType })
+  const res = await groqClient.audio.transcriptions.create({
+    model: "whisper-large-v3-turbo",
+    file,
+  })
+  return res.text.trim()
+}
+
+/**
+ * Classify an image or audio capture. Tiered for resilience:
+ *   1. Gemini multimodal — transcribes/describes AND classifies in one call.
+ *   2. Audio only: Groq Whisper transcribes, then the text classifier (Gemini→
+ *      Groq) labels it. This keeps voice capture working when Gemini is down or
+ *      rejects the audio format.
+ *   3. Heuristic over the optional caption — so the capture always lands in the
+ *      inbox (as a best-guess) rather than getting stuck unclassified.
+ */
+export const classifyMediaCapture = async (
+  buffer: Buffer,
+  mimeType: string,
+  caption: string | undefined,
+  ctx?: UserRagContext,
+): Promise<Classification> => {
+  // 1. Gemini multimodal (handles both image + audio).
+  if (geminiClient) {
+    try {
+      return await geminiClassifyMedia(buffer, mimeType, caption, ctx)
+    } catch (err) {
+      logger.warn(`Gemini media classifier failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  // 2. Audio fallback: transcribe with Groq Whisper, then classify the text.
+  const isAudio = mimeType.toLowerCase().startsWith("audio/")
+  if (isAudio && groqClient) {
+    try {
+      const transcript = await groqTranscribe(buffer, mimeType)
+      if (transcript) {
+        const combined = caption?.trim() ? `${caption.trim()}. ${transcript}` : transcript
+        const result = await classifyCapture(combined, ctx)
+        return { ...result, transcript }
+      }
+    } catch (err) {
+      logger.warn(`Groq Whisper transcription failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  } else if (!geminiClient && !groqClient) {
+    logger.info("No AI provider configured — using heuristic for media capture")
+  }
+
+  // 3. Last resort: heuristic over the caption.
+  return { ...heuristicClassify(caption ?? "", ctx), transcript: caption?.trim() || undefined }
+}
+
 /**
  * Classify a raw capture. Uses Preferred AI Provider (Gemini or Groq) with fallback,
  * otherwise falls back to the deterministic heuristic.
  */
-export const classifyCapture = async (rawText: string, ctx?: UserRagContext): Promise<Classification> => {
-  const preferred = env.PREFERRED_AI_PROVIDER
-  const providers = preferred === "groq" ? ["groq", "gemini"] : ["gemini", "groq"]
-
-  for (const provider of providers) {
-    if (provider === "gemini" && geminiClient) {
-      try {
-        return await geminiClassify(rawText, ctx)
-      } catch (err) {
-        logger.warn("Falling back from Gemini capture classifier...")
-      }
-    }
-    if (provider === "groq" && groqClient) {
-      try {
-        return await groqClassify(rawText, ctx)
-      } catch (err) {
-        logger.warn("Falling back from Groq capture classifier...")
-      }
-    }
-  }
-
-  logger.info("Using heuristic capture classifier fallback")
-  return heuristicClassify(rawText, ctx)
-}
+export const classifyCapture = async (rawText: string, ctx?: UserRagContext): Promise<Classification> =>
+  runWithAiFallback(
+    "Capture classifier",
+    {
+      gemini: geminiClient ? () => geminiClassify(rawText, ctx) : undefined,
+      groq: groqClient ? () => groqClassify(rawText, ctx) : undefined,
+    },
+    () => heuristicClassify(rawText, ctx),
+  )

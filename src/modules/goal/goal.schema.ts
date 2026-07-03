@@ -30,6 +30,8 @@ export const listGoalsSchema = z.object({
     .enum(["true", "false"])
     .optional()
     .transform((v) => v === "true"),
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
 })
 
 // Activating a goal when the active slots are full requires telling the server

@@ -24,12 +24,16 @@ export const findBlockById = (id: string, userId: string) => {
   })
 }
 
-export const updateBlock = (id: string, data: Prisma.CalendarBlockUpdateInput) => {
-  return prisma.calendarBlock.update({ where: { id }, data })
+export const updateBlock = (
+  id: string,
+  userId: string,
+  data: Prisma.CalendarBlockUpdateInput,
+) => {
+  return prisma.calendarBlock.updateMany({ where: { id, userId }, data })
 }
 
-export const deleteBlock = (id: string) => {
-  return prisma.calendarBlock.delete({ where: { id } })
+export const deleteBlock = (id: string, userId: string) => {
+  return prisma.calendarBlock.deleteMany({ where: { id, userId } })
 }
 
 // --- Per-occurrence exceptions ---------------------------------------------

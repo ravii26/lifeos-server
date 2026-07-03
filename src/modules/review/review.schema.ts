@@ -32,6 +32,8 @@ export const updateReviewSchema = z.object({
 
 export const listReviewsSchema = z.object({
   reviewType: reviewType.optional(),
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
 })
 
 // InsightReview — links a Note that was acted on, tracked over time.

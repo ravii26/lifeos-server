@@ -26,6 +26,8 @@ export const listNotesSchema = z.object({
   notebookId: z.string().optional(),
   resourceId: z.string().optional(),
   noteType: noteType.optional(),
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
 })
 
 export type CreateNoteDto = z.infer<typeof createNoteSchema>

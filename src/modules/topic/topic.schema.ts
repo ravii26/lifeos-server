@@ -19,6 +19,8 @@ export const updateTopicSchema = z.object({
 export const listTopicsSchema = z.object({
   areaId: z.string().optional(),
   masteryLevel: masteryLevel.optional(),
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
 })
 
 export type CreateTopicDto = z.infer<typeof createTopicSchema>

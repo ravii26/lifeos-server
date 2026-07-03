@@ -15,6 +15,8 @@ export const updateNotebookSchema = z.object({
 
 export const listNotebooksSchema = z.object({
   topicId: z.string().optional(),
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
 })
 
 export type CreateNotebookDto = z.infer<typeof createNotebookSchema>

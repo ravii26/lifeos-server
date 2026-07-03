@@ -11,6 +11,7 @@ import {
 } from "./area.service.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
 import { HttpStatus } from "../../shared/constants/httpStatus.js"
+import type { ListAreasDto } from "./area.schema.js"
 
 export const createAreaController = async (req: Request, res: Response) => {
   const area = await createAreaService(req.user!.id, req.body)
@@ -18,7 +19,8 @@ export const createAreaController = async (req: Request, res: Response) => {
 }
 
 export const listAreasController = async (req: Request, res: Response) => {
-  const areas = await listAreasService(req.user!.id)
+  const filters = (res.locals.query ?? {}) as ListAreasDto
+  const areas = await listAreasService(req.user!.id, filters)
   sendSuccess(res, "Areas fetched", areas)
 }
 

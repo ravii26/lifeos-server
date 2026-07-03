@@ -5,8 +5,8 @@ import { getUserTimezone } from "../auth/auth.repository.js"
 import { todayKeyInTz, utcDayKey, localDateOnly } from "../../shared/utils/time.util.js"
 import {
   createHabit,
-  findHabitsByUser,
   findHabitsWithLogsByUser,
+  countHabitsByUser,
   findHabitById,
   updateHabit,
   deleteHabit,
@@ -14,6 +14,7 @@ import {
   findHabitLogs,
 } from "./habit.repository.js"
 import { computeHabitStats } from "./habit.stats.js"
+import { getPagination, paginatedResponse } from "../../shared/utils/pagination.util.js"
 import type {
   CreateHabitDto,
   UpdateHabitDto,
@@ -68,24 +69,35 @@ export const createHabitService = async (
 export const listHabitsService = async (
   userId: string,
   filters: ListHabitsDto,
-): Promise<HabitWithStatsDto[]> => {
+): Promise<HabitWithStatsDto[] | ReturnType<typeof paginatedResponse>> => {
   const since = new Date()
   since.setUTCDate(since.getUTCDate() - STATS_WINDOW)
 
-  const [timeZone, habits] = await Promise.all([
+  const where = {
+    ...(filters.areaId && { areaId: filters.areaId }),
+    ...(filters.isActive && { isActive: filters.isActive === "true" }),
+  }
+
+  const paginate = Boolean(filters.page || filters.limit)
+  const params = paginate ? getPagination(filters.page, filters.limit) : undefined
+
+  const [timeZone, habits, total] = await Promise.all([
     getUserTimezone(userId),
-    findHabitsWithLogsByUser(userId, since, {
-      ...(filters.areaId && { areaId: filters.areaId }),
-      ...(filters.isActive && { isActive: filters.isActive === "true" }),
-    }),
+    findHabitsWithLogsByUser(userId, since, where, params?.skip, params?.limit),
+    paginate ? countHabitsByUser(userId, where) : Promise.resolve(undefined),
   ])
 
   const tk = todayKeyInTz(timeZone)
-  return habits.map(({ logs, ...habit }) => {
+  const mapped = habits.map(({ logs, ...habit }) => {
     const stats = computeHabitStats(logs, STATS_WINDOW, timeZone)
     const todayLog = logs.find((l) => utcDayKey(l.date) === tk) ?? null
     return { ...habit, ...stats, todayLog }
   })
+
+  if (params) {
+    return paginatedResponse(mapped, total ?? mapped.length, params)
+  }
+  return mapped
 }
 
 export const getHabitService = (id: string, userId: string): Promise<HabitDto> => {
@@ -99,12 +111,13 @@ export const updateHabitService = async (
 ): Promise<HabitDto> => {
   await getOwnedHabit(id, userId)
   if (input.areaId) await assertAreaOwned(input.areaId, userId)
-  return updateHabit(id, input)
+  await updateHabit(id, userId, input)
+  return getOwnedHabit(id, userId)
 }
 
 export const deleteHabitService = async (id: string, userId: string): Promise<void> => {
   await getOwnedHabit(id, userId)
-  await deleteHabit(id)
+  await deleteHabit(id, userId)
 }
 
 export const logHabitService = async (

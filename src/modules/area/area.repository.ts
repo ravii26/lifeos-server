@@ -5,23 +5,29 @@ export const createArea = (data: Prisma.AreaUncheckedCreateInput) => {
   return prisma.area.create({ data })
 }
 
-export const findAreasByUser = (userId: string) => {
+export const findAreasByUser = (userId: string, skip?: number, take?: number) => {
   return prisma.area.findMany({
     where: { userId },
     orderBy: { order: "asc" },
+    skip,
+    take,
   })
+}
+
+export const countAreasByUser = (userId: string) => {
+  return prisma.area.count({ where: { userId } })
 }
 
 export const findAreaById = (id: string, userId: string) => {
   return prisma.area.findFirst({ where: { id, userId } })
 }
 
-export const updateArea = (id: string, data: Prisma.AreaUpdateInput) => {
-  return prisma.area.update({ where: { id }, data })
+export const updateArea = (id: string, userId: string, data: Prisma.AreaUpdateInput) => {
+  return prisma.area.updateMany({ where: { id, userId }, data })
 }
 
-export const deleteArea = (id: string) => {
-  return prisma.area.delete({ where: { id } })
+export const deleteArea = (id: string, userId: string) => {
+  return prisma.area.deleteMany({ where: { id, userId } })
 }
 
 // ---- scoring data (A2) ---------------------------------------------

@@ -5,10 +5,12 @@ import { findResourceById } from "../resource/resource.repository.js"
 import {
   createNote,
   findNotesByUser,
+  countNotesByUser,
   findNoteById,
   updateNote,
   deleteNote,
 } from "./note.repository.js"
+import { getPagination, paginatedResponse } from "../../shared/utils/pagination.util.js"
 import type { CreateNoteDto, UpdateNoteDto, ListNotesDto } from "./note.schema.js"
 import type { NoteDto } from "./note.dto.js"
 
@@ -55,16 +57,27 @@ export const createNoteService = async (
   })
 }
 
-export const listNotesService = (
+export const listNotesService = async (
   userId: string,
   filters: ListNotesDto,
-): Promise<NoteDto[]> => {
-  return findNotesByUser(userId, {
+): Promise<NoteDto[] | ReturnType<typeof paginatedResponse>> => {
+  const where = {
     ...(filters.topicId && { topicId: filters.topicId }),
     ...(filters.notebookId && { notebookId: filters.notebookId }),
     ...(filters.resourceId && { resourceId: filters.resourceId }),
     ...(filters.noteType && { noteType: filters.noteType }),
-  })
+  }
+
+  if (filters.page || filters.limit) {
+    const params = getPagination(filters.page, filters.limit)
+    const [items, total] = await Promise.all([
+      findNotesByUser(userId, where, params.skip, params.limit),
+      countNotesByUser(userId, where),
+    ])
+    return paginatedResponse(items, total, params)
+  }
+
+  return findNotesByUser(userId, where)
 }
 
 export const getNoteService = (id: string, userId: string): Promise<NoteDto> => {
@@ -78,10 +91,11 @@ export const updateNoteService = async (
 ): Promise<NoteDto> => {
   await getOwnedNote(id, userId)
   await assertLinksOwned(userId, input)
-  return updateNote(id, input)
+  await updateNote(id, userId, input)
+  return getOwnedNote(id, userId)
 }
 
 export const deleteNoteService = async (id: string, userId: string): Promise<void> => {
   await getOwnedNote(id, userId)
-  await deleteNote(id)
+  await deleteNote(id, userId)
 }

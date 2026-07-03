@@ -3,10 +3,12 @@ import { findTopicById } from "../topic/topic.repository.js"
 import {
   createResource,
   findResourcesByUser,
+  countResourcesByUser,
   findResourceById,
   updateResource,
   deleteResource,
 } from "./resource.repository.js"
+import { getPagination, paginatedResponse } from "../../shared/utils/pagination.util.js"
 import type {
   CreateResourceDto,
   UpdateResourceDto,
@@ -45,15 +47,26 @@ export const createResourceService = async (
   })
 }
 
-export const listResourcesService = (
+export const listResourcesService = async (
   userId: string,
   filters: ListResourcesDto,
-): Promise<ResourceDto[]> => {
-  return findResourcesByUser(userId, {
+): Promise<ResourceDto[] | ReturnType<typeof paginatedResponse>> => {
+  const where = {
     ...(filters.topicId && { topicId: filters.topicId }),
     ...(filters.resourceType && { resourceType: filters.resourceType }),
     ...(filters.status && { status: filters.status }),
-  })
+  }
+
+  if (filters.page || filters.limit) {
+    const params = getPagination(filters.page, filters.limit)
+    const [items, total] = await Promise.all([
+      findResourcesByUser(userId, where, params.skip, params.limit),
+      countResourcesByUser(userId, where),
+    ])
+    return paginatedResponse(items, total, params)
+  }
+
+  return findResourcesByUser(userId, where)
 }
 
 export const getResourceService = (id: string, userId: string): Promise<ResourceDto> => {
@@ -66,12 +79,13 @@ export const updateResourceService = async (
   input: UpdateResourceDto,
 ): Promise<ResourceDto> => {
   await getOwnedResource(id, userId)
-  return updateResource(id, input)
+  await updateResource(id, userId, input)
+  return getOwnedResource(id, userId)
 }
 
 export const deleteResourceService = async (id: string, userId: string): Promise<void> => {
   await getOwnedResource(id, userId)
-  await deleteResource(id)
+  await deleteResource(id, userId)
 }
 
 // B8 — track lesson/minute progress
@@ -91,10 +105,11 @@ export const updateResourceProgressService = async (
   const shouldComplete =
     input.autoComplete && nextTotal != null && nextLessons >= nextTotal
 
-  return updateResource(id, {
+  await updateResource(id, userId, {
     lessonsCompleted: nextLessons,
     totalLessons: nextTotal,
     minutesConsumed: nextMins,
     ...(shouldComplete && { status: "COMPLETED" }),
   })
+  return getOwnedResource(id, userId)
 }

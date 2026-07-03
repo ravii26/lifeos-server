@@ -72,9 +72,9 @@ export const stopFocusService = async (
     Math.round((endedAt.getTime() - session.startedAt.getTime()) / 60000),
   )
 
-  const stopped = await updateSession(id, { endedAt, durationMinutes })
+  await updateSession(id, userId, { endedAt, durationMinutes })
   logBehavior(userId, "FOCUS_COMPLETED", { focusId: id, durationMinutes })
-  return stopped
+  return getOwnedSession(id, userId)
 }
 
 export const listFocusService = (
@@ -124,12 +124,13 @@ export const updateFocusService = async (
 ): Promise<FocusSessionDto> => {
   await getOwnedSession(id, userId)
   await assertLinksOwned(userId, input)
-  return updateSession(id, input)
+  await updateSession(id, userId, input)
+  return getOwnedSession(id, userId)
 }
 
 export const deleteFocusService = async (id: string, userId: string): Promise<void> => {
   const session = await getOwnedSession(id, userId)
-  await deleteSession(id)
+  await deleteSession(id, userId)
   // A session deleted while still running was abandoned — record it so the
   // behaviour analytics can surface "started but didn't finish".
   if (!session.endedAt) {

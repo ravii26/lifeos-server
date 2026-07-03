@@ -24,6 +24,8 @@ export const listProjectsSchema = z.object({
   areaId: z.string().optional(),
   goalId: z.string().optional(),
   status: projectStatus.optional(),
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
 })
 
 export type CreateProjectDto = z.infer<typeof createProjectSchema>

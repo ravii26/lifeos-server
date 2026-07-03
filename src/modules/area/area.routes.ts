@@ -9,9 +9,9 @@ import {
   listAreaSnapshotsController,
   getAreaTrendsController,
 } from "./area.controller.js"
-import { validate } from "../../shared/middleware/validate.middleware.js"
+import { validate, validateQuery } from "../../shared/middleware/validate.middleware.js"
 import { authenticate } from "../../shared/middleware/auth.middleware.js"
-import { createAreaSchema, updateAreaSchema } from "./area.schema.js"
+import { createAreaSchema, updateAreaSchema, listAreasSchema } from "./area.schema.js"
 
 const router = Router()
 
@@ -19,7 +19,7 @@ const router = Router()
 router.use(authenticate)
 
 router.post("/", validate(createAreaSchema), createAreaController)
-router.get("/", listAreasController)
+router.get("/", validateQuery(listAreasSchema), listAreasController)
 
 // Trends across all areas (direction, delta, weakness) — must be before /:id
 // so the literal "/trends" path isn't captured by the ":id" param route.

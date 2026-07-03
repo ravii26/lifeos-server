@@ -10,6 +10,11 @@ export const createAreaSchema = z.object({
   isActive: z.boolean().optional(),
 })
 
+export const listAreasSchema = z.object({
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
+})
+
 export const updateAreaSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   type: z.enum(["PRIMARY", "MAINTENANCE"]).optional(),
@@ -22,3 +27,4 @@ export const updateAreaSchema = z.object({
 
 export type CreateAreaDto = z.infer<typeof createAreaSchema>
 export type UpdateAreaDto = z.infer<typeof updateAreaSchema>
+export type ListAreasDto = z.infer<typeof listAreasSchema>

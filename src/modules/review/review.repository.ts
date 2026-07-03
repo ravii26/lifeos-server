@@ -6,23 +6,34 @@ export const createReview = (data: Prisma.ReviewUncheckedCreateInput) => {
   return prisma.review.create({ data })
 }
 
-export const findReviewsByUser = (userId: string, filters: Prisma.ReviewWhereInput = {}) => {
+export const findReviewsByUser = (
+  userId: string,
+  filters: Prisma.ReviewWhereInput = {},
+  skip?: number,
+  take?: number,
+) => {
   return prisma.review.findMany({
     where: { userId, ...filters },
     orderBy: { periodStart: "desc" },
+    skip,
+    take,
   })
+}
+
+export const countReviewsByUser = (userId: string, filters: Prisma.ReviewWhereInput = {}) => {
+  return prisma.review.count({ where: { userId, ...filters } })
 }
 
 export const findReviewById = (id: string, userId: string) => {
   return prisma.review.findFirst({ where: { id, userId } })
 }
 
-export const updateReview = (id: string, data: Prisma.ReviewUpdateInput) => {
-  return prisma.review.update({ where: { id }, data })
+export const updateReview = (id: string, userId: string, data: Prisma.ReviewUpdateInput) => {
+  return prisma.review.updateMany({ where: { id, userId }, data })
 }
 
-export const deleteReview = (id: string) => {
-  return prisma.review.delete({ where: { id } })
+export const deleteReview = (id: string, userId: string) => {
+  return prisma.review.deleteMany({ where: { id, userId } })
 }
 
 // Factual activity in a [start, end] window — the raw material for an
@@ -70,10 +81,14 @@ export const findInsightById = (id: string, userId: string) => {
   return prisma.insightReview.findFirst({ where: { id, userId } })
 }
 
-export const updateInsight = (id: string, data: Prisma.InsightReviewUpdateInput) => {
-  return prisma.insightReview.update({ where: { id }, data })
+export const updateInsight = (
+  id: string,
+  userId: string,
+  data: Prisma.InsightReviewUpdateInput,
+) => {
+  return prisma.insightReview.updateMany({ where: { id, userId }, data })
 }
 
-export const deleteInsight = (id: string) => {
-  return prisma.insightReview.delete({ where: { id } })
+export const deleteInsight = (id: string, userId: string) => {
+  return prisma.insightReview.deleteMany({ where: { id, userId } })
 }

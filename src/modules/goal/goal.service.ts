@@ -3,6 +3,7 @@ import { findAreaById } from "../area/area.repository.js"
 import {
   createGoal,
   findGoalsByUser,
+  countGoalsByUser,
   findGoalById,
   updateGoal,
   deleteGoal,
@@ -13,6 +14,7 @@ import {
 } from "./goal.repository.js"
 import { scoreGoalConfidence } from "./goal.confidence.js"
 import { getUserTimezone } from "../auth/auth.repository.js"
+import { getPagination, paginatedResponse } from "../../shared/utils/pagination.util.js"
 import type {
   CreateGoalDto,
   UpdateGoalDto,
@@ -89,15 +91,26 @@ export const createGoalService = async (
   })
 }
 
-export const listGoalsService = (
+export const listGoalsService = async (
   userId: string,
   filters: ListGoalsDto,
-): Promise<GoalDto[]> => {
-  return findGoalsByUser(userId, {
+): Promise<GoalDto[] | ReturnType<typeof paginatedResponse>> => {
+  const where = {
     ...(filters.areaId && { areaId: filters.areaId }),
     ...(filters.status && { status: filters.status }),
     ...(filters.priority && { priority: filters.priority }),
-  })
+  }
+
+  if (filters.page || filters.limit) {
+    const params = getPagination(filters.page, filters.limit)
+    const [items, total] = await Promise.all([
+      findGoalsByUser(userId, where, params.skip, params.limit),
+      countGoalsByUser(userId, where),
+    ])
+    return paginatedResponse(items, total, params)
+  }
+
+  return findGoalsByUser(userId, where)
 }
 
 // Attach a live confidence number to a set of goals with a single batched
@@ -138,12 +151,24 @@ const enrichWithConfidence = async (
 export const listGoalsWithConfidenceService = async (
   userId: string,
   filters: ListGoalsDto,
-): Promise<GoalWithConfidenceDto[]> => {
-  const goals = await findGoalsByUser(userId, {
+): Promise<GoalWithConfidenceDto[] | ReturnType<typeof paginatedResponse>> => {
+  const where = {
     ...(filters.areaId && { areaId: filters.areaId }),
     ...(filters.status && { status: filters.status }),
     ...(filters.priority && { priority: filters.priority }),
-  })
+  }
+
+  if (filters.page || filters.limit) {
+    const params = getPagination(filters.page, filters.limit)
+    const [goals, total] = await Promise.all([
+      findGoalsByUser(userId, where, params.skip, params.limit),
+      countGoalsByUser(userId, where),
+    ])
+    const enriched = await enrichWithConfidence(userId, goals)
+    return paginatedResponse(enriched, total, params)
+  }
+
+  const goals = await findGoalsByUser(userId, where)
   return enrichWithConfidence(userId, goals)
 }
 
@@ -223,12 +248,13 @@ export const updateGoalService = async (
     data.parkedAt = new Date()
   }
 
-  return updateGoal(id, data)
+  await updateGoal(id, userId, data)
+  return getOwnedGoal(id, userId)
 }
 
 export const deleteGoalService = async (id: string, userId: string): Promise<void> => {
   await getOwnedGoal(id, userId)
-  await deleteGoal(id)
+  await deleteGoal(id, userId)
 }
 
 /* --- Focus management endpoints --- */
@@ -262,11 +288,12 @@ export const activateGoalService = async (
   const activeCount = await countActiveGoals(userId)
 
   if (activeCount < MAX_ACTIVE_GOALS) {
-    const updated = await updateGoal(id, {
+    await updateGoal(id, userId, {
       status: "ACTIVE",
       activatedAt: new Date(),
       parkedAt: null,
     })
+    const updated = await getOwnedGoal(id, userId)
     return buildFocusState(userId, updated)
   }
 
@@ -281,7 +308,8 @@ export const activateGoalService = async (
     })
   }
 
-  const [, activated] = await swapActiveGoal(id, parkGoalId)
+  await swapActiveGoal(id, parkGoalId, userId)
+  const activated = await getOwnedGoal(id, userId)
   return buildFocusState(userId, activated)
 }
 
@@ -293,6 +321,7 @@ export const parkGoalService = async (
   const goal = await getOwnedGoal(id, userId)
   if (goal.status === "PARKED") return buildFocusState(userId, goal)
 
-  const updated = await updateGoal(id, { status: "PARKED", parkedAt: new Date() })
+  await updateGoal(id, userId, { status: "PARKED", parkedAt: new Date() })
+  const updated = await getOwnedGoal(id, userId)
   return buildFocusState(userId, updated)
 }

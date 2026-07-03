@@ -35,6 +35,8 @@ export const updateHabitSchema = z.object({
 export const listHabitsSchema = z.object({
   areaId: z.string().optional(),
   isActive: z.enum(["true", "false"]).optional(),
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
 })
 
 export const logHabitSchema = z.object({

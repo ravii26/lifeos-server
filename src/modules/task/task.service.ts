@@ -6,10 +6,12 @@ import { findProjectById } from "../project/project.repository.js"
 import {
   createTask,
   findTasksByUser,
+  countTasksByUser,
   findTaskById,
   updateTask,
   deleteTask,
 } from "./task.repository.js"
+import { getPagination, paginatedResponse } from "../../shared/utils/pagination.util.js"
 import type { CreateTaskDto, UpdateTaskDto, ListTasksDto } from "./task.schema.js"
 import type { TaskDto } from "./task.dto.js"
 
@@ -72,17 +74,28 @@ export const createTaskService = async (
   })
 }
 
-export const listTasksService = (
+export const listTasksService = async (
   userId: string,
   filters: ListTasksDto,
-): Promise<TaskDto[]> => {
-  return findTasksByUser(userId, {
+): Promise<TaskDto[] | ReturnType<typeof paginatedResponse>> => {
+  const where = {
     ...(filters.status && { status: filters.status }),
     ...(filters.priority && { priority: filters.priority }),
     ...(filters.areaId && { areaId: filters.areaId }),
     ...(filters.goalId && { goalId: filters.goalId }),
     ...(filters.projectId && { projectId: filters.projectId }),
-  })
+  }
+
+  if (filters.page || filters.limit) {
+    const params = getPagination(filters.page, filters.limit)
+    const [items, total] = await Promise.all([
+      findTasksByUser(userId, where, params.skip, params.limit),
+      countTasksByUser(userId, where),
+    ])
+    return paginatedResponse(items, total, params)
+  }
+
+  return findTasksByUser(userId, where)
 }
 
 export const getTaskService = (id: string, userId: string): Promise<TaskDto> => {
@@ -104,7 +117,7 @@ export const updateTaskService = async (
     data.goalId = project.goalId
   }
 
-  const updated = await updateTask(id, data)
+  await updateTask(id, userId, data)
 
   // Pushing an existing due date further out is a deferral — record it so the
   // coach can notice procrastination patterns (e.g. an area whose tasks keep
@@ -117,7 +130,7 @@ export const updateTaskService = async (
     logBehavior(userId, "TASK_DEFERRED", { taskId: id })
   }
 
-  return updated
+  return getOwnedTask(id, userId)
 }
 
 export const completeTaskService = async (
@@ -125,15 +138,15 @@ export const completeTaskService = async (
   userId: string,
 ): Promise<TaskDto> => {
   await getOwnedTask(id, userId)
-  const task = await updateTask(id, {
+  await updateTask(id, userId, {
     status: "COMPLETED",
     completedAt: new Date(),
   })
   logBehavior(userId, "TASK_COMPLETED", { taskId: id })
-  return task
+  return getOwnedTask(id, userId)
 }
 
 export const deleteTaskService = async (id: string, userId: string): Promise<void> => {
   await getOwnedTask(id, userId)
-  await deleteTask(id)
+  await deleteTask(id, userId)
 }

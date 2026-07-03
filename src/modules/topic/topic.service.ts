@@ -3,10 +3,12 @@ import { findAreaById } from "../area/area.repository.js"
 import {
   createTopic,
   findTopicsByUser,
+  countTopicsByUser,
   findTopicById,
   updateTopic,
   deleteTopic,
 } from "./topic.repository.js"
+import { getPagination, paginatedResponse } from "../../shared/utils/pagination.util.js"
 import type { CreateTopicDto, UpdateTopicDto, ListTopicsDto } from "./topic.schema.js"
 import type { TopicDto } from "./topic.dto.js"
 
@@ -36,14 +38,25 @@ export const createTopicService = async (
   })
 }
 
-export const listTopicsService = (
+export const listTopicsService = async (
   userId: string,
   filters: ListTopicsDto,
-): Promise<TopicDto[]> => {
-  return findTopicsByUser(userId, {
+): Promise<TopicDto[] | ReturnType<typeof paginatedResponse>> => {
+  const where = {
     ...(filters.areaId && { areaId: filters.areaId }),
     ...(filters.masteryLevel && { masteryLevel: filters.masteryLevel }),
-  })
+  }
+
+  if (filters.page || filters.limit) {
+    const params = getPagination(filters.page, filters.limit)
+    const [items, total] = await Promise.all([
+      findTopicsByUser(userId, where, params.skip, params.limit),
+      countTopicsByUser(userId, where),
+    ])
+    return paginatedResponse(items, total, params)
+  }
+
+  return findTopicsByUser(userId, where)
 }
 
 export const getTopicService = (id: string, userId: string): Promise<TopicDto> => {
@@ -57,10 +70,11 @@ export const updateTopicService = async (
 ): Promise<TopicDto> => {
   await getOwnedTopic(id, userId)
   if (input.areaId) await assertAreaOwned(input.areaId, userId)
-  return updateTopic(id, input)
+  await updateTopic(id, userId, input)
+  return getOwnedTopic(id, userId)
 }
 
 export const deleteTopicService = async (id: string, userId: string): Promise<void> => {
   await getOwnedTopic(id, userId)
-  await deleteTopic(id)
+  await deleteTopic(id, userId)
 }

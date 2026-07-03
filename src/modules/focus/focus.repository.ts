@@ -38,10 +38,14 @@ export const findSessionsOverlapping = (
   })
 }
 
-export const updateSession = (id: string, data: Prisma.FocusSessionUpdateInput) => {
-  return prisma.focusSession.update({ where: { id }, data })
+export const updateSession = (
+  id: string,
+  userId: string,
+  data: Prisma.FocusSessionUpdateInput,
+) => {
+  return prisma.focusSession.updateMany({ where: { id, userId }, data })
 }
 
-export const deleteSession = (id: string) => {
-  return prisma.focusSession.delete({ where: { id } })
+export const deleteSession = (id: string, userId: string) => {
+  return prisma.focusSession.deleteMany({ where: { id, userId } })
 }

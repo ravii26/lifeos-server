@@ -6,9 +6,13 @@ import { listAreasService } from "../area/area.service.js"
 import { listGoalsWithConfidenceService } from "../goal/goal.service.js"
 import { listHabitsService } from "../habit/habit.service.js"
 import { dateFromKey, todayKeyInTz } from "../../shared/utils/time.util.js"
+import type { AreaWithScoreDto } from "../area/area.dto.js"
+import type { GoalWithConfidenceDto } from "../goal/goal.dto.js"
+import type { HabitWithStatsDto } from "../habit/habit.dto.js"
 import {
   createReview,
   findReviewsByUser,
+  countReviewsByUser,
   findReviewById,
   updateReview,
   deleteReview,
@@ -20,6 +24,7 @@ import {
   deleteInsight,
 } from "./review.repository.js"
 import { generateReviewInsights } from "./review.ai.js"
+import { getPagination, paginatedResponse } from "../../shared/utils/pagination.util.js"
 import type {
   CreateReviewDto,
   UpdateReviewDto,
@@ -87,11 +92,16 @@ export const generateReviewDraftService = async (
   const periodStart = dateFromKey(todayKeyInTz(timeZone, now))
   periodStart.setUTCDate(periodStart.getUTCDate() - (days - 1))
 
+  // None of these internal calls pass page/limit, so each always resolves to
+  // its plain-array shape (see the "no page/limit" branch of each service).
   const [stats, areas, goals, habits] = await Promise.all([
     findReviewPeriodStats(userId, periodStart, periodEnd),
-    listAreasService(userId),
-    listGoalsWithConfidenceService(userId, { withConfidence: true, status: "ACTIVE" }),
-    listHabitsService(userId, {}),
+    listAreasService(userId) as Promise<AreaWithScoreDto[]>,
+    listGoalsWithConfidenceService(userId, {
+      withConfidence: true,
+      status: "ACTIVE",
+    }) as Promise<GoalWithConfidenceDto[]>,
+    listHabitsService(userId, {}) as Promise<HabitWithStatsDto[]>,
   ])
 
   const areaScores = areas.map((a) => ({ name: a.name, score: a.score }))
@@ -159,13 +169,24 @@ export const generateReviewDraftService = async (
   }
 }
 
-export const listReviewsService = (
+export const listReviewsService = async (
   userId: string,
   filters: ListReviewsDto,
-): Promise<ReviewDto[]> => {
-  return findReviewsByUser(userId, {
+): Promise<ReviewDto[] | ReturnType<typeof paginatedResponse>> => {
+  const where = {
     ...(filters.reviewType && { reviewType: filters.reviewType }),
-  })
+  }
+
+  if (filters.page || filters.limit) {
+    const params = getPagination(filters.page, filters.limit)
+    const [items, total] = await Promise.all([
+      findReviewsByUser(userId, where, params.skip, params.limit),
+      countReviewsByUser(userId, where),
+    ])
+    return paginatedResponse(items, total, params)
+  }
+
+  return findReviewsByUser(userId, where)
 }
 
 export const getReviewService = (id: string, userId: string): Promise<ReviewDto> => {
@@ -178,12 +199,13 @@ export const updateReviewService = async (
   input: UpdateReviewDto,
 ): Promise<ReviewDto> => {
   await getOwnedReview(id, userId)
-  return updateReview(id, input)
+  await updateReview(id, userId, input)
+  return getOwnedReview(id, userId)
 }
 
 export const deleteReviewService = async (id: string, userId: string): Promise<void> => {
   await getOwnedReview(id, userId)
-  await deleteReview(id)
+  await deleteReview(id, userId)
 }
 
 // --- InsightReview ---
@@ -220,10 +242,11 @@ export const updateInsightService = async (
   input: UpdateInsightDto,
 ): Promise<InsightReviewDto> => {
   await getOwnedInsight(id, userId)
-  return updateInsight(id, input)
+  await updateInsight(id, userId, input)
+  return getOwnedInsight(id, userId)
 }
 
 export const deleteInsightService = async (id: string, userId: string): Promise<void> => {
   await getOwnedInsight(id, userId)
-  await deleteInsight(id)
+  await deleteInsight(id, userId)
 }

@@ -8,21 +8,32 @@ export const createCapture = (data: Prisma.CaptureUncheckedCreateInput) => {
 export const findCapturesByUser = (
   userId: string,
   filters: Prisma.CaptureWhereInput = {},
+  skip?: number,
+  take?: number,
 ) => {
   return prisma.capture.findMany({
     where: { userId, ...filters },
     orderBy: { createdAt: "desc" },
+    skip,
+    take,
   })
+}
+
+export const countCapturesByUser = (
+  userId: string,
+  filters: Prisma.CaptureWhereInput = {},
+) => {
+  return prisma.capture.count({ where: { userId, ...filters } })
 }
 
 export const findCaptureById = (id: string, userId: string) => {
   return prisma.capture.findFirst({ where: { id, userId } })
 }
 
-export const updateCapture = (id: string, data: Prisma.CaptureUpdateInput) => {
-  return prisma.capture.update({ where: { id }, data })
+export const updateCapture = (id: string, userId: string, data: Prisma.CaptureUpdateInput) => {
+  return prisma.capture.updateMany({ where: { id, userId }, data })
 }
 
-export const deleteCapture = (id: string) => {
-  return prisma.capture.delete({ where: { id } })
+export const deleteCapture = (id: string, userId: string) => {
+  return prisma.capture.deleteMany({ where: { id, userId } })
 }
