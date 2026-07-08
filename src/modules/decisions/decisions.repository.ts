@@ -107,10 +107,20 @@ export const findDecisionContext = async (userId: string) => {
         select: { eventType: true, occurredAt: true },
       }),
 
-      // Identity — values, purpose, goals for richer suggestions
+      // Identity — the user's full self-model, so suggestions can be
+      // specific to who they are, not just what they've logged.
       prisma.identity.findUnique({
         where: { userId },
-        select: { purpose: true, thisYearGoal: true, values: true },
+        select: {
+          purpose: true,
+          thisYearGoal: true,
+          values: true,
+          bigPicture: true,
+          lifeVision: true,
+          personality: true,
+          strengths: true,
+          weaknesses: true,
+        },
       }),
 
       // User timezone — so the coach computes "today"/streaks/scores locally.

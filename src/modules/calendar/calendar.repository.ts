@@ -6,12 +6,29 @@ export const createBlock = (data: Prisma.CalendarBlockUncheckedCreateInput) => {
 }
 
 // Includes exceptions so the service can expand recurring templates in one pass.
+// When a window is given, one-off blocks are scoped to those overlapping it at
+// the DB level (recurring templates always pass through — their own startTime
+// may predate the window yet still produce occurrences inside it; the service
+// expands and windows those separately). Without this, a one-off-block table
+// that only ever grows would be fetched in full on every list call.
 export const findBlocksByUser = (
   userId: string,
   filters: Prisma.CalendarBlockWhereInput = {},
+  window?: { from: Date; to: Date },
 ) => {
   return prisma.calendarBlock.findMany({
-    where: { userId, ...filters },
+    where: {
+      userId,
+      ...filters,
+      ...(window
+        ? {
+            OR: [
+              { recurrenceRule: { not: null } },
+              { endTime: { gte: window.from }, startTime: { lte: window.to } },
+            ],
+          }
+        : {}),
+    },
     orderBy: { startTime: "asc" },
     include: { exceptions: true },
   })

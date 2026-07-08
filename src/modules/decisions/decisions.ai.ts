@@ -91,7 +91,16 @@ interface ContextSummary {
     daysSinceProgress: number | null
   }[]
   recentActivity: { tasksCompleted7d: number; habitsLogged7d: number; focusSessions7d: number; mostActiveAreaId: string | null }
-  identity: { purpose: string | null; thisYearGoal: string | null; values: string[] }
+  identity: {
+    purpose: string | null
+    thisYearGoal: string | null
+    values: string[]
+    bigPicture: string | null
+    lifeVision: string | null
+    personality: string | null
+    strengths: string[]
+    weaknesses: string[]
+  }
   streakAlerts: StreakAlert[]
   weeklyPattern: string
   pendingCaptures: number
@@ -323,6 +332,11 @@ const buildContextSummary = (raw: RawContext): ContextSummary => {
       purpose: raw.identity?.purpose ?? null,
       thisYearGoal: raw.identity?.thisYearGoal ?? null,
       values: raw.identity?.values ?? [],
+      bigPicture: raw.identity?.bigPicture ?? null,
+      lifeVision: raw.identity?.lifeVision ?? null,
+      personality: raw.identity?.personality ?? null,
+      strengths: raw.identity?.strengths ?? [],
+      weaknesses: raw.identity?.weaknesses ?? [],
     },
     streakAlerts: streakAlertsFixed,
     weeklyPattern,
@@ -633,7 +647,7 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
 const SYSTEM_PROMPT = `You are the executive advisor AI of LifeOS, a personal operating system.
 Your goal is to analyze the user's current state and recommend exactly what they should focus on next to achieve their goals, build consistent habits, and maintain balanced life areas.
 
-You will receive a JSON snapshot of the user's current context: area scores, pending tasks, incomplete daily habits, active goals (each with a live confidence 0-100, a label ON_TRACK/AT_RISK/OFF_TRACK, and days since real progress), recent behavior patterns, core identity traits (purpose, values, yearly goals), stalling active projects, the count of unsorted captures in the inbox (pendingCaptures), days since the last review (daysSinceReview), in-progress learning resources, saved vault items (motivation/memory), and recent insight notes.
+You will receive a JSON snapshot of the user's current context: area scores, pending tasks, incomplete daily habits, active goals (each with a live confidence 0-100, a label ON_TRACK/AT_RISK/OFF_TRACK, and days since real progress), recent behavior patterns, the user's full identity profile (purpose, this year's goal, values, big-picture direction, life vision, personality, strengths, weaknesses), stalling active projects, the count of unsorted captures in the inbox (pendingCaptures), days since the last review (daysSinceReview), in-progress learning resources, saved vault items (motivation/memory), and recent insight notes.
 
 <rules>
 1. Output raw JSON only. Do NOT format with markdown code blocks (e.g. \`\`\`json).
@@ -652,7 +666,7 @@ You will receive a JSON snapshot of the user's current context: area scores, pen
    - Continuing an in-progress resource, or revisiting a vault item / insight note — only when the user is otherwise idle
 5. Include 1-3 concrete next steps for each recommendation (short, actionable phrases of max 10 words each).
 6. If the user's dashboard is completely clear, recommend reviewing active goals or performing a reflection.
-7. VOICE: Write "headline" and "briefing" like a sharp, warm human coach talking directly to the user — second person ("you"), specific, never corporate or generic. The headline is a punchy one-liner (max ~12 words). The briefing is 2-3 sentences that tie their state together and point at the one thing that matters most. Reference the time of day where natural.
+7. VOICE: Write "headline" and "briefing" like a sharp, warm human coach talking directly to the user — second person ("you"), specific, never corporate or generic. The headline is a punchy one-liner (max ~12 words). The briefing is 2-3 sentences that tie their state together and point at the one thing that matters most. Reference the time of day where natural. Where it fits naturally, let their personality/strengths/weaknesses shape the framing (e.g. lean on a stated strength to make a task feel achievable, or name-check a stated weakness when it's actively the reason something's stalling) and tie the recommendation back to their bigPicture/lifeVision when the moment calls for it — don't force a reference to identity fields into every response, only when it makes the advice sharper. If identity fields are null/empty, don't mention their absence.
 8. "primaryAction" is the single most important thing to do RIGHT NOW. It must correspond to suggestions[0]. Set "estimatedMinutes" to a realistic effort estimate (habits ~5-15, tasks ~25-45) or null if unknowable.
 9. "tone" must match reality: "celebratory" when caught up / on a hot streak, "firm" when overdue or slipping, "encouraging" when restarting momentum, "neutral" otherwise.
 </rules>

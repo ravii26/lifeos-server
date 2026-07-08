@@ -11,7 +11,7 @@ import {
 } from "./area.service.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
 import { HttpStatus } from "../../shared/constants/httpStatus.js"
-import type { ListAreasDto } from "./area.schema.js"
+import type { ListAreasDto, ListAreaSnapshotsDto } from "./area.schema.js"
 
 export const createAreaController = async (req: Request, res: Response) => {
   const area = await createAreaService(req.user!.id, req.body)
@@ -50,8 +50,8 @@ export const snapshotAreaScoreController = async (req: Request, res: Response) =
 
 export const listAreaSnapshotsController = async (req: Request, res: Response) => {
   const { id } = req.params as { id: string }
-  const limit = Number((req.query as Record<string, string>).limit ?? "30")
-  const snapshots = await listAreaSnapshotsService(id, req.user!.id, limit)
+  const { limit } = (res.locals.query ?? {}) as ListAreaSnapshotsDto
+  const snapshots = await listAreaSnapshotsService(id, req.user!.id, limit ?? 30)
   sendSuccess(res, "Score history fetched", snapshots)
 }
 

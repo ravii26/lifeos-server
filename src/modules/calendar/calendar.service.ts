@@ -108,25 +108,29 @@ export const listBlocksService = async (
   userId: string,
   filters: ListBlocksDto,
 ): Promise<CalendarBlockDto[]> => {
-  const blocks = await findBlocksByUser(userId, {
-    ...(filters.areaId && { areaId: filters.areaId }),
-    ...(filters.taskId && { taskId: filters.taskId }),
-    ...(filters.habitId && { habitId: filters.habitId }),
-  })
-
-  const hasRange = Boolean(filters.from || filters.to)
+  // Always resolved, even when the caller omits from/to — every list call is
+  // now bounded to a window at the DB level (default: today .. +90d) instead
+  // of the one-off-block table being fetched in full when no range is given.
   const from = filters.from ?? new Date()
   const to = filters.to ?? new Date(from.getTime() + DEFAULT_WINDOW_DAYS * DAY_MS)
+
+  const blocks = await findBlocksByUser(
+    userId,
+    {
+      ...(filters.areaId && { areaId: filters.areaId }),
+      ...(filters.taskId && { taskId: filters.taskId }),
+      ...(filters.habitId && { habitId: filters.habitId }),
+    },
+    { from, to },
+  )
 
   const result: CalendarBlockDto[] = []
   for (const block of blocks) {
     if (block.recurrenceRule) {
       // Recurring templates are always expanded within the (resolved) window.
       result.push(...expandRecurringBlock(block, from, to))
-    } else if (hasRange) {
-      // One-off block: keep it if it overlaps the requested range.
-      if (block.endTime >= from && block.startTime <= to) result.push(blockToDto(block))
     } else {
+      // Repository already scoped one-offs to overlap [from, to].
       result.push(blockToDto(block))
     }
   }

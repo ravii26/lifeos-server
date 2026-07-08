@@ -11,7 +11,12 @@ import {
 } from "./area.controller.js"
 import { validate, validateQuery } from "../../shared/middleware/validate.middleware.js"
 import { authenticate } from "../../shared/middleware/auth.middleware.js"
-import { createAreaSchema, updateAreaSchema, listAreasSchema } from "./area.schema.js"
+import {
+  createAreaSchema,
+  updateAreaSchema,
+  listAreasSchema,
+  listAreaSnapshotsSchema,
+} from "./area.schema.js"
 
 const router = Router()
 
@@ -31,6 +36,10 @@ router.delete("/:id", deleteAreaController)
 
 // A3 — score history
 router.post("/:id/snapshot", snapshotAreaScoreController)
-router.get("/:id/snapshots", listAreaSnapshotsController)
+router.get(
+  "/:id/snapshots",
+  validateQuery(listAreaSnapshotsSchema),
+  listAreaSnapshotsController,
+)
 
 export default router

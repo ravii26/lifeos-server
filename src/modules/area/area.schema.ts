@@ -15,6 +15,10 @@ export const listAreasSchema = z.object({
   limit: z.coerce.number().int().positive().max(100).optional(),
 })
 
+export const listAreaSnapshotsSchema = z.object({
+  limit: z.coerce.number().int().positive().max(365).optional(),
+})
+
 export const updateAreaSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   type: z.enum(["PRIMARY", "MAINTENANCE"]).optional(),
@@ -28,3 +32,4 @@ export const updateAreaSchema = z.object({
 export type CreateAreaDto = z.infer<typeof createAreaSchema>
 export type UpdateAreaDto = z.infer<typeof updateAreaSchema>
 export type ListAreasDto = z.infer<typeof listAreasSchema>
+export type ListAreaSnapshotsDto = z.infer<typeof listAreaSnapshotsSchema>
