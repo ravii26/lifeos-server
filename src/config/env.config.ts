@@ -12,7 +12,7 @@ const envSchema = z.object({
   CORS_ORIGINS: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
   GROQ_API_KEY: z.string().optional(),
-  PREFERRED_AI_PROVIDER: z.enum(["gemini", "groq"]).default("gemini"),
+  PREFERRED_AI_PROVIDER: z.enum(["gemini", "groq"]).default("groq"),
   PUBLIC_BASE_URL: z.string().url().optional(),
 })
 

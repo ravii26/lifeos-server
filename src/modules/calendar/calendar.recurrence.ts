@@ -4,6 +4,7 @@ import type { RRule as RRuleClass } from "rrule"
 const { RRule, rrulestr } = pkg
 import type { CalendarBlock, CalendarBlockException } from "@prisma/client"
 import { ValidationError } from "../../shared/utils/errors.util.js"
+import logger from "../../lib/logger.js"
 import type { CalendarBlockDto } from "./calendar.dto.js"
 
 // Hard cap so a malformed/unbounded rule can never expand forever.
@@ -13,7 +14,8 @@ const MAX_OCCURRENCES = 1000
 export const assertValidRecurrenceRule = (rule: string, dtstart: Date): void => {
   try {
     rrulestr(rule, { dtstart })
-  } catch {
+  } catch (err) {
+    logger.warn(`assertValidRecurrenceRule: rejected malformed RRULE "${rule}":`, err)
     throw new ValidationError("Invalid recurrenceRule (expected an iCal RRULE string)")
   }
 }

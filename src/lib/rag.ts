@@ -7,16 +7,47 @@
    goals, and topics — not just generic categories.
    ===================================================================== */
 import prisma from "./prisma.js"
+import { dayKeyInTz, timeOfDayLabel, weekdayInTz } from "../shared/utils/time.util.js"
+
+// The "right now" the AI reasons over — same idea as the decisions engine's
+// schedule/timeOfDay, but lightweight so every AI call site (not just the
+// dashboard) can resolve relative dates ("tomorrow", "tonight") and adapt
+// tone to the moment, in the user's own timezone rather than server UTC.
+export interface RagNow {
+  isoDate: string // "YYYY-MM-DD" in the user's timezone — the anchor for relative-date parsing
+  weekday: string // "Monday"
+  timeOfDay: string // "morning" | "afternoon" | "evening" | "night"
+  timezone: string
+}
 
 export interface UserRagContext {
   areas: { id: string; name: string; type: string }[]
   goals: { id: string; title: string; areaId: string | null }[]
   topics: { id: string; title: string; areaId: string }[]
+  now: RagNow
 }
 
-/** Fetches a compact user context snapshot in 3 parallel queries. */
+// Resolves the user's "right now" (in their own timezone). Split out so AI call
+// sites that only need the clock — e.g. document Q&A — can skip the areas/goals/
+// topics queries the full context builder runs.
+export const getUserNow = async (userId: string): Promise<RagNow> => {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { timezone: true },
+  })
+  const timezone = user?.timezone ?? "UTC"
+  const instant = new Date()
+  return {
+    isoDate: dayKeyInTz(instant, timezone),
+    weekday: weekdayInTz(timezone, instant),
+    timeOfDay: timeOfDayLabel(timezone, instant),
+    timezone,
+  }
+}
+
+/** Fetches a compact user context snapshot in 4 parallel queries. */
 export const getUserRagContext = async (userId: string): Promise<UserRagContext> => {
-  const [areas, goals, topics] = await Promise.all([
+  const [areas, goals, topics, now] = await Promise.all([
     prisma.area.findMany({
       where: { userId, isActive: true },
       select: { id: true, name: true, type: true },
@@ -32,8 +63,9 @@ export const getUserRagContext = async (userId: string): Promise<UserRagContext>
       select: { id: true, title: true, areaId: true },
       take: 30,
     }),
+    getUserNow(userId),
   ])
-  return { areas, goals, topics }
+  return { areas, goals, topics, now }
 }
 
 /** Formats the context as a plain-text block for Gemini system prompts. */
@@ -51,6 +83,7 @@ export const formatRagContextForPrompt = (ctx: UserRagContext): string => {
     : "  (none yet)"
 
   return [
+    `Current date/time: ${ctx.now.isoDate} (${ctx.now.weekday}), ${ctx.now.timeOfDay}, timezone ${ctx.now.timezone}. Use this as "today" when resolving relative dates.`,
     "User's life areas:",
     areasList,
     "Active goals:",

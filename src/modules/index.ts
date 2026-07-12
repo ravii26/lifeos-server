@@ -19,6 +19,8 @@ import captureRoutes from "./capture/capture.routes.js"
 import settingsRoutes from "./settings/settings.routes.js"
 import decisionsRoutes from "./decisions/decisions.routes.js"
 import graphRoutes from "./graph/graph.routes.js"
+import linkRoutes from "./link/link.routes.js"
+import documentRoutes from "./document/document.routes.js"
 
 const router = Router()
 
@@ -44,5 +46,7 @@ router.use("/captures", captureRoutes)
 router.use("/settings", settingsRoutes)
 router.use("/decisions", decisionsRoutes)
 router.use("/graph", graphRoutes)
+router.use("/links", linkRoutes)
+router.use("/documents", documentRoutes)
 
 export default router

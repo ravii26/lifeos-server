@@ -7,6 +7,7 @@ import { createTask } from "../task/task.repository.js"
 import { createHabit } from "../habit/habit.repository.js"
 import { createNote } from "../note/note.repository.js"
 import { createResource } from "../resource/resource.repository.js"
+import { maybeCreateBacklogReminder } from "../task/backlog-reminder.service.js"
 import { createVaultItem } from "../vault/vault.repository.js"
 import {
   createCapture,
@@ -398,6 +399,7 @@ export const convertCaptureService = async (
       })
       createdId = resource.id
       entity = resource
+      await maybeCreateBacklogReminder(userId, resource.id)
       break
     }
     case "VAULT": {

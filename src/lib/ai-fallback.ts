@@ -25,8 +25,11 @@ export async function runWithAiFallback<T>(
     if (!fn) continue
     try {
       return await fn()
-    } catch {
-      logger.warn(`${label}: falling back from ${name === "gemini" ? "Gemini" : "Groq"}...`)
+    } catch (err) {
+      logger.warn(
+        `${label}: falling back from ${name === "gemini" ? "Gemini" : "Groq"}...`,
+        err,
+      )
     }
   }
 

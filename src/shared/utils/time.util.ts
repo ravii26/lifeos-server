@@ -44,6 +44,20 @@ export const hourInTz = (timeZone: string, now: Date = new Date()): number => {
   return parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10) % 24
 }
 
+// Coarse part of day from the local hour — shared by every AI prompt that
+// wants to reason about "right now" (decisions engine, capture classifier).
+export const timeOfDayLabel = (timeZone: string, now: Date = new Date()): string => {
+  const h = hourInTz(timeZone, now)
+  if (h < 6) return "night"
+  if (h < 12) return "morning"
+  if (h < 17) return "afternoon"
+  return "evening"
+}
+
+// Weekday name ("Monday") for an instant in the given timezone.
+export const weekdayInTz = (timeZone: string, now: Date = new Date()): string =>
+  new Intl.DateTimeFormat("en-US", { timeZone, weekday: "long" }).format(now)
+
 // Midnight-UTC Date for a "YYYY-MM-DD" key — the anchor for day arithmetic and
 // the @db.Date storage value for that calendar day.
 export const dateFromKey = (key: string): Date => new Date(`${key}T00:00:00.000Z`)

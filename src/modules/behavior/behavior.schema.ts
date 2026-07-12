@@ -12,6 +12,9 @@ export const behaviorEvent = z.enum([
   "FOCUS_ABANDONED",
   "AREA_VIEWED",
   "REVIEW_OPENED",
+  "DOCUMENT_INGESTED",
+  "QUESTION_ASKED",
+  "SUGGESTIONS_EXTRACTED",
 ])
 
 // Client-reported events (e.g. APP_OPEN, AREA_VIEWED). Server-side events

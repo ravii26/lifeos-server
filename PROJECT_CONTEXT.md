@@ -82,6 +82,14 @@ module/
   module.routes.ts   ← Router; wires validate middleware + controller
 ```
 
+**When `schema.ts`/`dto.ts` are required:** any route that accepts a request body or
+query params must validate it with a Zod schema in `module.schema.ts` — always, no
+exceptions. GET-only modules with no params to validate (`decisions`, `graph`) skip
+`schema.ts`/`dto.ts` — there is nothing to validate and no request shape to type, so the
+files would be empty boilerplate. The moment either module grows a param (e.g.
+`GET /decisions/now?horizon=week`), add `module.schema.ts` for it at that point, not
+before.
+
 ---
 
 ## 3. Environment Variables

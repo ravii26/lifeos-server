@@ -29,6 +29,7 @@ export const findDecisionContext = async (userId: string) => {
     continueResources,
     vaultItems,
     insightNotes,
+    advanceLinks,
   ] = await Promise.all([
       // Areas with scoring data
       prisma.area.findMany({
@@ -178,6 +179,19 @@ export const findDecisionContext = async (userId: string) => {
         take: 3,
         select: { id: true, title: true },
       }),
+
+      // ADVANCES links from tasks to goals/resources — lets the coach prefer a
+      // pending task that actually moves an active goal or an in-progress
+      // resource forward, over an equally-ranked orphan task (phase 4).
+      prisma.entityLink.findMany({
+        where: {
+          userId,
+          fromType: "TASK",
+          role: "ADVANCES",
+          toType: { in: ["GOAL", "RESOURCE"] },
+        },
+        select: { fromId: true, toType: true, toId: true },
+      }),
     ])
 
   return {
@@ -196,5 +210,6 @@ export const findDecisionContext = async (userId: string) => {
     continueResources,
     vaultItems,
     insightNotes,
+    advanceLinks,
   }
 }

@@ -1,5 +1,6 @@
 import { NotFoundError } from "../../shared/utils/errors.util.js"
 import { findTopicById } from "../topic/topic.repository.js"
+import { embedSourceInBackground, removeSource } from "../knowledge/knowledge.embed.service.js"
 import {
   createResource,
   findResourcesByUser,
@@ -34,7 +35,7 @@ export const createResourceService = async (
 ): Promise<ResourceDto> => {
   await assertTopicOwned(input.topicId, userId)
 
-  return createResource({
+  const resource = await createResource({
     userId,
     topicId: input.topicId,
     title: input.title,
@@ -45,6 +46,10 @@ export const createResourceService = async (
     rating: input.rating ?? null,
     notes: input.notes ?? null,
   })
+  if (resource.notes) {
+    embedSourceInBackground(userId, "RESOURCE", resource.id, resource.title, resource.notes)
+  }
+  return resource
 }
 
 export const listResourcesService = async (
@@ -80,11 +85,18 @@ export const updateResourceService = async (
 ): Promise<ResourceDto> => {
   await getOwnedResource(id, userId)
   await updateResource(id, userId, input)
-  return getOwnedResource(id, userId)
+  const updated = await getOwnedResource(id, userId)
+  if (updated.notes) {
+    embedSourceInBackground(userId, "RESOURCE", updated.id, updated.title, updated.notes)
+  } else {
+    await removeSource(userId, "RESOURCE", updated.id)
+  }
+  return updated
 }
 
 export const deleteResourceService = async (id: string, userId: string): Promise<void> => {
   await getOwnedResource(id, userId)
+  await removeSource(userId, "RESOURCE", id)
   await deleteResource(id, userId)
 }
 

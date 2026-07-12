@@ -5,6 +5,7 @@ import { z } from "zod"
 export const OPTIONAL_MODULES = [
   "habits", "goals", "projects", "calendar", "knowledge", "vault",
   "focus", "review", "learn", "identity", "behaviour", "graph", "decisions",
+  "library",
 ] as const
 
 export const updateSettingsSchema = z.object({

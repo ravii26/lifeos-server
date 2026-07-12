@@ -4,7 +4,7 @@ const taskStatus = z.enum(["TODO", "IN_PROGRESS", "COMPLETED", "CANCELLED"])
 const priority = z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"])
 const taskType = z.enum(["BOOLEAN", "COUNT", "TIMER"])
 const recurrence = z.enum(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"])
-const taskSource = z.enum(["MANUAL", "DUMP", "LEARN"])
+const taskSource = z.enum(["MANUAL", "DUMP", "LEARN", "BACKLOG_REMINDER"])
 
 export const createTaskSchema = z.object({
   title: z.string().min(1, "Title is required").max(200),

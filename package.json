@@ -4,10 +4,13 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "backfill:links": "tsx src/scripts/backfill-entity-links.ts",
+    "backfill:knowledge": "tsx src/scripts/backfill-knowledge-chunks.ts"
   },
   "keywords": [],
   "author": "",
@@ -37,10 +40,13 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.1.0",
     "@types/node": "^25.9.3",
+    "@types/supertest": "^7.2.0",
     "@types/winston": "^2.4.4",
     "nodemon": "^3.1.14",
+    "supertest": "^7.2.2",
     "ts-node": "^10.9.2",
     "tsx": "^4.22.4",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.10"
   }
 }

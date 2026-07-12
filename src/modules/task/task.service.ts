@@ -12,6 +12,8 @@ import {
   deleteTask,
 } from "./task.repository.js"
 import { getPagination, paginatedResponse } from "../../shared/utils/pagination.util.js"
+import { rollupTaskAdvances } from "../link/link.rollup.js"
+import { deleteLinksForEntity } from "../link/link.repository.js"
 import type { CreateTaskDto, UpdateTaskDto, ListTasksDto } from "./task.schema.js"
 import type { TaskDto } from "./task.dto.js"
 
@@ -119,6 +121,18 @@ export const updateTaskService = async (
 
   await updateTask(id, userId, data)
 
+  // Resource roll-up on completion-state transitions driven through update()
+  // — e.g. the task row's "un-complete" toggle sends { status: "TODO" }. Only
+  // fires on an actual crossing of the COMPLETED boundary, never on same-status
+  // edits, so a resource's lessonsCompleted can't drift.
+  if (input.status && input.status !== existing.status) {
+    if (input.status === "COMPLETED") {
+      await rollupTaskAdvances(userId, id, 1)
+    } else if (existing.status === "COMPLETED") {
+      await rollupTaskAdvances(userId, id, -1)
+    }
+  }
+
   // Pushing an existing due date further out is a deferral — record it so the
   // coach can notice procrastination patterns (e.g. an area whose tasks keep
   // slipping). Only counts when a real prior due date moved later.
@@ -137,16 +151,27 @@ export const completeTaskService = async (
   id: string,
   userId: string,
 ): Promise<TaskDto> => {
-  await getOwnedTask(id, userId)
+  const existing = await getOwnedTask(id, userId)
   await updateTask(id, userId, {
     status: "COMPLETED",
     completedAt: new Date(),
   })
   logBehavior(userId, "TASK_COMPLETED", { taskId: id })
+  // Advance any Learn resources this task is linked to — but only on the real
+  // →COMPLETED crossing, so completing an already-done task can't double-count.
+  if (existing.status !== "COMPLETED") {
+    await rollupTaskAdvances(userId, id, 1)
+  }
   return getOwnedTask(id, userId)
 }
 
 export const deleteTaskService = async (id: string, userId: string): Promise<void> => {
-  await getOwnedTask(id, userId)
+  const existing = await getOwnedTask(id, userId)
+  // Undo any resource progress this task was contributing before it disappears,
+  // then remove its links so no EntityLink row is left pointing at a ghost task.
+  if (existing.status === "COMPLETED") {
+    await rollupTaskAdvances(userId, id, -1)
+  }
+  await deleteLinksForEntity(userId, "TASK", id)
   await deleteTask(id, userId)
 }

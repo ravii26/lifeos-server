@@ -8,13 +8,13 @@ datasource db {
 }
 
 model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
+  id           String   @id @default(cuid())
+  email        String   @unique
   passwordHash String
   name         String
-  timezone     String    @default("Asia/Kolkata")
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  timezone     String   @default("Asia/Kolkata")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   // Relations
   identity       Identity?
@@ -36,6 +36,11 @@ model User {
   reviews        Review[]
   insightReviews InsightReview[]
   behaviorLogs   BehaviorLog[]
+  entityLinks    EntityLink[]
+  documents            Document[]
+  documentChunks       DocumentChunk[]
+  documentSuggestions  DocumentSuggestion[]
+  knowledgeChunks      KnowledgeChunk[]
 }
 
 model Identity {
@@ -44,25 +49,25 @@ model Identity {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // All optional — user fills gradually
-  personality  String?
-  values       String[]
-  strengths    String[]
-  weaknesses   String[]
-  purpose      String?
+  personality String?
+  values      String[]
+  strengths   String[]
+  weaknesses  String[]
+  purpose     String?
 
   // Renamed to feel more human
-  thisYearGoal String?   // "What do you want to achieve this year?"
-  bigPicture   String?   // "Where do you want to be in 5 years?"
-  lifeVision   String?   // "What does your ideal life look like?"
+  thisYearGoal String? // "What do you want to achieve this year?"
+  bigPicture   String? // "Where do you want to be in 5 years?"
+  lifeVision   String? // "What does your ideal life look like?"
 
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Area {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   name      String
   type      AreaType @default(PRIMARY)
@@ -93,11 +98,11 @@ enum AreaType {
 }
 
 model Goal {
-  id          String     @id @default(cuid())
-  userId      String
-  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  areaId      String
-  area        Area       @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  areaId String
+  area   Area   @relation(fields: [areaId], references: [id], onDelete: Cascade)
 
   title       String
   description String?
@@ -113,35 +118,35 @@ model Goal {
   activatedAt DateTime?
   parkedAt    DateTime?
 
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  projects    Project[]
-  tasks       Task[]
+  projects Project[]
+  tasks    Task[]
 
   @@index([userId, status])
 }
 
 model Project {
-  id          String        @id @default(cuid())
-  userId      String
-  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  areaId      String
-  area        Area          @relation(fields: [areaId], references: [id], onDelete: Cascade)
-  goalId      String?
-  goal        Goal?         @relation(fields: [goalId], references: [id])
+  id     String  @id @default(cuid())
+  userId String
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  areaId String
+  area   Area    @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  goalId String?
+  goal   Goal?   @relation(fields: [goalId], references: [id])
 
   title       String
   description String?
   status      ProjectStatus @default(ACTIVE)
   deadline    DateTime?
 
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  tasks       Task[]
+  tasks Task[]
 
   @@index([userId, status])
 }
@@ -169,37 +174,37 @@ enum GoalStatus {
 }
 
 model Task {
-  id             String      @id @default(cuid())
-  userId         String
-  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  areaId         String?
-  area           Area?       @relation(fields: [areaId], references: [id])
-  goalId         String?
-  goal           Goal?       @relation(fields: [goalId], references: [id])
-  projectId      String?
-  project        Project?    @relation(fields: [projectId], references: [id])
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  areaId    String?
+  area      Area?    @relation(fields: [areaId], references: [id])
+  goalId    String?
+  goal      Goal?    @relation(fields: [goalId], references: [id])
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
 
-  title          String
-  description    String?
-  status         TaskStatus  @default(TODO)
-  priority       Priority    @default(MEDIUM)
+  title       String
+  description String?
+  status      TaskStatus @default(TODO)
+  priority    Priority   @default(MEDIUM)
 
-  taskType       TaskType    @default(BOOLEAN)
+  taskType       TaskType @default(BOOLEAN)
   targetCount    Int?
-  completedCount Int         @default(0)
+  completedCount Int      @default(0)
   targetMinutes  Int?
 
-  dueDate        DateTime?
+  dueDate DateTime?
 
-  isRecurring    Boolean     @default(false)
-  recurrence     Recurrence?
+  isRecurring Boolean     @default(false)
+  recurrence  Recurrence?
 
-  source         TaskSource  @default(MANUAL)
-  sourceId       String?
+  source   TaskSource @default(MANUAL)
+  sourceId String?
 
-  completedAt    DateTime?
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   // Relations
   calendarBlocks CalendarBlock[]
@@ -225,6 +230,7 @@ enum TaskSource {
   MANUAL
   DUMP
   LEARN
+  BACKLOG_REMINDER
 }
 
 enum Recurrence {
@@ -235,27 +241,27 @@ enum Recurrence {
 }
 
 model Habit {
-  id            String        @id @default(cuid())
-  userId        String
-  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  areaId        String
-  area          Area          @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  areaId String
+  area   Area   @relation(fields: [areaId], references: [id], onDelete: Cascade)
 
   title         String
   description   String?
-  habitType     HabitType     @default(BOOLEAN)
+  habitType     HabitType @default(BOOLEAN)
   targetCount   Int?
   targetMinutes Int?
 
-  frequency     HabitFrequency @default(DAILY)
-  weeklyTarget  Int?
-  specificDays  String[]
+  frequency    HabitFrequency @default(DAILY)
+  weeklyTarget Int?
+  specificDays String[]
 
-  reminderTime  String?
-  isActive      Boolean       @default(true)
+  reminderTime String?
+  isActive     Boolean @default(true)
 
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
   logs           HabitLog[]
@@ -266,11 +272,11 @@ model Habit {
 }
 
 model HabitLog {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  habitId   String
-  habit     Habit    @relation(fields: [habitId], references: [id], onDelete: Cascade)
+  id      String @id @default(cuid())
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  habitId String
+  habit   Habit  @relation(fields: [habitId], references: [id], onDelete: Cascade)
 
   date      DateTime @db.Date
   completed Boolean  @default(false)
@@ -297,72 +303,74 @@ enum HabitFrequency {
 }
 
 model Topic {
-  id           String       @id @default(cuid())
-  userId       String
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  areaId       String
-  area         Area         @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  areaId String
+  area   Area   @relation(fields: [areaId], references: [id], onDelete: Cascade)
 
   title        String
   description  String?
   masteryLevel MasteryLevel @default(BEGINNER)
 
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  notebooks    Notebook[]
-  resources    Resource[]
-  notes        Note[]
+  notebooks Notebook[]
+  resources Resource[]
+  notes     Note[]
+  documents Document[]
 
   @@index([userId])
 }
 
 model Notebook {
-  id          String   @id @default(cuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  topicId     String
-  topic       Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  id      String @id @default(cuid())
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId String
+  topic   Topic  @relation(fields: [topicId], references: [id], onDelete: Cascade)
 
   title       String
   description String?
   tags        String[]
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  notes       Note[]
+  notes     Note[]
+  documents Document[]
 
   @@index([userId])
 }
 
 model Resource {
-  id               String         @id @default(cuid())
-  userId           String
-  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  topicId          String
-  topic            Topic          @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  id      String @id @default(cuid())
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId String
+  topic   Topic  @relation(fields: [topicId], references: [id], onDelete: Cascade)
 
-  title            String
-  resourceType     ResourceType
-  url              String?
-  platform         String?
-  status           ResourceStatus @default(NOT_STARTED)
-  rating           Int?
-  notes            String?
+  title        String
+  resourceType ResourceType
+  url          String?
+  platform     String?
+  status       ResourceStatus @default(NOT_STARTED)
+  rating       Int?
+  notes        String?
 
   // B8 — progress tracking
   totalLessons     Int?
-  lessonsCompleted Int            @default(0)
-  minutesConsumed  Int            @default(0)
+  lessonsCompleted Int  @default(0)
+  minutesConsumed  Int  @default(0)
 
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  linkedNotes      Note[]
+  linkedNotes Note[]
 
   @@index([userId])
 }
@@ -378,13 +386,13 @@ model Note {
   resourceId String?
   resource   Resource? @relation(fields: [resourceId], references: [id])
 
-  title      String
-  content    String
-  noteType   NoteType  @default(CONCEPT)
-  tags       String[]
+  title    String
+  content  String
+  noteType NoteType @default(CONCEPT)
+  tags     String[]
 
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
   insightReviews InsightReview[]
@@ -424,22 +432,22 @@ enum NoteType {
 }
 
 model VaultItem {
-  id          String      @id @default(cuid())
-  userId      String
-  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   title       String
   content     String
   vaultType   VaultType
-  mediaType   MediaType   @default(TEXT)
+  mediaType   MediaType @default(TEXT)
   url         String?
   triggerTags String[]
 
-  usedCount    Int        @default(0)
-  helpfulCount Int        @default(0)
+  usedCount    Int @default(0)
+  helpfulCount Int @default(0)
 
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
 }
@@ -460,31 +468,31 @@ enum MediaType {
 }
 
 model Capture {
-  id              String        @id @default(cuid())
-  userId          String
-  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // For media captures rawText starts empty and is filled with the AI
   // transcript/description once background classification runs.
-  rawText         String
-  detectedUrl     String?
-  urlMetadata     Json?
+  rawText     String
+  detectedUrl String?
+  urlMetadata Json?
 
   // Input modality. TEXT keeps the original behaviour; IMAGE/AUDIO captures
   // carry a mediaUrl pointing at the stored file.
-  mediaType       MediaType     @default(TEXT)
-  mediaUrl        String?
+  mediaType MediaType @default(TEXT)
+  mediaUrl  String?
 
-  worthCheck      WorthCheck?
-  worthReason     String?
+  worthCheck  WorthCheck?
+  worthReason String?
 
   suggestedOutputs Json?
   createdOutputs   Json?
 
-  status          CaptureStatus @default(PENDING)
-  confidence      Float?
+  status     CaptureStatus @default(PENDING)
+  confidence Float?
 
-  createdAt       DateTime      @default(now())
+  createdAt DateTime @default(now())
 
   @@index([userId, status])
 }
@@ -501,14 +509,146 @@ enum WorthCheck {
   NOT_RELEVANT
 }
 
-model Review {
-  id           String     @id @default(cuid())
-  userId       String
-  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+// A large body of reference text the user pastes or uploads (e.g. a fitness
+// handbook, GATE notes, a business guide). On create it's split into
+// DocumentChunk rows and each chunk is embedded, so the user can later ask
+// questions answered from THEIR own material (retrieval-augmented Q&A).
+model Document {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Optional organisation: file a document under a learning Topic / Notebook.
+  topicId    String?
+  topic      Topic?    @relation(fields: [topicId], references: [id])
+  notebookId String?
+  notebook   Notebook? @relation(fields: [notebookId], references: [id])
 
-  reviewType   ReviewType
-  periodStart  DateTime
-  periodEnd    DateTime
+  title      String
+  sourceType DocumentSourceType @default(PASTED)
+  // PENDING while chunk+embed runs in the background; READY once queryable;
+  // FAILED if ingestion errored (error holds the reason).
+  status     DocumentStatus     @default(PENDING)
+  rawText    String
+  error      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  chunks      DocumentChunk[]
+  suggestions DocumentSuggestion[]
+
+  @@index([userId])
+}
+
+// One retrievable slice of a Document. `embedding` is the chunk's vector
+// (text-embedding-004, 768 dims) stored as a plain double[]; similarity is
+// computed in-process (no pgvector yet — fine at personal scale).
+model DocumentChunk {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  index     Int // position within the document (0-based)
+  heading   String? // nearest section heading, for display + context
+  content   String
+  embedding Float[]
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, documentId])
+}
+
+enum DocumentSourceType {
+  PASTED
+  UPLOADED
+}
+
+enum DocumentStatus {
+  PENDING
+  READY
+  FAILED
+}
+
+// An actionable item the AI proposed from a Document (phase 2: Structure). The
+// user reviews these and accepts the good ones, which creates a real
+// Task/Habit/Goal linked back to the source document. Kept as its own row (not
+// created immediately) so the user confirms before anything lands in their
+// system — AI proposes ~12, the user keeps the few that matter.
+model DocumentSuggestion {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  itemType      SuggestionType
+  title         String
+  detail        String? // short rationale / description
+  confidence    Float          @default(0.7)
+  sourceHeading String? // the document section it came from
+  // Type-specific fields (frequency, targetMinutes, priority, dueDate) plus the
+  // resolved suggestedAreaId/Name, kept as JSON so the model stays flat.
+  meta          Json?
+
+  status SuggestionStatus @default(PENDING)
+  // Set on accept — points at the created Task/Habit/Goal.
+  createdEntityType String?
+  createdEntityId   String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, documentId])
+}
+
+enum SuggestionType {
+  HABIT
+  GOAL
+  TASK
+}
+
+enum SuggestionStatus {
+  PENDING
+  ACCEPTED
+  DISMISSED
+}
+
+enum KnowledgeSourceType {
+  NOTE
+  RESOURCE
+}
+
+// A retrievable, embedded slice of a Note or Resource, mirroring DocumentChunk
+// but for content that has no async ingest step (re-embedded synchronously
+// whenever the source is written). sourceTitle is denormalized from the parent
+// Note/Resource so ask results can be labeled without a second cross-table join.
+model KnowledgeChunk {
+  id          String              @id @default(cuid())
+  userId      String
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceType  KnowledgeSourceType
+  sourceId    String
+  sourceTitle String
+  heading     String?
+  content     String
+  embedding   Float[]
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, sourceType, sourceId])
+  @@index([userId])
+}
+
+model Review {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  reviewType  ReviewType
+  periodStart DateTime
+  periodEnd   DateTime
 
   summary      String?
   highlights   String?
@@ -516,7 +656,7 @@ model Review {
   userNote     String?
   aiInsights   Json?
 
-  createdAt    DateTime   @default(now())
+  createdAt DateTime @default(now())
 
   // Relations
   insightReviews InsightReview[]
@@ -525,19 +665,19 @@ model Review {
 }
 
 model InsightReview {
-  id           String              @id @default(cuid())
-  userId       String
-  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  reviewId     String
-  review       Review              @relation(fields: [reviewId], references: [id], onDelete: Cascade)
-  noteId       String
-  note         Note                @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewId String
+  review   Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  noteId   String
+  note     Note   @relation(fields: [noteId], references: [id], onDelete: Cascade)
 
-  status       InsightReviewStatus @default(PENDING)
-  userNote     String?
+  status   InsightReviewStatus @default(PENDING)
+  userNote String?
 
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
 }
@@ -557,15 +697,15 @@ enum InsightReviewStatus {
 }
 
 model UserSettings {
-  id        String   @id @default(cuid())
-  userId    String   @unique
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // B9 — UI personalisation
-  vibe      String   @default("calm")     // calm | focused | energetic
-  accent    String   @default("#6366f1")  // hex colour
-  font      String   @default("inter")    // inter | mono | serif
-  startTab  String   @default("today")    // today | areas | dump
+  vibe     String @default("calm") // calm | focused | energetic
+  accent   String @default("#6366f1") // hex colour
+  font     String @default("inter") // inter | mono | serif
+  startTab String @default("today") // today | areas | dump
 
   // Optional modules the user has enabled. Empty == all optional modules on
   // (so existing rows and brand-new accounts behave identically). Core modules
@@ -577,10 +717,10 @@ model UserSettings {
 }
 
 model AreaScoreSnapshot {
-  id         String   @id @default(cuid())
-  userId     String
-  areaId     String
-  area       Area     @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  areaId String
+  area   Area   @relation(fields: [areaId], references: [id], onDelete: Cascade)
 
   score      Float
   tasksDone  Int
@@ -594,13 +734,13 @@ model AreaScoreSnapshot {
 }
 
 model BehaviorLog {
-  id          String      @id @default(cuid())
-  userId      String
-  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  eventType   BehaviorEvent
-  metadata    Json?
-  occurredAt  DateTime    @default(now())
+  eventType  BehaviorEvent
+  metadata   Json?
+  occurredAt DateTime      @default(now())
 
   @@index([userId])
 }
@@ -617,18 +757,21 @@ enum BehaviorEvent {
   FOCUS_ABANDONED
   AREA_VIEWED
   REVIEW_OPENED
+  DOCUMENT_INGESTED
+  QUESTION_ASKED
+  SUGGESTIONS_EXTRACTED
 }
 
 model CalendarBlock {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  taskId    String?
-  task      Task?    @relation(fields: [taskId], references: [id])
-  habitId   String?
-  habit     Habit?   @relation(fields: [habitId], references: [id])
-  areaId    String?
-  area      Area?    @relation(fields: [areaId], references: [id])
+  id      String  @id @default(cuid())
+  userId  String
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskId  String?
+  task    Task?   @relation(fields: [taskId], references: [id])
+  habitId String?
+  habit   Habit?  @relation(fields: [habitId], references: [id])
+  areaId  String?
+  area    Area?   @relation(fields: [areaId], references: [id])
 
   title     String
   startTime DateTime
@@ -692,7 +835,62 @@ model FocusSession {
   durationMinutes Int?
   notes           String?
 
-  createdAt       DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@index([userId, startedAt])
+}
+
+// A directed, meaning-carrying connection between any two owned entities —
+// the "web" that sits alongside the strict Area→Goal→Project→Task spine.
+//
+// Why polymorphic (from/to type+id) instead of more FK columns on Task:
+// a single table lets a Task link to any number of Resources/Topics/Notes
+// (and later anything↔anything, powering Graph) without a migration per new
+// pairing. The trade: `toId`/`fromId` are NOT real foreign keys, so existence
+// + ownership is enforced in link.service.ts, not by the DB. The strict spine
+// FKs on Task stay exactly as they were — this is additive.
+//
+// `role` is what makes progress roll-up possible: only ADVANCES links count
+// toward a target's progress (a completed task advancing a Resource's
+// lessonsCompleted, or a Goal's derived % done); REFERENCES links are pure
+// context ("I consulted this note while doing the task").
+model EntityLink {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  fromType EntityType
+  fromId   String
+  toType   EntityType
+  toId     String
+
+  role   LinkRole @default(REFERENCES)
+  // Optional roll-up weight, e.g. "this task is worth 3 lessons". null == 1.
+  weight Int?
+
+  createdAt DateTime @default(now())
+
+  // One link per (direction, role) between the same two entities.
+  @@unique([userId, fromType, fromId, toType, toId, role])
+  // Forward lookup: "what does this task link to?"
+  @@index([userId, fromType, fromId])
+  // Reverse lookup: "what tasks advance this resource/goal?"
+  @@index([userId, toType, toId])
+}
+
+enum EntityType {
+  TASK
+  GOAL
+  PROJECT
+  RESOURCE
+  TOPIC
+  NOTE
+  HABIT
+  VAULT
+  DOCUMENT
+}
+
+enum LinkRole {
+  ADVANCES
+  REFERENCES
 }

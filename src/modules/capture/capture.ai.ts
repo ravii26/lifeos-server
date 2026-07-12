@@ -181,7 +181,7 @@ ${contextBlock}
 1. Match the item to a user area or topic in <user_context> based on semantic relevance.
 2. If no clear relevance is found, set suggestedAreaId/suggestedTopicId to null.
 3. Clean the raw text to produce a concise, professional title (max 120 characters) in 'meta.title'.
-4. Perform structural extraction: extract dates, recurring frequencies, URLs, platforms, tags, etc.
+4. Perform structural extraction: extract dates, recurring frequencies, URLs, platforms, tags, etc. Resolve any relative date/time phrase ("tomorrow", "tonight", "next Friday", "in 3 days") against the current date/time given in <user_context> — dueDate must always be an absolute ISO date, never a relative phrase. If the text implies "today" (e.g. "tonight", "this morning") but no explicit day, use today's date from <user_context>.
 5. Respond with a raw JSON object matching the schema below.
 6. Do NOT wrap your response in markdown code blocks (such as \`\`\`json). Output raw JSON only.
 </rules>

@@ -2,6 +2,7 @@ import { NotFoundError } from "../../shared/utils/errors.util.js"
 import { findTopicById } from "../topic/topic.repository.js"
 import { findNotebookById } from "../notebook/notebook.repository.js"
 import { findResourceById } from "../resource/resource.repository.js"
+import { embedSourceInBackground, removeSource } from "../knowledge/knowledge.embed.service.js"
 import {
   createNote,
   findNotesByUser,
@@ -45,7 +46,7 @@ export const createNoteService = async (
 ): Promise<NoteDto> => {
   await assertLinksOwned(userId, input)
 
-  return createNote({
+  const note = await createNote({
     userId,
     topicId: input.topicId,
     notebookId: input.notebookId ?? null,
@@ -55,6 +56,8 @@ export const createNoteService = async (
     noteType: input.noteType ?? "CONCEPT",
     tags: input.tags ?? [],
   })
+  embedSourceInBackground(userId, "NOTE", note.id, note.title, note.content)
+  return note
 }
 
 export const listNotesService = async (
@@ -92,10 +95,13 @@ export const updateNoteService = async (
   await getOwnedNote(id, userId)
   await assertLinksOwned(userId, input)
   await updateNote(id, userId, input)
-  return getOwnedNote(id, userId)
+  const updated = await getOwnedNote(id, userId)
+  embedSourceInBackground(userId, "NOTE", updated.id, updated.title, updated.content)
+  return updated
 }
 
 export const deleteNoteService = async (id: string, userId: string): Promise<void> => {
   await getOwnedNote(id, userId)
+  await removeSource(userId, "NOTE", id)
   await deleteNote(id, userId)
 }

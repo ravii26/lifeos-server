@@ -3,8 +3,9 @@ import { groqClient } from "../../lib/groq.js"
 import { computeHabitStats } from "../habit/habit.stats.js"
 import { scoreArea, type ScoringInput } from "../area/area.scoring.js"
 import { scoreGoalConfidence } from "../goal/goal.confidence.js"
-import { dayKeyInTz, hourInTz, utcDayKey } from "../../shared/utils/time.util.js"
+import { dayKeyInTz, timeOfDayLabel, utcDayKey } from "../../shared/utils/time.util.js"
 import type { findDecisionContext } from "./decisions.repository.js"
+import type { CalendarBlockDto } from "../calendar/calendar.dto.js"
 import logger from "../../lib/logger.js"
 import { runWithAiFallback } from "../../lib/ai-fallback.js"
 
@@ -42,6 +43,24 @@ export interface StreakAlert {
 
 export type Tone = "encouraging" | "firm" | "celebratory" | "neutral"
 
+// Today's time-blocked schedule, so the engine can recommend the right thing
+// for RIGHT NOW (what you're time-blocked into, or what's coming up next).
+export interface ScheduleInfo {
+  current: {
+    title: string
+    blockType: string
+    areaName: string | null
+    endsAt: string // local "HH:MM"
+  } | null
+  next: {
+    title: string
+    blockType: string
+    areaName: string | null
+    startsAt: string // local "HH:MM"
+  } | null
+  todayCount: number
+}
+
 // The single most important thing to do right now — drives the hero card.
 export interface PrimaryAction {
   type: SuggestionType
@@ -62,24 +81,17 @@ export interface DecisionResult {
   behaviorInsight: string
   weeklyPattern: string        // observation about which days/activities dominate
   streakAlerts: StreakAlert[]  // habits with streaks at risk today
+  schedule: ScheduleInfo       // today's calendar: what's on now / next
   generatedAt: Date
   source: "ai" | "heuristic"
 }
 
 // ── Build a lean context summary for the Gemini prompt ───────────────────────
 
-const timeOfDayLabel = (timeZone: string, now: Date): string => {
-  const h = hourInTz(timeZone, now)
-  if (h < 6) return "night"
-  if (h < 12) return "morning"
-  if (h < 17) return "afternoon"
-  return "evening"
-}
-
 interface ContextSummary {
   timeOfDay: string
   areas: { id: string; name: string; score: number; tasksDone: number; tasksTotal: number; streak: number }[]
-  topPendingTasks: { id: string; title: string; priority: string; daysOverdue: number | null; areaName: string | null; targetMinutes: number | null }[]
+  topPendingTasks: { id: string; title: string; priority: string; daysOverdue: number | null; areaName: string | null; targetMinutes: number | null; advances: string | null }[]
   habitsNotDoneToday: { id: string; title: string; areaName: string | null; currentStreak: number; targetMinutes: number | null }[]
   activeGoals: {
     id: string
@@ -102,6 +114,7 @@ interface ContextSummary {
     weaknesses: string[]
   }
   streakAlerts: StreakAlert[]
+  schedule: ScheduleInfo
   weeklyPattern: string
   pendingCaptures: number
   daysSinceReview: number | null
@@ -123,11 +136,53 @@ interface ContextSummary {
   insightNotes: { id: string; title: string }[]
 }
 
-const buildContextSummary = (raw: RawContext): ContextSummary => {
+const buildContextSummary = (
+  raw: RawContext,
+  calendarBlocks: CalendarBlockDto[],
+): ContextSummary => {
   const areaMap = new Map(raw.areas.map((a) => [a.id, a.name]))
   const tz = raw.timezone
   const now = new Date()
   const tk = dayKeyInTz(now, tz)
+
+  // Today's schedule: which time block (if any) is happening right now, and the
+  // next one coming up — so a recommendation can respect what the user has
+  // actually blocked their time for.
+  const fmtLocalTime = (d: Date): string =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(d)
+
+  const nowMs = now.getTime()
+  const sortedBlocks = [...calendarBlocks].sort(
+    (a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime(),
+  )
+  const currentRaw = sortedBlocks.find(
+    (b) => new Date(b.startTime).getTime() <= nowMs && nowMs < new Date(b.endTime).getTime(),
+  )
+  const nextRaw = sortedBlocks.find((b) => new Date(b.startTime).getTime() > nowMs)
+  const schedule: ScheduleInfo = {
+    current: currentRaw
+      ? {
+        title: currentRaw.title,
+        blockType: currentRaw.blockType,
+        areaName: currentRaw.areaId ? (areaMap.get(currentRaw.areaId) ?? null) : null,
+        endsAt: fmtLocalTime(new Date(currentRaw.endTime)),
+      }
+      : null,
+    next: nextRaw
+      ? {
+        title: nextRaw.title,
+        blockType: nextRaw.blockType,
+        areaName: nextRaw.areaId ? (areaMap.get(nextRaw.areaId) ?? null) : null,
+        startsAt: fmtLocalTime(new Date(nextRaw.startTime)),
+      }
+      : null,
+    todayCount: sortedBlocks.length,
+  }
 
   // Compute area scores
   const scoringInput: ScoringInput = {
@@ -177,6 +232,28 @@ const buildContextSummary = (raw: RawContext): ContextSummary => {
       message: `${stats.currentStreak}-day streak — log today to keep it alive!`,
     }))
 
+  // Which pending tasks advance an ACTIVE goal or an IN-PROGRESS resource?
+  // A task carrying an ADVANCES link into current work is worth more than an
+  // equally-ranked orphan to-do — annotate it so the coach can prefer it.
+  // Goals win over resources when a task advances both.
+  const activeGoalTitle = new Map(raw.activeGoals.map((g) => [g.id, g.title]))
+  const continueResTitle = new Map(raw.continueResources.map((r) => [r.id, r.title]))
+  const advanceByTask = new Map<string, string>()
+  for (const link of raw.advanceLinks) {
+    if (link.toType === "GOAL" && activeGoalTitle.has(link.toId)) {
+      advanceByTask.set(link.fromId, `active goal: ${activeGoalTitle.get(link.toId)}`)
+    }
+  }
+  for (const link of raw.advanceLinks) {
+    if (
+      link.toType === "RESOURCE" &&
+      continueResTitle.has(link.toId) &&
+      !advanceByTask.has(link.fromId)
+    ) {
+      advanceByTask.set(link.fromId, `in-progress resource: ${continueResTitle.get(link.toId)}`)
+    }
+  }
+
   // Map a raw task row to the lean shape the coach reasons over.
   const mapTask = (t: {
     id: string
@@ -196,6 +273,7 @@ const buildContextSummary = (raw: RawContext): ContextSummary => {
       daysOverdue: daysOverdue !== null && daysOverdue > 0 ? daysOverdue : null,
       areaName: t.areaId ? (areaMap.get(t.areaId) ?? null) : null,
       targetMinutes: t.targetMinutes ?? null,
+      advances: advanceByTask.get(t.id) ?? null,
     }
   }
 
@@ -339,6 +417,7 @@ const buildContextSummary = (raw: RawContext): ContextSummary => {
       weaknesses: raw.identity?.weaknesses ?? [],
     },
     streakAlerts: streakAlertsFixed,
+    schedule,
     weeklyPattern,
     pendingCaptures: raw.pendingCaptures,
     daysSinceReview,
@@ -385,17 +464,20 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
     })
   }
 
-  // 2. High priority tasks
-  const highTasks = ctx.topPendingTasks.filter(
-    (t) => (t.priority === "CRITICAL" || t.priority === "HIGH") && !t.daysOverdue,
-  )
+  // 2. High priority tasks — among equals, lead with one that advances an
+  // active goal or in-progress resource (its "advances" note is set).
+  const highTasks = ctx.topPendingTasks
+    .filter((t) => (t.priority === "CRITICAL" || t.priority === "HIGH") && !t.daysOverdue)
+    .sort((a, b) => Number(!!b.advances) - Number(!!a.advances))
   for (const t of highTasks.slice(0, 2)) {
     suggestions.push({
       rank: suggestions.length + 1,
       type: "TASK",
       refId: t.id,
       title: t.title,
-      reason: "High priority task — doing this moves the needle on your goals.",
+      reason: t.advances
+        ? `High priority — and it advances your ${t.advances}.`
+        : "High priority task — doing this moves the needle on your goals.",
       urgency: "HIGH",
       actionableSteps: ["Block 30 minutes now", "Start with the hardest part first", "Mark complete"],
     })
@@ -626,6 +708,14 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
       `You're ${tasksCompleted7d + habitsLogged7d} actions deep this week. ${atRiskStreaks > 0 ? `Protect your streak${atRiskStreaks > 1 ? "s" : ""} today, then ` : "Now "}focus on the one thing above — it moves the needle most right now.`
   }
 
+  // Anchor the narrative to the clock: what they're time-blocked into now, or
+  // what's coming up next.
+  if (ctx.schedule.current) {
+    briefing = `You're in your ${ctx.schedule.current.title} block until ${ctx.schedule.current.endsAt}. ${briefing}`
+  } else if (ctx.schedule.next) {
+    briefing = `${briefing} Next on your calendar: ${ctx.schedule.next.title} at ${ctx.schedule.next.startsAt}.`
+  }
+
   return {
     headline,
     briefing,
@@ -637,6 +727,7 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
     behaviorInsight,
     weeklyPattern: ctx.weeklyPattern,
     streakAlerts: ctx.streakAlerts,
+    schedule: ctx.schedule,
     generatedAt: new Date(),
     source: "heuristic",
   }
@@ -647,7 +738,7 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
 const SYSTEM_PROMPT = `You are the executive advisor AI of LifeOS, a personal operating system.
 Your goal is to analyze the user's current state and recommend exactly what they should focus on next to achieve their goals, build consistent habits, and maintain balanced life areas.
 
-You will receive a JSON snapshot of the user's current context: area scores, pending tasks, incomplete daily habits, active goals (each with a live confidence 0-100, a label ON_TRACK/AT_RISK/OFF_TRACK, and days since real progress), recent behavior patterns, the user's full identity profile (purpose, this year's goal, values, big-picture direction, life vision, personality, strengths, weaknesses), stalling active projects, the count of unsorted captures in the inbox (pendingCaptures), days since the last review (daysSinceReview), in-progress learning resources, saved vault items (motivation/memory), and recent insight notes.
+You will receive a JSON snapshot of the user's current context: the time of day, today's time-blocked schedule (schedule.current = the block happening RIGHT NOW with when it ends, schedule.next = the next upcoming block with when it starts, schedule.todayCount = how many blocks today), area scores, pending tasks (each may carry an "advances" note naming an active goal or in-progress resource it moves forward when completed), incomplete daily habits, active goals (each with a live confidence 0-100, a label ON_TRACK/AT_RISK/OFF_TRACK, and days since real progress), recent behavior patterns, the user's full identity profile (purpose, this year's goal, values, big-picture direction, life vision, personality, strengths, weaknesses), stalling active projects, the count of unsorted captures in the inbox (pendingCaptures), days since the last review (daysSinceReview), in-progress learning resources, saved vault items (motivation/memory), and recent insight notes.
 
 <rules>
 1. Output raw JSON only. Do NOT format with markdown code blocks (e.g. \`\`\`json).
@@ -664,11 +755,13 @@ You will receive a JSON snapshot of the user's current context: area scores, pen
    - A full inbox of unsorted captures (nudge processing it)
    - An overdue review (nudge reflecting), when little else is urgent
    - Continuing an in-progress resource, or revisiting a vault item / insight note — only when the user is otherwise idle
-5. Include 1-3 concrete next steps for each recommendation (short, actionable phrases of max 10 words each).
-6. If the user's dashboard is completely clear, recommend reviewing active goals or performing a reflection.
-7. VOICE: Write "headline" and "briefing" like a sharp, warm human coach talking directly to the user — second person ("you"), specific, never corporate or generic. The headline is a punchy one-liner (max ~12 words). The briefing is 2-3 sentences that tie their state together and point at the one thing that matters most. Reference the time of day where natural. Where it fits naturally, let their personality/strengths/weaknesses shape the framing (e.g. lean on a stated strength to make a task feel achievable, or name-check a stated weakness when it's actively the reason something's stalling) and tie the recommendation back to their bigPicture/lifeVision when the moment calls for it — don't force a reference to identity fields into every response, only when it makes the advice sharper. If identity fields are null/empty, don't mention their absence.
-8. "primaryAction" is the single most important thing to do RIGHT NOW. It must correspond to suggestions[0]. Set "estimatedMinutes" to a realistic effort estimate (habits ~5-15, tasks ~25-45) or null if unknowable.
-9. "tone" must match reality: "celebratory" when caught up / on a hot streak, "firm" when overdue or slipping, "encouraging" when restarting momentum, "neutral" otherwise.
+5. Tie-breaker: among tasks of otherwise-equal urgency, prefer one whose "advances" field is set — completing it moves an active goal or in-progress study track forward, not just an isolated to-do. When you recommend such a task, name what it advances in the "reason".
+6. Include 1-3 concrete next steps for each recommendation (short, actionable phrases of max 10 words each).
+7. If the user's dashboard is completely clear, recommend reviewing active goals or performing a reflection.
+8. VOICE: Write "headline" and "briefing" like a sharp, warm human coach talking directly to the user — second person ("you"), specific, never corporate or generic. The headline is a punchy one-liner (max ~12 words). The briefing is 2-3 sentences that tie their state together and point at the one thing that matters most. Reference the time of day where natural. Where it fits naturally, let their personality/strengths/weaknesses shape the framing (e.g. lean on a stated strength to make a task feel achievable, or name-check a stated weakness when it's actively the reason something's stalling) and tie the recommendation back to their bigPicture/lifeVision when the moment calls for it — don't force a reference to identity fields into every response, only when it makes the advice sharper. If identity fields are null/empty, don't mention their absence.
+9. "primaryAction" is the single most important thing to do RIGHT NOW. It must correspond to suggestions[0]. Set "estimatedMinutes" to a realistic effort estimate (habits ~5-15, tasks ~25-45) or null if unknowable.
+10. "tone" must match reality: "celebratory" when caught up / on a hot streak, "firm" when overdue or slipping, "encouraging" when restarting momentum, "neutral" otherwise.
+11. RESPECT THE CLOCK. If schedule.current is set, the user is in that time block RIGHT NOW — bias the primaryAction toward the block's activity/area and something that realistically fits before it ends (endsAt), and reference the block naturally in the briefing. If a linked habit/task belongs to the current block's area, prefer it. If schedule.next starts soon, don't tell them to start something that won't fit first — a quick habit or a small task is better. When nothing is scheduled, ignore this.
 </rules>
 
 <output_schema>
@@ -752,6 +845,7 @@ const finalizeAiDecision = (parsed: ParsedAiDecision, ctx: ContextSummary): Deci
     behaviorInsight: parsed.behaviorInsight ?? "",
     weeklyPattern: ctx.weeklyPattern,
     streakAlerts: ctx.streakAlerts,
+    schedule: ctx.schedule,
     generatedAt: new Date(),
     source: "ai",
   }
@@ -811,8 +905,11 @@ const groqGetDecisions = async (ctx: ContextSummary): Promise<DecisionResult> =>
   }
 }
 
-export const getDecisions = async (raw: RawContext): Promise<DecisionResult> => {
-  const ctx = buildContextSummary(raw)
+export const getDecisions = async (
+  raw: RawContext,
+  calendarBlocks: CalendarBlockDto[] = [],
+): Promise<DecisionResult> => {
+  const ctx = buildContextSummary(raw, calendarBlocks)
 
   return runWithAiFallback(
     "Decisions generator",
