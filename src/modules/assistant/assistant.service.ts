@@ -9,12 +9,17 @@ import { getDecisionsService } from "../decisions/decisions.service.js"
 import { runKnowledgeAsk } from "../knowledge/knowledge.ask.js"
 import type { AskResultDto } from "../knowledge/knowledge.dto.js"
 import type { DecisionResult } from "../decisions/decisions.ai.js"
+import { createCaptureAndProcessSync } from "../capture/capture.service.js"
 
 // Loose intent match for "what should I do" style messages — these get
 // routed to the decisions/"What Now" engine instead of document/life-data
 // Q&A, since that's the engine actually built to answer them.
 const WHAT_NOW_PATTERN =
   /\b(what (should|do) i do|what'?s? next|what now|what should i (focus|work|do) on|help me (focus|decide))\b/i
+
+// Intent pattern to detect when the user wants to add/capture/save/remember/remind/track/log something.
+const CAPTURE_INTENT_PATTERN =
+  /^(?:please\s+|can\s+you\s+|could\s+you\s+)?(add|create|save|remember|remind|track|capture|write\s+down|note\s+down|put\s+down|log|record)\b/i
 
 const decisionToAnswer = (d: DecisionResult): AskResultDto => {
   const lines: string[] = [d.briefing || d.headline]
@@ -37,7 +42,11 @@ const decisionToAnswer = (d: DecisionResult): AskResultDto => {
 const isGreetingOrEmpty = (s: string): boolean =>
   s.length === 0 || /^(hey|hi|hello|yo|sup)\b/i.test(s)
 
-export const assistantAsk = async (userId: string, message: string): Promise<AskResultDto> => {
+export const assistantAsk = async (
+  userId: string,
+  message: string,
+  history?: { role: "user" | "assistant"; text: string }[],
+): Promise<AskResultDto> => {
   const trimmed = message.trim()
 
   if (isGreetingOrEmpty(trimmed) || WHAT_NOW_PATTERN.test(trimmed)) {
@@ -45,5 +54,14 @@ export const assistantAsk = async (userId: string, message: string): Promise<Ask
     return decisionToAnswer(decision)
   }
 
-  return runKnowledgeAsk(userId, trimmed)
+  if (CAPTURE_INTENT_PATTERN.test(trimmed)) {
+    const result = await createCaptureAndProcessSync(userId, trimmed)
+    return {
+      answer: result.summary,
+      sources: [],
+      usedAi: true,
+    }
+  }
+
+  return runKnowledgeAsk(userId, trimmed, undefined, history)
 }

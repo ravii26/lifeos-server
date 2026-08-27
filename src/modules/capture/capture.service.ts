@@ -470,3 +470,91 @@ export const convertCaptureService = async (
 
   return { capture: toDto(updated), created: { type, entity } }
 }
+
+export const createCaptureAndProcessSync = async (
+  userId: string,
+  text: string,
+): Promise<{
+  capture: CaptureDto
+  autoConverted: boolean
+  convertedType?: string
+  convertedId?: string
+  summary: string
+}> => {
+  // 1. Get RAG context and classify the text synchronously
+  const ragContext = await getUserRagContext(userId)
+  const result = await classifyCapture(text, ragContext)
+  const detectedUrl = (result.meta.url as string | undefined) ?? null
+  const effectiveText = result.transcript ?? text
+
+  // 2. Create the capture in the DB
+  const capture = await createCapture({
+    userId,
+    rawText: effectiveText,
+    mediaType: "TEXT",
+    mediaUrl: null,
+    status: "PENDING",
+  })
+
+  // 3. Update the capture with the classification results
+  await updateCapture(capture.id, userId, {
+    detectedUrl,
+    confidence: result.confidence,
+    worthCheck: mapWorthCheck(result.worthCheck),
+    worthReason: result.worthReason,
+    suggestedOutputs: { type: result.type, meta: result.meta } as Prisma.InputJsonValue,
+  })
+
+  // 4. Check if it should auto-convert
+  const canAutoConvert =
+    result.confidence >= AUTO_CONVERT_THRESHOLD &&
+    (result.type === "TASK" || result.type === "VAULT")
+
+  let autoConverted = false
+
+  if (canAutoConvert) {
+    try {
+      await autoConvert(capture.id, userId, effectiveText, result.type, result.meta, detectedUrl)
+      autoConverted = true
+    } catch (err) {
+      logger.error("Auto-convert failed in sync capture:", err)
+    }
+  }
+
+  // Get the updated capture so we can return its final state (including createdOutputs if converted)
+  const updated = await getOwnedCapture(capture.id, userId)
+  const createdOutput = (updated.createdOutputs as CaptureDto["createdOutput"]) ?? null
+
+  // 5. Generate a nice summary message
+  let summary = ""
+  if (autoConverted && createdOutput) {
+    if (result.type === "TASK") {
+      summary = `I've created a task for you: "${result.meta.title || effectiveText}"`
+      if (result.meta.priority) summary += ` (${result.meta.priority} priority)`
+      if (result.meta.dueDate) {
+        summary += ` due by ${result.meta.dueDate}`
+      }
+      summary += "."
+    } else if (result.type === "VAULT") {
+      summary = `I've saved a reflection to your Vault: "${result.meta.title || effectiveText}".`
+    }
+  } else {
+    // Not auto-converted
+    const typeLabel = result.type.toLowerCase()
+    summary = `I've saved that as a prospective ${typeLabel} in your inbox.`
+    if (result.meta.suggestedAreaName) {
+      summary += ` (Suggested area: ${result.meta.suggestedAreaName})`
+    } else if (result.meta.suggestedTopicName) {
+      summary += ` (Suggested topic: ${result.meta.suggestedTopicName})`
+    }
+  }
+
+  return {
+    capture: toDto(updated),
+    autoConverted,
+    convertedType: result.type,
+    convertedId: createdOutput?.id,
+    summary,
+  }
+}
+

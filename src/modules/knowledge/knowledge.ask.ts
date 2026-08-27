@@ -101,20 +101,36 @@ Rules:
 - The current date/time is provided so you can reason about time-relative questions ("how long until…", "is this overdue", "which of these dates has passed") and resolve relative dates in the question ("today", "next week") against it. It is not itself a fact to report unless the question is about timing.
 - Do not mention "passages", "context", or citation numbers in your reply; just answer naturally.`
 
-const buildUserPrompt = (question: string, context: string, lifeContext: string, now: RagNow): string =>
-  `Current date/time: ${now.isoDate} (${now.weekday}), ${now.timeOfDay}, timezone ${now.timezone}.\n\nSaved material passages:\n\n${context || "(none)"}\n\nCurrent life data:\n\n${lifeContext}\n\nQuestion: ${question}`
+const formatHistory = (history?: { role: "user" | "assistant"; text: string }[]): string => {
+  if (!history || history.length === 0) return ""
+  return history
+    .map((turn) => `${turn.role === "user" ? "User" : "Assistant"}: ${turn.text}`)
+    .join("\n")
+}
+
+const buildUserPrompt = (
+  question: string,
+  context: string,
+  lifeContext: string,
+  now: RagNow,
+  historyText?: string,
+): string => {
+  const historyBlock = historyText ? `\n\nRecent conversation history:\n${historyText}\n` : ""
+  return `Current date/time: ${now.isoDate} (${now.weekday}), ${now.timeOfDay}, timezone ${now.timezone}.\n\nSaved material passages:\n\n${context || "(none)"}\n\nCurrent life data:\n\n${lifeContext}${historyBlock}\n\nQuestion: ${question}`
+}
 
 const geminiAnswer = async (
   question: string,
   context: string,
   lifeContext: string,
   now: RagNow,
+  historyText?: string,
 ): Promise<{ answer: string; usedAi: boolean }> => {
   if (!geminiClient) throw new Error("Gemini client not initialized")
   const model = geminiClient.getGenerativeModel({ model: GEMINI_MODEL })
   const result = await model.generateContent([
     { text: SYSTEM_PROMPT },
-    { text: buildUserPrompt(question, context, lifeContext, now) },
+    { text: buildUserPrompt(question, context, lifeContext, now, historyText) },
   ])
   const answer = result.response.text().trim()
   if (!answer) throw new Error("empty answer from Gemini")
@@ -126,12 +142,13 @@ const groqAnswer = async (
   context: string,
   lifeContext: string,
   now: RagNow,
+  historyText?: string,
 ): Promise<{ answer: string; usedAi: boolean }> => {
   if (!groqClient) throw new Error("Groq client not initialized")
   const res = await groqClient.chat.completions.create({
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: buildUserPrompt(question, context, lifeContext, now) },
+      { role: "user", content: buildUserPrompt(question, context, lifeContext, now, historyText) },
     ],
     model: "openai/gpt-oss-120b",
   })
@@ -161,6 +178,7 @@ export const runKnowledgeAsk = async (
   userId: string,
   question: string,
   documentId?: string,
+  history?: { role: "user" | "assistant"; text: string }[],
 ): Promise<AskResultDto> => {
   const documentRows = await findChunksForRetrieval(userId, documentId)
   const documentCandidates: Candidate[] = documentRows.map((r) => ({
@@ -208,11 +226,12 @@ export const runKnowledgeAsk = async (
   // already embedded in lifeContext when we have one, to avoid a second query.
   const now =
     lifeContext?.now ?? (geminiClient || groqClient ? await getUserNow(userId) : null)
+  const historyText = formatHistory(history)
   const { answer, usedAi } = await runWithAiFallback(
     "Knowledge Q&A",
     {
-      gemini: geminiClient && now ? () => geminiAnswer(question, context, lifeContextText, now) : undefined,
-      groq: groqClient && now ? () => groqAnswer(question, context, lifeContextText, now) : undefined,
+      gemini: geminiClient && now ? () => geminiAnswer(question, context, lifeContextText, now, historyText) : undefined,
+      groq: groqClient && now ? () => groqAnswer(question, context, lifeContextText, now, historyText) : undefined,
     },
     // No AI available: hand back the best-matching passage verbatim if there
     // is one; otherwise there's nothing verbatim to return for pure life-data
