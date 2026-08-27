@@ -5,7 +5,7 @@ import { env } from "./env.config.js"
 // fall back to sensible local dev defaults.
 const allowedOrigins = env.CORS_ORIGINS
   ? env.CORS_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean)
-  : ["http://localhost:5173", "http://localhost:3001"]
+  : ["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:3001"]
 
 export const corsOptions: CorsOptions = {
   // Allow requests with no Origin (mobile apps, curl, server-to-server) and any

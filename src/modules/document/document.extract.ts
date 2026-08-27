@@ -1,4 +1,4 @@
-import { geminiClient } from "../../lib/gemini.js"
+import { geminiClient, GEMINI_MODEL } from "../../lib/gemini.js"
 import { groqClient } from "../../lib/groq.js"
 import { runWithAiFallback } from "../../lib/ai-fallback.js"
 import type { RagNow } from "../../lib/rag.js"
@@ -112,7 +112,7 @@ const parseItems = (rawJson: string): ExtractedItem[] => {
 const geminiExtract = async (text: string, areaNames: string[], now: RagNow): Promise<ExtractedItem[]> => {
   if (!geminiClient) throw new Error("Gemini client not initialized")
   const model = geminiClient.getGenerativeModel({
-    model: "gemini-2.0-flash",
+    model: GEMINI_MODEL,
     generationConfig: { responseMimeType: "application/json" },
   })
   const result = await model.generateContent([

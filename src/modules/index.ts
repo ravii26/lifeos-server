@@ -21,6 +21,8 @@ import decisionsRoutes from "./decisions/decisions.routes.js"
 import graphRoutes from "./graph/graph.routes.js"
 import linkRoutes from "./link/link.routes.js"
 import documentRoutes from "./document/document.routes.js"
+import onboardingRoutes from "./onboarding/onboarding.routes.js"
+import assistantRoutes from "./assistant/assistant.routes.js"
 
 const router = Router()
 
@@ -48,5 +50,7 @@ router.use("/decisions", decisionsRoutes)
 router.use("/graph", graphRoutes)
 router.use("/links", linkRoutes)
 router.use("/documents", documentRoutes)
+router.use("/onboarding", onboardingRoutes)
+router.use("/assistant", assistantRoutes)
 
 export default router

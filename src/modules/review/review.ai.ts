@@ -1,4 +1,4 @@
-import { geminiClient } from "../../lib/gemini.js"
+import { geminiClient, GEMINI_MODEL } from "../../lib/gemini.js"
 import { groqClient } from "../../lib/groq.js"
 import { runWithAiFallback } from "../../lib/ai-fallback.js"
 
@@ -92,7 +92,7 @@ const finalize = (parsed: ParsedReviewAi, s: ReviewStatsForAi): ReviewInsights =
 const geminiInsights = async (s: ReviewStatsForAi): Promise<ReviewInsights> => {
   if (!geminiClient) throw new Error("Gemini client not initialized")
   const model = geminiClient.getGenerativeModel({
-    model: "gemini-2.0-flash",
+    model: GEMINI_MODEL,
     generationConfig: { responseMimeType: "application/json" },
   })
   const result = await model.generateContent([

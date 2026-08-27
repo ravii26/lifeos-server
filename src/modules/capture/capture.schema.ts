@@ -23,6 +23,12 @@ export const convertCaptureSchema = z.object({
   areaId: z.string().optional(),
   topicId: z.string().optional(),
   priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).optional(),
+  // The "learn-and-forget loop": when converting a NOTE/RESOURCE, optionally
+  // create one concrete follow-up Task in the same beat and link it (ADVANCES)
+  // back to the note/resource, so the learning isn't just filed away — always
+  // opt-in from the client, never automatic.
+  createFollowUpTask: z.boolean().optional(),
+  followUpTaskTitle: z.string().min(1).max(200).optional(),
 })
 
 export const listCapturesSchema = z.object({

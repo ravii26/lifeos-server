@@ -9,6 +9,7 @@ import { createNote } from "../note/note.repository.js"
 import { createResource } from "../resource/resource.repository.js"
 import { maybeCreateBacklogReminder } from "../task/backlog-reminder.service.js"
 import { createVaultItem } from "../vault/vault.repository.js"
+import { createLink } from "../link/link.repository.js"
 import {
   createCapture,
   findCapturesByUser,
@@ -294,7 +295,9 @@ const assertAreaOwned = async (areaId: string, userId: string) => {
   if (!(await findAreaById(areaId, userId))) throw new NotFoundError("Area not found")
 }
 const assertTopicOwned = async (topicId: string, userId: string) => {
-  if (!(await findTopicById(topicId, userId))) throw new NotFoundError("Topic not found")
+  const topic = await findTopicById(topicId, userId)
+  if (!topic) throw new NotFoundError("Topic not found")
+  return topic
 }
 
 // Resolves the effective areaId: user override → AI suggestion → null.
@@ -309,16 +312,55 @@ const resolveAreaId = async (
   return id
 }
 
+// Also returns the topic's areaId (when known) so a follow-up task can
+// inherit the right area without a second lookup.
 const resolveTopicId = async (
   overrideId: string | undefined,
   suggestedId: string | undefined,
   userId: string,
   required: boolean,
-): Promise<string | null> => {
+): Promise<{ topicId: string | null; areaId: string | null }> => {
   const id = overrideId ?? suggestedId ?? null
   if (required && !id) throw new ValidationError("topicId is required (or couldn't be inferred from context)")
-  if (id) await assertTopicOwned(id, userId)
-  return id
+  if (!id) return { topicId: null, areaId: null }
+  const topic = await assertTopicOwned(id, userId)
+  return { topicId: id, areaId: topic.areaId ?? null }
+}
+
+// The "learn-and-forget loop": create one concrete follow-up Task for a
+// newly-created Note/Resource and link Task -ADVANCES-> source, so a saved
+// idea has a real next action attached instead of just sitting in the
+// Library. Opt-in only (overrides.createFollowUpTask), never automatic —
+// failures here are swallowed so a linking hiccup can't fail the convert.
+const maybeCreateFollowUpTask = async (
+  userId: string,
+  sourceType: "NOTE" | "RESOURCE",
+  source: { id: string; title: string; areaId: string | null },
+  overrides: ConvertCaptureDto,
+): Promise<void> => {
+  if (!overrides.createFollowUpTask) return
+  try {
+    const task = await createTask({
+      userId,
+      areaId: source.areaId,
+      title: overrides.followUpTaskTitle?.trim() || `Act on: ${source.title}`,
+      priority: "MEDIUM",
+      status: "TODO",
+      taskType: "BOOLEAN",
+      source: "DUMP",
+      sourceId: source.id,
+    })
+    await createLink({
+      userId,
+      fromType: "TASK",
+      fromId: task.id,
+      toType: sourceType,
+      toId: source.id,
+      role: "ADVANCES",
+    })
+  } catch (err) {
+    logger.error("Follow-up task creation failed (capture still converted):", err)
+  }
 }
 
 export const convertCaptureService = async (
@@ -374,7 +416,7 @@ export const convertCaptureService = async (
       break
     }
     case "NOTE": {
-      const topicId = await resolveTopicId(overrides.topicId, meta.suggestedTopicId, userId, true)
+      const { topicId, areaId } = await resolveTopicId(overrides.topicId, meta.suggestedTopicId, userId, true)
       const note = await createNote({
         userId,
         topicId: topicId!,
@@ -385,10 +427,11 @@ export const convertCaptureService = async (
       })
       createdId = note.id
       entity = note
+      await maybeCreateFollowUpTask(userId, "NOTE", { id: note.id, title: note.title, areaId }, overrides)
       break
     }
     case "RESOURCE": {
-      const topicId = await resolveTopicId(overrides.topicId, meta.suggestedTopicId, userId, true)
+      const { topicId, areaId } = await resolveTopicId(overrides.topicId, meta.suggestedTopicId, userId, true)
       const resource = await createResource({
         userId,
         topicId: topicId!,
@@ -400,6 +443,7 @@ export const convertCaptureService = async (
       createdId = resource.id
       entity = resource
       await maybeCreateBacklogReminder(userId, resource.id)
+      await maybeCreateFollowUpTask(userId, "RESOURCE", { id: resource.id, title: resource.title, areaId }, overrides)
       break
     }
     case "VAULT": {

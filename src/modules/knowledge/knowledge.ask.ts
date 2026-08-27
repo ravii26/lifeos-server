@@ -1,8 +1,15 @@
-import { geminiClient } from "../../lib/gemini.js"
+import { geminiClient, GEMINI_MODEL } from "../../lib/gemini.js"
 import { groqClient } from "../../lib/groq.js"
 import { runWithAiFallback } from "../../lib/ai-fallback.js"
 import { cosineSimilarity, embedText, embeddingsAvailable } from "../../lib/embeddings.js"
-import { getUserNow, type RagNow } from "../../lib/rag.js"
+import {
+  getUserNow,
+  getUserLifeContext,
+  formatLifeContextForPrompt,
+  isLifeContextEmpty,
+  type RagNow,
+  type UserLifeContext,
+} from "../../lib/rag.js"
 import logger from "../../lib/logger.js"
 import { findChunksForRetrieval } from "../document/document.repository.js"
 import { findChunksForUser } from "./knowledge.repository.js"
@@ -11,10 +18,10 @@ import type { AskResultDto, AskSourceDto } from "./knowledge.dto.js"
 const TOP_K = 5
 const SNIPPET_LEN = 300
 
-const NO_MATERIAL_MSG =
-  "You don't have any ingested documents, notes, or resources yet. Add some, then ask again."
+const NOTHING_AT_ALL_MSG =
+  "You don't have any areas, goals, habits, tasks, or saved material yet — there's nothing for me to answer from."
 const NOT_FOUND_MSG =
-  "I couldn't find anything about that in your saved material."
+  "I couldn't find anything about that in your saved material or your current areas/goals/habits/tasks."
 
 interface Candidate {
   sourceType: "DOCUMENT" | "NOTE" | "RESOURCE"
@@ -79,36 +86,52 @@ const buildContext = (top: Ranked[]): string =>
     .map((c, i) => `[${i + 1}] ${c.heading ? `${c.heading}\n` : ""}${c.content}`)
     .join("\n\n")
 
-const SYSTEM_PROMPT = `You are the study assistant inside LifeOS, a personal operating system. Answer the user's question using ONLY the numbered context passages, which come from the user's own saved material (documents, notes, and resources).
+const SYSTEM_PROMPT = `You are the personal assistant inside LifeOS. Answer the user's question using the context provided below, which has two parts:
+
+1. Numbered passages retrieved from the user's saved material (documents, notes, resources) — may be empty.
+2. Their current life data: life areas, goals, habits, tasks, and in-progress learning resources — may be empty.
 
 Rules:
-- Base your answer strictly on the passages. Do not add outside facts.
-- If the passages don't contain the answer, say you couldn't find it in their saved material — do not guess.
+- Base your answer strictly on what's given. Do not add outside facts, and do not invent areas/goals/habits/tasks that aren't listed.
+- Prefer the life data for questions about the user's own state ("what are my goals", "what tasks are open in Fitness", "what habits am I tracking") — these questions don't need saved material to answer.
+- Prefer the numbered passages for questions about specific content the user saved (a document's explanation, a note's detail).
+- Combine both when relevant (e.g. "how much protein should I eat" might use a saved passage for the number and their Fitness goal/tasks for how it applies to them right now).
+- If neither source has the answer, say so plainly — do not guess.
 - Be concise and practical. Use the user's own wording where helpful.
-- The current date/time is provided only so you can reason about time-relative questions ("how long until…", "is this still upcoming", "which of these dates has passed"). It is NOT a fact from their material — never introduce it as new content, and only reference it when the question is actually about timing. Resolve any relative date in the question ("today", "next week") against it.
+- The current date/time is provided so you can reason about time-relative questions ("how long until…", "is this overdue", "which of these dates has passed") and resolve relative dates in the question ("today", "next week") against it. It is not itself a fact to report unless the question is about timing.
 - Do not mention "passages", "context", or citation numbers in your reply; just answer naturally.`
 
-const buildUserPrompt = (question: string, context: string, now: RagNow): string =>
-  `Current date/time: ${now.isoDate} (${now.weekday}), ${now.timeOfDay}, timezone ${now.timezone}.\n\nContext passages:\n\n${context}\n\nQuestion: ${question}`
+const buildUserPrompt = (question: string, context: string, lifeContext: string, now: RagNow): string =>
+  `Current date/time: ${now.isoDate} (${now.weekday}), ${now.timeOfDay}, timezone ${now.timezone}.\n\nSaved material passages:\n\n${context || "(none)"}\n\nCurrent life data:\n\n${lifeContext}\n\nQuestion: ${question}`
 
-const geminiAnswer = async (question: string, context: string, now: RagNow): Promise<{ answer: string; usedAi: boolean }> => {
+const geminiAnswer = async (
+  question: string,
+  context: string,
+  lifeContext: string,
+  now: RagNow,
+): Promise<{ answer: string; usedAi: boolean }> => {
   if (!geminiClient) throw new Error("Gemini client not initialized")
-  const model = geminiClient.getGenerativeModel({ model: "gemini-2.0-flash" })
+  const model = geminiClient.getGenerativeModel({ model: GEMINI_MODEL })
   const result = await model.generateContent([
     { text: SYSTEM_PROMPT },
-    { text: buildUserPrompt(question, context, now) },
+    { text: buildUserPrompt(question, context, lifeContext, now) },
   ])
   const answer = result.response.text().trim()
   if (!answer) throw new Error("empty answer from Gemini")
   return { answer, usedAi: true }
 }
 
-const groqAnswer = async (question: string, context: string, now: RagNow): Promise<{ answer: string; usedAi: boolean }> => {
+const groqAnswer = async (
+  question: string,
+  context: string,
+  lifeContext: string,
+  now: RagNow,
+): Promise<{ answer: string; usedAi: boolean }> => {
   if (!groqClient) throw new Error("Groq client not initialized")
   const res = await groqClient.chat.completions.create({
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: buildUserPrompt(question, context, now) },
+      { role: "user", content: buildUserPrompt(question, context, lifeContext, now) },
     ],
     model: "openai/gpt-oss-120b",
   })
@@ -126,11 +149,14 @@ const toSource = (c: Ranked): AskSourceDto => ({
   score: Math.round(c.score * 1000) / 1000,
 })
 
-// Retrieve the most relevant passages from the user's saved material and answer
-// the question from them (Gemini → Groq → verbatim-passage heuristic).
-// `documentId` scopes to a single document exactly as before (Document-only,
-// no Notes/Resources mixed in); omit it to search everything — every READY
-// Document plus every embedded Note and Resource.
+// Retrieve the most relevant passages from the user's saved material, blend
+// in their current life data (areas/goals/habits/tasks/resources), and answer
+// the question from both (Gemini → Groq → heuristic). `documentId` scopes
+// retrieval to a single document (Document-only, no Notes/Resources/life data
+// mixed in — the user explicitly asked about one document); omit it to search
+// everything: every READY Document, every embedded Note/Resource, and the
+// user's live areas/goals/habits/tasks/resources, so the assistant can answer
+// from the user's actual state without requiring anything to be uploaded.
 export const runKnowledgeAsk = async (
   userId: string,
   question: string,
@@ -147,8 +173,12 @@ export const runKnowledgeAsk = async (
   }))
 
   let candidates = documentCandidates
+  let lifeContext: UserLifeContext | null = null
   if (!documentId) {
-    const knowledgeRows = await findChunksForUser(userId)
+    const [knowledgeRows, life] = await Promise.all([
+      findChunksForUser(userId),
+      getUserLifeContext(userId),
+    ])
     const knowledgeCandidates: Candidate[] = knowledgeRows.map((r) => ({
       sourceType: r.sourceType,
       sourceId: r.sourceId,
@@ -158,31 +188,43 @@ export const runKnowledgeAsk = async (
       embedding: r.embedding,
     }))
     candidates = [...documentCandidates, ...knowledgeCandidates]
+    lifeContext = life
   }
 
-  if (candidates.length === 0) {
-    return { answer: NO_MATERIAL_MSG, sources: [], usedAi: false }
+  if (candidates.length === 0 && (!lifeContext || isLifeContextEmpty(lifeContext))) {
+    return { answer: NOTHING_AT_ALL_MSG, sources: [], usedAi: false }
   }
 
-  const top = await rank(question, candidates)
-  if (top.length === 0) {
+  const top = candidates.length > 0 ? await rank(question, candidates) : []
+  const hasLifeData = lifeContext !== null && !isLifeContextEmpty(lifeContext)
+  if (top.length === 0 && !hasLifeData) {
     return { answer: NOT_FOUND_MSG, sources: [], usedAi: false }
   }
 
   const context = buildContext(top)
+  const lifeContextText = lifeContext ? formatLifeContextForPrompt(lifeContext) : "(not applicable — question scoped to one document)"
   // Only fetch the clock when we actually have an AI provider to reason with;
-  // the verbatim-passage fallback below doesn't use it.
+  // the verbatim-passage fallback below doesn't use it. Reuse the clock
+  // already embedded in lifeContext when we have one, to avoid a second query.
   const now =
-    geminiClient || groqClient ? await getUserNow(userId) : null
+    lifeContext?.now ?? (geminiClient || groqClient ? await getUserNow(userId) : null)
   const { answer, usedAi } = await runWithAiFallback(
     "Knowledge Q&A",
     {
-      gemini: geminiClient && now ? () => geminiAnswer(question, context, now) : undefined,
-      groq: groqClient && now ? () => groqAnswer(question, context, now) : undefined,
+      gemini: geminiClient && now ? () => geminiAnswer(question, context, lifeContextText, now) : undefined,
+      groq: groqClient && now ? () => groqAnswer(question, context, lifeContextText, now) : undefined,
     },
-    // No AI available: hand back the best-matching passage verbatim so the
-    // feature still works (just without a synthesised answer).
-    () => ({ answer: top[0]!.content, usedAi: false }),
+    // No AI available: hand back the best-matching passage verbatim if there
+    // is one; otherwise there's nothing verbatim to return for pure life-data
+    // questions without an LLM to synthesise them into prose.
+    () =>
+      top.length > 0
+        ? { answer: top[0]!.content, usedAi: false }
+        : {
+            answer:
+              "AI is unavailable right now, so I can't summarise your current areas/goals/habits/tasks into an answer — but that data exists, try again shortly.",
+            usedAi: false,
+          },
   )
 
   return { answer, sources: top.map(toSource), usedAi }

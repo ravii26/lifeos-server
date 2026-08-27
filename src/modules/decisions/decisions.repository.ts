@@ -30,6 +30,7 @@ export const findDecisionContext = async (userId: string) => {
     vaultItems,
     insightNotes,
     advanceLinks,
+    userSettings,
   ] = await Promise.all([
       // Areas with scoring data
       prisma.area.findMany({
@@ -192,6 +193,14 @@ export const findDecisionContext = async (userId: string) => {
         },
         select: { fromId: true, toType: true, toId: true },
       }),
+
+      // Which optional modules this user has actually opted into — so the
+      // coach can tell "disabled on purpose" apart from "just empty" and
+      // never nag about a module the user deliberately turned off.
+      prisma.userSettings.findUnique({
+        where: { userId },
+        select: { enabledModules: true },
+      }),
     ])
 
   return {
@@ -211,5 +220,8 @@ export const findDecisionContext = async (userId: string) => {
     vaultItems,
     insightNotes,
     advanceLinks,
+    // Empty/missing = every optional module is on (matches the settings
+    // module's own "empty means all enabled" rule).
+    enabledModules: userSettings?.enabledModules ?? [],
   }
 }

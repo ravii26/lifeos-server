@@ -1,5 +1,5 @@
 import { toFile } from "groq-sdk"
-import { geminiClient } from "../../lib/gemini.js"
+import { geminiClient, GEMINI_MODEL } from "../../lib/gemini.js"
 import { groqClient } from "../../lib/groq.js"
 import { formatRagContextForPrompt, type UserRagContext } from "../../lib/rag.js"
 import logger from "../../lib/logger.js"
@@ -216,7 +216,7 @@ const geminiClassify = async (rawText: string, ctx?: UserRagContext): Promise<Cl
 
   try {
     const model = geminiClient.getGenerativeModel({
-      model: "gemini-2.0-flash",
+      model: GEMINI_MODEL,
       generationConfig: { responseMimeType: "application/json" },
     })
 
@@ -320,7 +320,7 @@ const geminiClassifyMedia = async (
   if (!geminiClient) throw new Error("Gemini client not initialized")
 
   const model = geminiClient.getGenerativeModel({
-    model: "gemini-2.0-flash",
+    model: GEMINI_MODEL,
     generationConfig: { responseMimeType: "application/json" },
   })
 

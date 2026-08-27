@@ -9,7 +9,11 @@ export const upsertSettings = (userId: string, data: Prisma.UserSettingsUnchecke
   const createData = data as Prisma.UserSettingsUncheckedCreateInput
   return prisma.userSettings.upsert({
     where: { userId },
-    create: { ...createData, userId },
+    // enabledModules has no DB default — if a user's first-ever settings
+    // update doesn't happen to touch modules (e.g. they only change vibe),
+    // the create branch needs an explicit [] or Prisma throws a null
+    // constraint violation instead of creating the row.
+    create: { enabledModules: [], ...createData, userId },
     update: data,
   })
 }

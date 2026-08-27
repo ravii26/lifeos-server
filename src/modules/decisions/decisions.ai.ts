@@ -1,4 +1,4 @@
-import { geminiClient } from "../../lib/gemini.js"
+import { geminiClient, GEMINI_MODEL } from "../../lib/gemini.js"
 import { groqClient } from "../../lib/groq.js"
 import { computeHabitStats } from "../habit/habit.stats.js"
 import { scoreArea, type ScoringInput } from "../area/area.scoring.js"
@@ -116,6 +116,11 @@ interface ContextSummary {
   streakAlerts: StreakAlert[]
   schedule: ScheduleInfo
   weeklyPattern: string
+  // Best-effort: an Area whose name appears in the user's stated
+  // thisYearGoal/purpose — used to bias ranking toward what they said
+  // matters most, not just what's objectively overdue. Null when no area
+  // name is mentioned in either field (nothing to anchor to).
+  priorityAreaName: string | null
   pendingCaptures: number
   daysSinceReview: number | null
   stalledProjects: {
@@ -136,10 +141,18 @@ interface ContextSummary {
   insightNotes: { id: string; title: string }[]
 }
 
+// Empty enabledModules means "everything on" (the settings module's own
+// rule) — so isEnabled is only ever false when the user explicitly turned
+// a module off. A disabled module's absence should be silent: never
+// fetched into the narrative, never treated as a gap worth nudging about.
+const isModuleEnabled = (enabledModules: string[], moduleKey: string): boolean =>
+  enabledModules.length === 0 || enabledModules.includes(moduleKey)
+
 const buildContextSummary = (
   raw: RawContext,
   calendarBlocks: CalendarBlockDto[],
 ): ContextSummary => {
+  const enabled = (moduleKey: string) => isModuleEnabled(raw.enabledModules, moduleKey)
   const areaMap = new Map(raw.areas.map((a) => [a.id, a.name]))
   const tz = raw.timezone
   const now = new Date()
@@ -399,32 +412,47 @@ const buildContextSummary = (
 
   const insightNotes = raw.insightNotes.map((n) => ({ id: n.id, title: n.title }))
 
+  // Best-effort match: which of the user's Areas is named inside their
+  // stated thisYearGoal/purpose? Used as a ranking tie-breaker so the coach
+  // leans toward what they said matters, not just what's technically overdue.
+  const identityText = `${raw.identity?.thisYearGoal ?? ""} ${raw.identity?.purpose ?? ""}`.toLowerCase()
+  const priorityAreaName = identityText.trim()
+    ? (raw.areas.find((a) => a.name.length > 2 && identityText.includes(a.name.toLowerCase()))?.name ?? null)
+    : null
+
+  // Module-gated fields: a disabled module is fetched (the repository query
+  // still runs — simpler and low-risk for a rough pass) but never reaches the
+  // narrative, so it's indistinguishable from "the user has none of these"
+  // rather than being flagged as a gap. See isModuleEnabled above.
+  const identityEnabled = enabled("identity")
+
   return {
     timeOfDay: timeOfDayLabel(tz, now),
     areas,
     topPendingTasks,
-    habitsNotDoneToday,
-    activeGoals,
+    habitsNotDoneToday: enabled("habits") ? habitsNotDoneToday : [],
+    activeGoals: enabled("goals") ? activeGoals : [],
     recentActivity: { tasksCompleted7d, habitsLogged7d, focusSessions7d, mostActiveAreaId },
     identity: {
-      purpose: raw.identity?.purpose ?? null,
-      thisYearGoal: raw.identity?.thisYearGoal ?? null,
-      values: raw.identity?.values ?? [],
-      bigPicture: raw.identity?.bigPicture ?? null,
-      lifeVision: raw.identity?.lifeVision ?? null,
-      personality: raw.identity?.personality ?? null,
-      strengths: raw.identity?.strengths ?? [],
-      weaknesses: raw.identity?.weaknesses ?? [],
+      purpose: identityEnabled ? (raw.identity?.purpose ?? null) : null,
+      thisYearGoal: identityEnabled ? (raw.identity?.thisYearGoal ?? null) : null,
+      values: identityEnabled ? (raw.identity?.values ?? []) : [],
+      bigPicture: identityEnabled ? (raw.identity?.bigPicture ?? null) : null,
+      lifeVision: identityEnabled ? (raw.identity?.lifeVision ?? null) : null,
+      personality: identityEnabled ? (raw.identity?.personality ?? null) : null,
+      strengths: identityEnabled ? (raw.identity?.strengths ?? []) : [],
+      weaknesses: identityEnabled ? (raw.identity?.weaknesses ?? []) : [],
     },
-    streakAlerts: streakAlertsFixed,
+    streakAlerts: enabled("habits") ? streakAlertsFixed : [],
     schedule,
     weeklyPattern,
+    priorityAreaName: identityEnabled ? priorityAreaName : null,
     pendingCaptures: raw.pendingCaptures,
-    daysSinceReview,
-    stalledProjects,
-    continueResources,
-    vaultPicks,
-    insightNotes,
+    daysSinceReview: enabled("review") ? daysSinceReview : null,
+    stalledProjects: enabled("projects") ? stalledProjects : [],
+    continueResources: enabled("learn") ? continueResources : [],
+    vaultPicks: enabled("vault") ? vaultPicks : [],
+    insightNotes: enabled("knowledge") ? insightNotes : [],
   }
 }
 
@@ -450,7 +478,14 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
   const idle =
     ctx.recentActivity.tasksCompleted7d === 0 && ctx.recentActivity.habitsLogged7d === 0
 
-  // 1. Overdue tasks first
+  // Best-effort tie-breaker: does this item belong to the Area the user
+  // named in their own thisYearGoal/purpose? Reflects their stated priority
+  // back at ranking time instead of treating every area as equal weight.
+  const inPriorityArea = (areaName: string | null) =>
+    ctx.priorityAreaName !== null && areaName === ctx.priorityAreaName
+
+  // 1. Overdue tasks first — an actual missed deadline outranks everything,
+  // regardless of area.
   const overdueTasks = ctx.topPendingTasks.filter((t) => (t.daysOverdue ?? 0) > 0)
   for (const t of overdueTasks.slice(0, 2)) {
     suggestions.push({
@@ -464,43 +499,27 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
     })
   }
 
-  // 2. High priority tasks — among equals, lead with one that advances an
-  // active goal or in-progress resource (its "advances" note is set).
-  const highTasks = ctx.topPendingTasks
-    .filter((t) => (t.priority === "CRITICAL" || t.priority === "HIGH") && !t.daysOverdue)
-    .sort((a, b) => Number(!!b.advances) - Number(!!a.advances))
-  for (const t of highTasks.slice(0, 2)) {
+  // 2. A stalling active project — decay signal, promoted ahead of routine
+  // high-priority tasks so something quietly going stale doesn't get buried.
+  const stalledProject = [...ctx.stalledProjects].sort(
+    (a, b) => Number(inPriorityArea(b.areaName)) - Number(inPriorityArea(a.areaName)),
+  )[0]
+  if (stalledProject) {
     suggestions.push({
       rank: suggestions.length + 1,
-      type: "TASK",
-      refId: t.id,
-      title: t.title,
-      reason: t.advances
-        ? `High priority — and it advances your ${t.advances}.`
-        : "High priority task — doing this moves the needle on your goals.",
-      urgency: "HIGH",
-      actionableSteps: ["Block 30 minutes now", "Start with the hardest part first", "Mark complete"],
+      type: "PROJECT",
+      refId: stalledProject.id,
+      title: `Nudge "${stalledProject.title}" forward`,
+      reason:
+        stalledProject.daysSinceProgress != null
+          ? `${stalledProject.openTasks} open task(s), no progress in ${stalledProject.daysSinceProgress} day(s).`
+          : `${stalledProject.openTasks} open task(s) and no progress logged yet.`,
+      urgency: "MEDIUM",
+      actionableSteps: ["Open the project", "Complete or schedule its next task"],
     })
   }
 
-  // 3. Streak-at-risk habits first, then all remaining
-  const sortedHabits = [...ctx.habitsNotDoneToday].sort(
-    (a, b) => b.currentStreak - a.currentStreak,
-  )
-  for (const h of sortedHabits.slice(0, 2)) {
-    const streakNote = h.currentStreak > 0 ? ` Protect your ${h.currentStreak}-day streak.` : ""
-    suggestions.push({
-      rank: suggestions.length + 1,
-      type: "HABIT",
-      refId: h.id,
-      title: `Log: ${h.title}`,
-      reason: `Not done today.${streakNote}`,
-      urgency: h.currentStreak > 2 ? "HIGH" : "MEDIUM",
-      actionableSteps: ["Do it now (even the minimum counts)", "Log it in the app"],
-    })
-  }
-
-  // 3.5 Active goal losing momentum — surface the single worst stalling goal,
+  // 3. Active goal losing momentum — surface the single worst stalling goal,
   // so the accountability number actually changes what the coach recommends.
   const atRiskGoal = [...ctx.activeGoals]
     .filter(
@@ -508,7 +527,11 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
         g.confidenceLabel === "OFF_TRACK" ||
         (g.confidenceLabel === "AT_RISK" && (g.daysSinceProgress ?? 0) >= 5),
     )
-    .sort((a, b) => a.confidence - b.confidence)[0]
+    .sort(
+      (a, b) =>
+        Number(inPriorityArea(b.areaName)) - Number(inPriorityArea(a.areaName)) ||
+        a.confidence - b.confidence,
+    )[0]
   if (atRiskGoal) {
     suggestions.push({
       rank: suggestions.length + 1,
@@ -527,7 +550,62 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
     })
   }
 
-  // 4. Neglected area
+  // 4. Streak-at-risk habits first, then all remaining — same-day decay risk.
+  const sortedHabits = [...ctx.habitsNotDoneToday].sort(
+    (a, b) => b.currentStreak - a.currentStreak,
+  )
+  for (const h of sortedHabits.slice(0, 2)) {
+    const streakNote = h.currentStreak > 0 ? ` Protect your ${h.currentStreak}-day streak.` : ""
+    suggestions.push({
+      rank: suggestions.length + 1,
+      type: "HABIT",
+      refId: h.id,
+      title: `Log: ${h.title}`,
+      reason: `Not done today.${streakNote}`,
+      urgency: h.currentStreak > 2 ? "HIGH" : "MEDIUM",
+      actionableSteps: ["Do it now (even the minimum counts)", "Log it in the app"],
+    })
+  }
+
+  // 5. High priority tasks — among equals, lead with one that advances an
+  // active goal or in-progress resource, then one in the user's priority area.
+  const highTasks = ctx.topPendingTasks
+    .filter((t) => (t.priority === "CRITICAL" || t.priority === "HIGH") && !t.daysOverdue)
+    .sort(
+      (a, b) =>
+        Number(!!b.advances) - Number(!!a.advances) ||
+        Number(inPriorityArea(b.areaName)) - Number(inPriorityArea(a.areaName)),
+    )
+  for (const t of highTasks.slice(0, 2)) {
+    suggestions.push({
+      rank: suggestions.length + 1,
+      type: "TASK",
+      refId: t.id,
+      title: t.title,
+      reason: t.advances
+        ? `High priority — and it advances your ${t.advances}.`
+        : "High priority task — doing this moves the needle on your goals.",
+      urgency: "HIGH",
+      actionableSteps: ["Block 30 minutes now", "Start with the hardest part first", "Mark complete"],
+    })
+  }
+
+  // 6. Continue a learning resource you already started — decay signal,
+  // promoted out of "only when idle" so an abandoned resource stays visible.
+  const resource = ctx.continueResources[0]
+  if (resource) {
+    suggestions.push({
+      rank: suggestions.length + 1,
+      type: "RESOURCE",
+      refId: resource.id,
+      title: `Continue: ${resource.title}`,
+      reason: "You started this and haven't finished — keep the momentum.",
+      urgency: "LOW",
+      actionableSteps: ["Spend 15 minutes on it", "Log your progress"],
+    })
+  }
+
+  // 7. Neglected area
   const neglected = [...ctx.areas].sort((a, b) => a.score - b.score)[0]
   if (neglected && neglected.score < 40) {
     suggestions.push({
@@ -545,24 +623,7 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
     })
   }
 
-  // 5. A stalling active project
-  const stalledProject = ctx.stalledProjects[0]
-  if (stalledProject) {
-    suggestions.push({
-      rank: suggestions.length + 1,
-      type: "PROJECT",
-      refId: stalledProject.id,
-      title: `Nudge "${stalledProject.title}" forward`,
-      reason:
-        stalledProject.daysSinceProgress != null
-          ? `${stalledProject.openTasks} open task(s), no progress in ${stalledProject.daysSinceProgress} day(s).`
-          : `${stalledProject.openTasks} open task(s) and no progress logged yet.`,
-      urgency: "MEDIUM",
-      actionableSteps: ["Open the project", "Complete or schedule its next task"],
-    })
-  }
-
-  // 6. Unsorted captures piling up in the inbox
+  // 8. Unsorted captures piling up in the inbox
   if (ctx.pendingCaptures >= 3) {
     suggestions.push({
       rank: suggestions.length + 1,
@@ -575,7 +636,7 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
     })
   }
 
-  // 7. Reflection overdue
+  // 9. Reflection overdue
   if (ctx.daysSinceReview === null || ctx.daysSinceReview >= 7) {
     suggestions.push({
       rank: suggestions.length + 1,
@@ -591,21 +652,7 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
     })
   }
 
-  // 8. Continue a learning resource you already started
-  const resource = ctx.continueResources[0]
-  if (resource) {
-    suggestions.push({
-      rank: suggestions.length + 1,
-      type: "RESOURCE",
-      refId: resource.id,
-      title: `Continue: ${resource.title}`,
-      reason: "You started this and haven't finished — keep the momentum.",
-      urgency: "LOW",
-      actionableSteps: ["Spend 15 minutes on it", "Log your progress"],
-    })
-  }
-
-  // 9. Revisit a vault item — only when slipping/idle, and pick the RIGHT one:
+  // 10. Revisit a vault item — only when slipping/idle, and pick the RIGHT one:
   // prefer a MOTIVATION/RECOVERY item (the tool for this moment), and among
   // candidates favour what has actually helped before and hasn't been
   // over-surfaced (helpfulCount desc, then usedCount asc) — not just the newest.
@@ -632,7 +679,7 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
     }
   }
 
-  // 10. Develop a recent insight before it fades
+  // 11. Develop a recent insight before it fades
   const insight = ctx.insightNotes[0]
   if (insight) {
     suggestions.push({
@@ -738,24 +785,25 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
 const SYSTEM_PROMPT = `You are the executive advisor AI of LifeOS, a personal operating system.
 Your goal is to analyze the user's current state and recommend exactly what they should focus on next to achieve their goals, build consistent habits, and maintain balanced life areas.
 
-You will receive a JSON snapshot of the user's current context: the time of day, today's time-blocked schedule (schedule.current = the block happening RIGHT NOW with when it ends, schedule.next = the next upcoming block with when it starts, schedule.todayCount = how many blocks today), area scores, pending tasks (each may carry an "advances" note naming an active goal or in-progress resource it moves forward when completed), incomplete daily habits, active goals (each with a live confidence 0-100, a label ON_TRACK/AT_RISK/OFF_TRACK, and days since real progress), recent behavior patterns, the user's full identity profile (purpose, this year's goal, values, big-picture direction, life vision, personality, strengths, weaknesses), stalling active projects, the count of unsorted captures in the inbox (pendingCaptures), days since the last review (daysSinceReview), in-progress learning resources, saved vault items (motivation/memory), and recent insight notes.
+You will receive a JSON snapshot of the user's current context: the time of day, today's time-blocked schedule (schedule.current = the block happening RIGHT NOW with when it ends, schedule.next = the next upcoming block with when it starts, schedule.todayCount = how many blocks today), area scores, pending tasks (each may carry an "advances" note naming an active goal or in-progress resource it moves forward when completed), incomplete daily habits, active goals (each with a live confidence 0-100, a label ON_TRACK/AT_RISK/OFF_TRACK, and days since real progress), recent behavior patterns, the user's full identity profile (purpose, this year's goal, values, big-picture direction, life vision, personality, strengths, weaknesses), priorityAreaName (an Area name detected inside the user's own thisYearGoal/purpose text, or null — this is their self-stated top priority, not a guess), stalling active projects, the count of unsorted captures in the inbox (pendingCaptures), days since the last review (daysSinceReview), in-progress learning resources, saved vault items (motivation/memory), and recent insight notes.
 
 <rules>
 1. Output raw JSON only. Do NOT format with markdown code blocks (e.g. \`\`\`json).
 2. Recommendations must be highly specific, directly naming tasks or habits in the context. Avoid generic or high-level advice.
 3. Be direct and honest. If the user is neglecting an area or falling behind on habits, state it clearly.
-4. Urgency/Priority hierarchy:
+4. Urgency/Priority hierarchy — note that decay signals (a stalling project, an abandoned resource) are deliberately ranked ahead of routine high-priority tasks: LifeOS's core job is making sure nothing important goes stale unnoticed, not just clearing a to-do list:
    - Overdue tasks
-   - Incomplete habits with active streaks (highest streak first)
-   - High-priority tasks
+   - A stalling active project (open tasks, no recent progress) — surface this even when nothing else is urgent; don't bury it behind routine tasks
    - Active goals losing momentum (OFF_TRACK/AT_RISK confidence, many days since progress)
-   - A stalling active project (open tasks, no recent progress)
+   - Incomplete habits with active streaks (highest streak first) — same-day decay risk
+   - High-priority tasks
+   - An in-progress resource that's gone untouched — surface it as a standing nudge, not only when the user is otherwise idle
    - Goals with approaching deadlines
    - Neglected life areas (low scores)
    - A full inbox of unsorted captures (nudge processing it)
    - An overdue review (nudge reflecting), when little else is urgent
-   - Continuing an in-progress resource, or revisiting a vault item / insight note — only when the user is otherwise idle
-5. Tie-breaker: among tasks of otherwise-equal urgency, prefer one whose "advances" field is set — completing it moves an active goal or in-progress study track forward, not just an isolated to-do. When you recommend such a task, name what it advances in the "reason".
+   - Revisiting a vault item / insight note — only when the user is otherwise idle or slipping
+5. Tie-breakers, in order: (a) among tasks of otherwise-equal urgency, prefer one whose "advances" field is set — completing it moves an active goal or in-progress study track forward; (b) among still-equal candidates, prefer whichever belongs to priorityAreaName, if set — the user told you this is what they're prioritizing, so reflect that back rather than treating every area as equal weight. When you recommend such a task, name what it advances (or that it's their stated priority) in the "reason".
 6. Include 1-3 concrete next steps for each recommendation (short, actionable phrases of max 10 words each).
 7. If the user's dashboard is completely clear, recommend reviewing active goals or performing a reflection.
 8. VOICE: Write "headline" and "briefing" like a sharp, warm human coach talking directly to the user — second person ("you"), specific, never corporate or generic. The headline is a punchy one-liner (max ~12 words). The briefing is 2-3 sentences that tie their state together and point at the one thing that matters most. Reference the time of day where natural. Where it fits naturally, let their personality/strengths/weaknesses shape the framing (e.g. lean on a stated strength to make a task feel achievable, or name-check a stated weakness when it's actively the reason something's stalling) and tie the recommendation back to their bigPicture/lifeVision when the moment calls for it — don't force a reference to identity fields into every response, only when it makes the advice sharper. If identity fields are null/empty, don't mention their absence.
@@ -856,7 +904,7 @@ const geminiGetDecisions = async (ctx: ContextSummary): Promise<DecisionResult> 
 
   try {
     const model = geminiClient.getGenerativeModel({
-      model: "gemini-2.0-flash",
+      model: GEMINI_MODEL,
       generationConfig: { responseMimeType: "application/json" },
     })
 
