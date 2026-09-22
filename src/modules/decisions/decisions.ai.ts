@@ -84,6 +84,11 @@ export interface DecisionResult {
   schedule: ScheduleInfo       // today's calendar: what's on now / next
   generatedAt: Date
   source: "ai" | "heuristic"
+  // One short question targeting the single highest-value gap in an ENABLED
+  // module (never a disabled one) — null when there's nothing worth asking,
+  // or when the daily frequency cap (applied in decisions.service.ts) says
+  // not yet. Answering writes back via POST /decisions/profile-answer.
+  profilingPrompt: { field: string; question: string } | null
 }
 
 // ── Build a lean context summary for the Gemini prompt ───────────────────────
@@ -471,6 +476,27 @@ const estimateMinutesFor = (
   return null
 }
 
+// Single highest-value gap to ask about, among fields the module-gating in
+// buildContextSummary has already zeroed out for disabled modules — so this
+// never surfaces a question about something the user deliberately turned
+// off, only something enabled-but-actually-missing. Checked in a fixed
+// priority order; returns the first gap found, or null if identity's full.
+const deriveProfilingPrompt = (ctx: ContextSummary): { field: string; question: string } | null => {
+  if (!ctx.identity.thisYearGoal) {
+    return { field: "identity.thisYearGoal", question: "What's the one thing you most want to be true by the end of this year?" }
+  }
+  if (!ctx.identity.purpose) {
+    return { field: "identity.purpose", question: "In a sentence — why does that goal actually matter to you?" }
+  }
+  if (!ctx.identity.lifeVision) {
+    return { field: "identity.lifeVision", question: "Zoom out — what does the life you're building toward actually look like?" }
+  }
+  if (!ctx.identity.bigPicture) {
+    return { field: "identity.bigPicture", question: "What's the big-picture direction all of this is in service of?" }
+  }
+  return null
+}
+
 // ── Heuristic fallback ────────────────────────────────────────────────────────
 
 const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
@@ -777,6 +803,7 @@ const heuristicDecision = (ctx: ContextSummary): DecisionResult => {
     schedule: ctx.schedule,
     generatedAt: new Date(),
     source: "heuristic",
+    profilingPrompt: deriveProfilingPrompt(ctx),
   }
 }
 
@@ -896,6 +923,7 @@ const finalizeAiDecision = (parsed: ParsedAiDecision, ctx: ContextSummary): Deci
     schedule: ctx.schedule,
     generatedAt: new Date(),
     source: "ai",
+    profilingPrompt: deriveProfilingPrompt(ctx),
   }
 }
 

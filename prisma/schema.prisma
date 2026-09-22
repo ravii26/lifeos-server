@@ -712,6 +712,11 @@ model UserSettings {
   // (areas/tasks/capture) are always on and never stored here.
   enabledModules String[]
 
+  // Frequency cap for the decisions engine's one-question profiling prompt —
+  // at most one per day, so filling in gaps (e.g. Identity) never becomes a
+  // nag. Set when a prompt is actually shown, not when answered/dismissed.
+  lastProfilePromptAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
