@@ -162,7 +162,7 @@ const heuristicClassify = (rawText: string, ctx?: UserRagContext): Classificatio
 const buildSystemPrompt = (ctx?: UserRagContext): string => {
   const contextBlock = ctx ? formatRagContextForPrompt(ctx) : "None"
 
-  return `You are the core AI triage agent of LifeOS, a personal operating system.
+  return `You are the core AI triage agent of Ally, a personal assistant app.
 Your mission is to classify a raw, unstructured brain-dump text into one of the designated categories, clean up the text, extract metadata, and link it to the user's existing life areas or learning topics where relevant.
 
 <user_context>

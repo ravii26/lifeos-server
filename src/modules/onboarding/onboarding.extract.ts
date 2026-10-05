@@ -59,7 +59,7 @@ const MAX_ACTIONS = 12
 const MAX_TEXT = 4_000
 const VALID_ACTION_TYPES: OnboardingActionType[] = ["GOAL", "HABIT", "TASK"]
 
-const buildPrompt = (existingAreaNames: string[], now: RagNow): string => `You are the onboarding agent of LifeOS, a personal life-management app. A brand-new user just wrote a few sentences about their life, what they care about, and what they want to work on. Turn that into a starter setup: a small set of life Areas, and a handful of Goals/Habits/Tasks under them.
+const buildPrompt = (existingAreaNames: string[], now: RagNow): string => `You are the onboarding agent of Ally, a personal assistant app. A brand-new user just wrote a few sentences about their life, what they care about, and what they want to work on. Turn that into a starter setup: a small set of life Areas, and a handful of Goals/Habits/Tasks under them.
 
 The current date is ${now.isoDate} (${now.weekday}), timezone ${now.timezone}.
 

@@ -6,6 +6,7 @@ export interface TaskDto {
   projectId: string | null
   title: string
   description: string | null
+  minimumVersion: string | null
   status: string
   priority: string
   taskType: string

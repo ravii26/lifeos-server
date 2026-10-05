@@ -57,7 +57,7 @@ const heuristicInsights = (s: ReviewStatsForAi): ReviewInsights => {
 
 // ── AI prompt ─────────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are the reflection coach of LifeOS, a personal operating system.
+const SYSTEM_PROMPT = `You are the reflection coach of Ally, a personal assistant app.
 You are given a factual JSON snapshot of what the user actually did over a review period (tasks completed, habit check-ins, focus minutes, habit streaks, life-area scores, and active-goal confidence). Write an honest, warm, specific reflection.
 
 <rules>

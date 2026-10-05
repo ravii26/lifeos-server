@@ -3,6 +3,8 @@ export interface AreaDto {
   id: string
   name: string
   type: string
+  tier: string
+  laterUntil: Date | null
   color: string
   icon: string
   order: number

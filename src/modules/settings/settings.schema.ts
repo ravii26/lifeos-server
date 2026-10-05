@@ -14,6 +14,7 @@ export const updateSettingsSchema = z.object({
   font:     z.enum(["inter", "mono", "serif"]).optional(),
   startTab: z.enum(["today", "areas", "dump"]).optional(),
   enabledModules: z.array(z.enum(OPTIONAL_MODULES)).optional(),
+  nightlyTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "nightlyTime must be HH:MM").nullable().optional(),
 })
 
 export type UpdateSettingsDto = z.infer<typeof updateSettingsSchema>

@@ -86,7 +86,7 @@ const buildContext = (top: Ranked[]): string =>
     .map((c, i) => `[${i + 1}] ${c.heading ? `${c.heading}\n` : ""}${c.content}`)
     .join("\n\n")
 
-const SYSTEM_PROMPT = `You are the personal assistant inside LifeOS. Answer the user's question using the context provided below, which has two parts:
+const SYSTEM_PROMPT = `You are the personal assistant Ally. Answer the user's question using the context provided below, which has two parts:
 
 1. Numbered passages retrieved from the user's saved material (documents, notes, resources) — may be empty.
 2. Their current life data: life areas, goals, habits, tasks, and in-progress learning resources — may be empty.

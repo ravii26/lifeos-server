@@ -6,6 +6,7 @@ export interface GoalDto {
   areaId: string
   title: string
   description: string | null
+  why: string | null
   priority: string
   status: string
   deadline: Date | null

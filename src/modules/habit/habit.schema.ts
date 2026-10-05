@@ -7,6 +7,8 @@ const day = z.enum(["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"])
 export const createHabitSchema = z.object({
   title: z.string().min(1, "Title is required").max(200),
   description: z.string().max(2000).optional(),
+  minimumVersion: z.string().max(200).optional(),
+  prepareAhead: z.string().max(200).optional(),
   areaId: z.string().min(1, "areaId is required"),
   habitType: habitType.optional(),
   targetCount: z.number().int().positive().optional(),
@@ -21,6 +23,8 @@ export const createHabitSchema = z.object({
 export const updateHabitSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   description: z.string().max(2000).nullable().optional(),
+  minimumVersion: z.string().max(200).nullable().optional(),
+  prepareAhead: z.string().max(200).nullable().optional(),
   areaId: z.string().min(1).optional(),
   habitType: habitType.optional(),
   targetCount: z.number().int().positive().nullable().optional(),

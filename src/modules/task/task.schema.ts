@@ -9,6 +9,7 @@ const taskSource = z.enum(["MANUAL", "DUMP", "LEARN", "BACKLOG_REMINDER"])
 export const createTaskSchema = z.object({
   title: z.string().min(1, "Title is required").max(200),
   description: z.string().max(2000).optional(),
+  minimumVersion: z.string().max(200).optional(),
   areaId: z.string().optional(),
   goalId: z.string().optional(),
   projectId: z.string().optional(),
@@ -29,6 +30,7 @@ export const createTaskSchema = z.object({
 export const updateTaskSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   description: z.string().max(2000).nullable().optional(),
+  minimumVersion: z.string().max(200).nullable().optional(),
   areaId: z.string().nullable().optional(),
   goalId: z.string().nullable().optional(),
   projectId: z.string().nullable().optional(),

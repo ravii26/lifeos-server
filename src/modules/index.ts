@@ -23,6 +23,7 @@ import linkRoutes from "./link/link.routes.js"
 import documentRoutes from "./document/document.routes.js"
 import onboardingRoutes from "./onboarding/onboarding.routes.js"
 import assistantRoutes from "./assistant/assistant.routes.js"
+import guideRoutes from "./guide/guide.routes.js"
 
 const router = Router()
 
@@ -52,5 +53,6 @@ router.use("/links", linkRoutes)
 router.use("/documents", documentRoutes)
 router.use("/onboarding", onboardingRoutes)
 router.use("/assistant", assistantRoutes)
+router.use("/guide", guideRoutes)
 
 export default router

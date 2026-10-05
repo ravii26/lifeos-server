@@ -17,30 +17,33 @@ model User {
   updatedAt    DateTime @updatedAt
 
   // Relations
-  identity       Identity?
-  settings       UserSettings?
-  areas          Area[]
-  goals          Goal[]
-  projects       Project[]
-  tasks          Task[]
-  habits         Habit[]
-  habitLogs      HabitLog[]
-  calendarBlocks CalendarBlock[]
-  focusSessions  FocusSession[]
-  topics         Topic[]
-  notebooks      Notebook[]
-  resources      Resource[]
-  notes          Note[]
-  vaultItems     VaultItem[]
-  captures       Capture[]
-  reviews        Review[]
-  insightReviews InsightReview[]
-  behaviorLogs   BehaviorLog[]
-  entityLinks    EntityLink[]
-  documents            Document[]
-  documentChunks       DocumentChunk[]
-  documentSuggestions  DocumentSuggestion[]
-  knowledgeChunks      KnowledgeChunk[]
+  identity            Identity?
+  settings            UserSettings?
+  areas               Area[]
+  goals               Goal[]
+  projects            Project[]
+  tasks               Task[]
+  habits              Habit[]
+  habitLogs           HabitLog[]
+  calendarBlocks      CalendarBlock[]
+  focusSessions       FocusSession[]
+  topics              Topic[]
+  notebooks           Notebook[]
+  resources           Resource[]
+  notes               Note[]
+  vaultItems          VaultItem[]
+  captures            Capture[]
+  reviews             Review[]
+  insightReviews      InsightReview[]
+  behaviorLogs        BehaviorLog[]
+  entityLinks         EntityLink[]
+  documents           Document[]
+  documentChunks      DocumentChunk[]
+  documentSuggestions DocumentSuggestion[]
+  knowledgeChunks     KnowledgeChunk[]
+  nightlyCommitments  NightlyCommitment[]
+  reminders           Reminder[]
+  memories            Memory[]
 }
 
 model Identity {
@@ -69,13 +72,18 @@ model Area {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  name      String
-  type      AreaType @default(PRIMARY)
-  color     String
-  icon      String
-  order     Int
-  isDefault Boolean  @default(false)
-  isActive  Boolean  @default(true)
+  name       String
+  type       AreaType  @default(PRIMARY)
+  // How much of the user's energy this area gets right now. The guide picks
+  // tonight's one thing mostly from MAIN, then SECONDARY; MAINTAIN gets small
+  // doses; LATER is skipped until laterUntil (nothing is dropped, only ordered).
+  tier       AreaTier  @default(MAINTAIN)
+  laterUntil DateTime?
+  color      String
+  icon       String
+  order      Int
+  isDefault  Boolean   @default(false)
+  isActive   Boolean   @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -97,6 +105,13 @@ enum AreaType {
   MAINTENANCE
 }
 
+enum AreaTier {
+  MAIN
+  SECONDARY
+  MAINTAIN
+  LATER
+}
+
 model Goal {
   id     String @id @default(cuid())
   userId String
@@ -106,6 +121,9 @@ model Goal {
 
   title       String
   description String?
+  // What this goal is for, in the user's words ("switch to an SDE-2 role by
+  // March"). Shown inside every nudge so a 5-minute task feels connected.
+  why         String?
   priority    Priority   @default(MEDIUM)
   status      GoalStatus @default(ACTIVE)
   deadline    DateTime?
@@ -184,10 +202,13 @@ model Task {
   projectId String?
   project   Project? @relation(fields: [projectId], references: [id])
 
-  title       String
-  description String?
-  status      TaskStatus @default(TODO)
-  priority    Priority   @default(MEDIUM)
+  title          String
+  description    String?
+  // The 2-minute version ("just read the problem"). Offered on tired nights
+  // and after missed days so starting is always easy.
+  minimumVersion String?
+  status         TaskStatus @default(TODO)
+  priority       Priority   @default(MEDIUM)
 
   taskType       TaskType @default(BOOLEAN)
   targetCount    Int?
@@ -247,11 +268,15 @@ model Habit {
   areaId String
   area   Area   @relation(fields: [areaId], references: [id], onDelete: Cascade)
 
-  title         String
-  description   String?
-  habitType     HabitType @default(BOOLEAN)
-  targetCount   Int?
-  targetMinutes Int?
+  title          String
+  description    String?
+  minimumVersion String?
+  // Done the evening before so tomorrow's habit can't fail on setup
+  // ("pack the gym bag").
+  prepareAhead   String?
+  habitType      HabitType @default(BOOLEAN)
+  targetCount    Int?
+  targetMinutes  Int?
 
   frequency    HabitFrequency @default(DAILY)
   weeklyTarget Int?
@@ -593,7 +618,7 @@ model DocumentSuggestion {
   // resolved suggestedAreaId/Name, kept as JSON so the model stays flat.
   meta          Json?
 
-  status SuggestionStatus @default(PENDING)
+  status            SuggestionStatus @default(PENDING)
   // Set on accept — points at the created Task/Habit/Goal.
   createdEntityType String?
   createdEntityId   String?
@@ -716,6 +741,10 @@ model UserSettings {
   // at most one per day, so filling in gaps (e.g. Identity) never becomes a
   // nag. Set when a prompt is actually shown, not when answered/dismissed.
   lastProfilePromptAt DateTime?
+
+  // When this person usually has time for themselves (local HH:MM), chosen
+  // in setup. The phone schedules the nudge; the server stores the choice.
+  nightlyTime String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -898,4 +927,105 @@ enum EntityType {
 enum LinkRole {
   ADVANCES
   REFERENCES
+}
+
+// The guide's "tonight's one thing": exactly one per user per local day.
+// Rules shortlist candidates, AI picks one and writes the reason; the user
+// answers Done / Minimum / Skipped (+ why). Skips drive drift detection.
+model NightlyCommitment {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  date DateTime @db.Date
+
+  sourceType GuideSourceType
+  sourceId   String
+  areaId     String?
+  goalId     String?
+
+  title   String
+  minimum String
+  why     String
+  message String
+  mode    GuideMode @default(NORMAL)
+  source  String    @default("heuristic") // ai | heuristic
+
+  status      CommitmentStatus @default(PENDING)
+  skipReason  String?
+  respondedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+enum GuideSourceType {
+  TASK
+  HABIT
+}
+
+enum GuideMode {
+  NORMAL
+  SMALLER
+}
+
+enum CommitmentStatus {
+  PENDING
+  DONE
+  MINIMUM
+  SKIPPED
+}
+
+// A reminder the person asked for ("remind me to call mom at 7"). The server
+// stores it; the phone schedules the local notification from it.
+model Reminder {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  text     String
+  remindAt DateTime
+  status   ReminderStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status, remindAt])
+}
+
+enum ReminderStatus {
+  PENDING
+  DONE
+  CANCELLED
+}
+
+// Something the assistant learned about the person from chat ("works 10 to
+// 8:30", "felt low after the review on Monday"), so they never have to repeat
+// themselves. The person can see and delete every memory.
+model Memory {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  content    String
+  kind       MemoryKind
+  importance Int        @default(2) // 1 = minor, 3 = core
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+enum MemoryKind {
+  FACT
+  PREFERENCE
+  GOAL
+  STRUGGLE
+  FEELING
+  PERSON
+  EVENT
 }

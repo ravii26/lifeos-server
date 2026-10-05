@@ -55,6 +55,8 @@ export const createHabitService = async (
     areaId: input.areaId,
     title: input.title,
     description: input.description ?? null,
+    minimumVersion: input.minimumVersion ?? null,
+    prepareAhead: input.prepareAhead ?? null,
     habitType: input.habitType ?? "BOOLEAN",
     targetCount: input.targetCount ?? null,
     targetMinutes: input.targetMinutes ?? null,

@@ -74,7 +74,7 @@ const isColdStart = (ctx: DecisionContext): boolean =>
 const coldStartResult = (): DecisionResult => ({
   headline: "Let's set up your first Area",
   briefing:
-    "Everything in LifeOS hangs off an Area — Career, Health, Relationships, whatever matters to you. Once you've got one, I can start turning your goals, habits, and tasks into an actual plan instead of guessing.",
+    "Everything in Ally hangs off an Area — Career, Health, Relationships, whatever matters to you. Once you've got one, I can start turning your goals, habits, and tasks into an actual plan instead of guessing.",
   tone: "encouraging",
   primaryAction: {
     type: "AREA_FOCUS",

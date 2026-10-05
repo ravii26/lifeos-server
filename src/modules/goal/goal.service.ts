@@ -83,6 +83,7 @@ export const createGoalService = async (
     areaId: input.areaId,
     title: input.title,
     description: input.description ?? null,
+    why: input.why ?? null,
     priority: input.priority ?? "MEDIUM",
     status,
     deadline: input.deadline ?? null,

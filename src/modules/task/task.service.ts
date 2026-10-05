@@ -63,6 +63,7 @@ export const createTaskService = async (
     projectId: input.projectId ?? null,
     title: input.title,
     description: input.description ?? null,
+    minimumVersion: input.minimumVersion ?? null,
     status: input.status ?? "TODO",
     priority: input.priority ?? "MEDIUM",
     taskType: input.taskType ?? "BOOLEAN",

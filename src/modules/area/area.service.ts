@@ -39,6 +39,8 @@ export const createAreaService = async (
     userId,
     name: input.name,
     type: input.type ?? "PRIMARY",
+    tier: input.tier ?? "MAINTAIN",
+    laterUntil: input.laterUntil ?? null,
     color: input.color,
     icon: input.icon,
     order,

@@ -26,7 +26,7 @@ const MAX_ITEMS = 12
 const MAX_TEXT = 100_000 // cap chars sent to the model (well within Flash's context)
 const VALID_TYPES: ExtractItemType[] = ["HABIT", "GOAL", "TASK"]
 
-const buildPrompt = (areaNames: string[], now: RagNow): string => `You are the planning agent of LifeOS, a personal operating system. You are given a reference document (a guide, handbook, or notes). Extract the concrete, actionable commitments a person should add to their system to actually put this document into practice.
+const buildPrompt = (areaNames: string[], now: RagNow): string => `You are the planning agent of Ally, a personal assistant app. You are given a reference document (a guide, handbook, or notes). Extract the concrete, actionable commitments a person should add to their system to actually put this document into practice.
 
 The current date is ${now.isoDate} (${now.weekday}), timezone ${now.timezone}.
 

@@ -6,6 +6,7 @@ const goalStatus = z.enum(["ACTIVE", "PARKED", "COMPLETED", "PAUSED", "ABANDONED
 export const createGoalSchema = z.object({
   title: z.string().min(1, "Title is required").max(200),
   description: z.string().max(2000).optional(),
+  why: z.string().max(500).optional(),
   areaId: z.string().min(1, "areaId is required"),
   priority: priority.optional(),
   status: goalStatus.optional(),
@@ -15,6 +16,7 @@ export const createGoalSchema = z.object({
 export const updateGoalSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   description: z.string().max(2000).nullable().optional(),
+  why: z.string().max(500).nullable().optional(),
   areaId: z.string().min(1).optional(),
   priority: priority.optional(),
   status: goalStatus.optional(),

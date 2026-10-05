@@ -4,6 +4,8 @@ export interface HabitDto {
   areaId: string
   title: string
   description: string | null
+  minimumVersion: string | null
+  prepareAhead: string | null
   habitType: string
   targetCount: number | null
   targetMinutes: number | null
