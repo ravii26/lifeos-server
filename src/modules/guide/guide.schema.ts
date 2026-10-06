@@ -6,6 +6,7 @@ export const respondSchema = z.object({
   // The night being answered (YYYY-MM-DD). Defaults to tonight, or last night
   // when answering after midnight.
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  source: z.enum(["APP", "NOTIFICATION"]).optional(),
 })
 
 export const historySchema = z.object({

@@ -21,7 +21,8 @@ export const swapTonightController = async (req: Request, res: Response) => {
 }
 
 export const respondTonightController = async (req: Request, res: Response) => {
-  sendSuccess(res, "Answered", await respondTonightService(req.user!.id, req.body))
+  const source = req.body?.source === "NOTIFICATION" ? "NOTIFICATION" : "APP"
+  sendSuccess(res, "Answered", await respondTonightService(req.user!.id, req.body, { source }))
 }
 
 export const historyController = async (req: Request, res: Response) => {

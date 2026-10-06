@@ -6,6 +6,7 @@
    ===================================================================== */
 import type { Memory, MemoryKind } from "@prisma/client"
 import prisma from "../../lib/prisma.js"
+import { recordActivity } from "../activity/activity.service.js"
 
 export const MEMORY_KINDS: MemoryKind[] = ["FACT", "PREFERENCE", "GOAL", "STRUGGLE", "FEELING", "PERSON", "EVENT"]
 
@@ -58,6 +59,8 @@ export interface MemoryWrite {
   content?: unknown
   kind?: unknown
   importance?: unknown
+  source?: unknown
+  sensitive?: unknown
 }
 
 const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim()
@@ -66,13 +69,24 @@ const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim()
 // what was actually stored so the app can show "Remembered: …".
 export const saveMemories = async (userId: string, writes: MemoryWrite[], known: Memory[]) => {
   const seen = new Set(known.map((m) => normalize(m.content)))
-  const saved: Memory[] = []
+  const saved: (Memory & { activityId?: string })[] = []
   for (const w of writes.slice(0, 3)) {
     const content = typeof w.content === "string" ? w.content.trim().slice(0, 280) : ""
     if (content.length < 4 || seen.has(normalize(content))) continue
     const kind = MEMORY_KINDS.includes(w.kind as MemoryKind) ? (w.kind as MemoryKind) : "FACT"
     const importance = [1, 2, 3].includes(Number(w.importance)) ? Number(w.importance) : 2
-    saved.push(await prisma.memory.create({ data: { userId, content, kind, importance } }))
+    const source = w.source === "SAID" ? "SAID" : "INFERRED"
+    const sensitive = w.sensitive === true
+    const memory = await prisma.memory.create({ data: { userId, content, kind, importance, source, sensitive } })
+    const event = await recordActivity(userId, {
+      type: "REMEMBERED",
+      itemType: "MEMORY",
+      itemId: memory.id,
+      title: content,
+      source: "CHAT",
+      undo: { kind: "DELETE_MEMORY", memoryId: memory.id },
+    })
+    saved.push({ ...memory, activityId: event?.id })
     seen.add(normalize(content))
   }
   return saved
@@ -83,10 +97,25 @@ export const saveMemories = async (userId: string, writes: MemoryWrite[], known:
 export const forgetMemories = async (userId: string, ids: unknown[], known: Memory[]) => {
   const allowed = new Set(known.map((m) => m.id))
   const target = ids.filter((id): id is string => typeof id === "string" && allowed.has(id))
-  if (target.length === 0) return [] as Memory[]
+  if (target.length === 0) return [] as (Memory & { activityId?: string })[]
   const gone = known.filter((m) => target.includes(m.id))
   await prisma.memory.deleteMany({ where: { userId, id: { in: target } } })
-  return gone
+  const out: (Memory & { activityId?: string })[] = []
+  for (const m of gone) {
+    const event = await recordActivity(userId, {
+      type: "FORGOTTEN",
+      itemType: "MEMORY",
+      itemId: m.id,
+      title: m.content,
+      source: "CHAT",
+      undo: {
+        kind: "RESTORE_MEMORY",
+        memory: { content: m.content, kind: m.kind, importance: m.importance, source: m.source, sensitive: m.sensitive },
+      },
+    })
+    out.push({ ...m, activityId: event?.id })
+  }
+  return out
 }
 
 export const listMemories = (userId: string) =>

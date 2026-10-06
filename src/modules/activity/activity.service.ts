@@ -1,0 +1,142 @@
+/* =====================================================================
+   Activity log: an append-only history of everything that happened.
+   Progress, patterns, forecasts, the weekly view and undo are computed
+   from it, so nothing progress-related is ever hand-maintained.
+   Recording never breaks the action it describes: failures are logged.
+   ===================================================================== */
+import type { ActivityEvent, ActivityItem, ActivitySource, ActivityType, Prisma } from "@prisma/client"
+import prisma from "../../lib/prisma.js"
+import logger from "../../lib/logger.js"
+import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
+
+export interface ActivityInput {
+  type: ActivityType
+  itemType: ActivityItem
+  itemId?: string | null
+  title?: string | null
+  value?: number | null
+  minutes?: number | null
+  reason?: string | null
+  mood?: string | null
+  block?: string | null
+  source?: ActivitySource
+  // What's needed to reverse this action. Absent = not undoable.
+  undo?: UndoPayload | null
+}
+
+export type UndoPayload =
+  | { kind: "ARCHIVE_TASK"; taskId: string }
+  | { kind: "REOPEN_TASK"; taskId: string; prevStatus: string; prevCompletedAt: string | null }
+  | { kind: "UNLOG_HABIT"; habitId: string; date: string; prev: { completed: boolean; count: number; minutes: number } | null }
+  | { kind: "DELETE_MEMORY"; memoryId: string }
+  | { kind: "RESTORE_MEMORY"; memory: { content: string; kind: string; importance: number; source: string; sensitive: boolean } }
+  | { kind: "RESTORE_SETTING"; field: "nightlyTime"; prev: string | null }
+  | { kind: "RESET_COMMITMENT"; commitmentId: string; then?: UndoPayload }
+  // Reverse another logged event (e.g. the task a guide answer completed).
+  | { kind: "UNDO_EVENT"; eventId: string }
+
+export interface ActivityOptions {
+  source?: ActivitySource
+}
+
+export const recordActivity = async (userId: string, input: ActivityInput): Promise<ActivityEvent | null> => {
+  try {
+    return await prisma.activityEvent.create({
+      data: {
+        userId,
+        type: input.type,
+        itemType: input.itemType,
+        itemId: input.itemId ?? null,
+        title: input.title?.slice(0, 200) ?? null,
+        value: input.value ?? null,
+        minutes: input.minutes ?? null,
+        reason: input.reason?.slice(0, 300) ?? null,
+        mood: input.mood ?? null,
+        block: input.block ?? null,
+        source: input.source ?? "APP",
+        undo: (input.undo ?? undefined) as Prisma.InputJsonValue | undefined,
+      },
+    })
+  } catch (err) {
+    logger.warn(`Activity log write failed (${input.type} ${input.itemType}):`, err)
+    return null
+  }
+}
+
+export const listActivity = (userId: string, since: Date, limit = 200) =>
+  prisma.activityEvent.findMany({
+    where: { userId, at: { gte: since } },
+    orderBy: { at: "desc" },
+    take: limit,
+  })
+
+// Reverses one step. Each payload kind restores exactly the state saved when
+// the action happened; the event is marked undone so it can't run twice.
+const applyUndo = async (userId: string, undo: UndoPayload): Promise<void> => {
+  switch (undo.kind) {
+    case "ARCHIVE_TASK":
+      await prisma.task.updateMany({
+        where: { id: undo.taskId, userId },
+        data: { archivedAt: new Date(), status: "CANCELLED" },
+      })
+      return
+    case "REOPEN_TASK":
+      await prisma.task.updateMany({
+        where: { id: undo.taskId, userId },
+        data: {
+          status: undo.prevStatus as "TODO" | "IN_PROGRESS",
+          completedAt: undo.prevCompletedAt ? new Date(undo.prevCompletedAt) : null,
+        },
+      })
+      return
+    case "UNLOG_HABIT": {
+      const date = new Date(undo.date)
+      if (undo.prev) {
+        await prisma.habitLog.updateMany({ where: { habitId: undo.habitId, userId, date }, data: undo.prev })
+      } else {
+        await prisma.habitLog.deleteMany({ where: { habitId: undo.habitId, userId, date } })
+      }
+      return
+    }
+    case "DELETE_MEMORY":
+      await prisma.memory.deleteMany({ where: { id: undo.memoryId, userId } })
+      return
+    case "RESTORE_MEMORY":
+      await prisma.memory.create({
+        data: {
+          userId,
+          content: undo.memory.content,
+          kind: undo.memory.kind as never,
+          importance: undo.memory.importance,
+          source: undo.memory.source as never,
+          sensitive: undo.memory.sensitive,
+        },
+      })
+      return
+    case "RESTORE_SETTING":
+      await prisma.userSettings.updateMany({ where: { userId }, data: { [undo.field]: undo.prev } })
+      return
+    case "RESET_COMMITMENT":
+      await prisma.nightlyCommitment.updateMany({
+        where: { id: undo.commitmentId, userId },
+        data: { status: "PENDING", skipReason: null, respondedAt: null },
+      })
+      if (undo.then) await applyUndo(userId, undo.then)
+      return
+    case "UNDO_EVENT":
+      await undoActivityService(userId, undo.eventId).catch((err) =>
+        logger.warn(`Nested undo of ${undo.eventId} skipped:`, err),
+      )
+      return
+  }
+}
+
+export const undoActivityService = async (userId: string, eventId: string): Promise<ActivityEvent> => {
+  const event = await prisma.activityEvent.findFirst({ where: { id: eventId, userId } })
+  if (!event) throw new NotFoundError("Nothing to undo")
+  if (event.undoneAt) throw new ValidationError("Already undone")
+  if (!event.undo) throw new ValidationError("This can't be undone")
+
+  await applyUndo(userId, event.undo as unknown as UndoPayload)
+  return prisma.activityEvent.update({ where: { id: event.id }, data: { undoneAt: new Date() } })
+}

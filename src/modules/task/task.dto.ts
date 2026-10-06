@@ -7,6 +7,11 @@ export interface TaskDto {
   title: string
   description: string | null
   minimumVersion: string | null
+  remindAt: Date | null
+  windowEnd: Date | null
+  repeatRule: string | null
+  sizeMinutes: number | null
+  archivedAt: Date | null
   status: string
   priority: string
   taskType: string

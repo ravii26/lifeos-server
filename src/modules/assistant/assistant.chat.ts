@@ -13,6 +13,7 @@ import { logHabitService } from "../habit/habit.service.js"
 import { getTonightService } from "../guide/guide.service.js"
 import { extractUrl } from "../guide/guide.saves.ai.js"
 import { upsertSettings } from "../settings/settings.repository.js"
+import { recordActivity } from "../activity/activity.service.js"
 import { loadPatternFacts, detectPatterns } from "./assistant.patterns.js"
 import { recallMemories, saveMemories, forgetMemories, type MemoryWrite } from "./assistant.memory.js"
 import { assistantAsk } from "./assistant.service.js"
@@ -21,7 +22,8 @@ import logger from "../../lib/logger.js"
 
 export type ChatTurn = { role: "user" | "assistant"; text: string }
 
-export type ChatAction =
+// activityId lets the app offer Undo for the action (see /activity/:id/undo).
+export type ChatAction = (
   | { type: "TASK_ADDED"; id: string; title: string }
   | { type: "TASK_COMPLETED"; id: string; title: string }
   | { type: "HABIT_LOGGED"; id: string; title: string }
@@ -32,6 +34,7 @@ export type ChatAction =
   | { type: "NUDGE_SET"; kind: "NIGHTLY" | "MORNING"; time: string | null }
   | { type: "REMEMBERED"; id: string; text: string }
   | { type: "FORGOT"; id: string; text: string }
+) & { activityId?: string }
 
 export interface ChatResult {
   role: "FRIEND" | "ASSISTANT" | "MENTOR" | "COACH" | "GUIDE"
@@ -155,12 +158,13 @@ Action rules:
 
 Memory:
 - whatYouRemember is what you already know about them. Use it naturally so they never repeat themselves; don't recite it back.
+- Each remember item also has "source": "SAID" if they told you directly, "INFERRED" if you concluded it; and "sensitive": true for health or mental-health details (those are never brought up unless they raise them).
 - remember: up to 3 NEW durable things worth knowing later: their schedule, goals, struggles, preferences, people in their life, notable events, or how they felt (include the date for feelings/events, e.g. "Felt drained on 5 Oct after manager changed priorities"). Short, third person. Never save tasks/reminders (those are actions), small talk, or anything already in whatYouRemember.
 - kind: FACT | PREFERENCE | GOAL | STRUGGLE | FEELING | PERSON | EVENT. importance: 1 minor, 2 useful, 3 core to who they are.
 - forget: ids from whatYouRemember to delete, when they ask you to forget something or it is no longer true (then remember the corrected version).
 - When they ask what you know about them, answer from whatYouRemember.
 
-Return JSON only: {"role": "FRIEND"|"ASSISTANT"|"MENTOR"|"COACH"|"GUIDE", "reply": string, "actions": [ ... ], "remember": [{"content": string, "kind": string, "importance": number}], "forget": [string]}`
+Return JSON only: {"role": "FRIEND"|"ASSISTANT"|"MENTOR"|"COACH"|"GUIDE", "reply": string, "actions": [ ... ], "remember": [{"content": string, "kind": string, "importance": number, "source": "SAID"|"INFERRED", "sensitive": boolean}], "forget": [string]}`
 
 interface PlannedAction {
   type?: string
@@ -310,32 +314,56 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[]): Prom
     try {
       if (a.type === "ADD_TASK" && a.title?.trim()) {
         const due = a.due && /^\d{4}-\d{2}-\d{2}$/.test(a.due) ? dateFromKey(a.due) : undefined
-        const task = await createTaskService(userId, {
-          title: a.title.trim().slice(0, 200),
-          minimumVersion: a.minimum?.trim() || undefined,
-          areaId: a.areaId && areaIds.has(a.areaId) ? a.areaId : undefined,
-          dueDate: due,
-          source: "DUMP",
-        })
-        done.push({ type: "TASK_ADDED", id: task.id, title: task.title })
+        const task = await createTaskService(
+          userId,
+          {
+            title: a.title.trim().slice(0, 200),
+            minimumVersion: a.minimum?.trim() || undefined,
+            areaId: a.areaId && areaIds.has(a.areaId) ? a.areaId : undefined,
+            dueDate: due,
+            source: "DUMP",
+          },
+          { source: "CHAT" },
+        )
+        done.push({ type: "TASK_ADDED", id: task.id, title: task.title, activityId: task.activityId })
       } else if (a.type === "COMPLETE_TASK" && a.taskId && taskIds.has(a.taskId)) {
-        await completeTaskService(a.taskId, userId)
-        done.push({ type: "TASK_COMPLETED", id: a.taskId, title: taskIds.get(a.taskId)! })
+        const task = await completeTaskService(a.taskId, userId, { source: "CHAT" })
+        done.push({ type: "TASK_COMPLETED", id: a.taskId, title: taskIds.get(a.taskId)!, activityId: task.activityId })
       } else if (a.type === "LOG_HABIT" && a.habitId && habitIds.has(a.habitId)) {
-        await logHabitService(a.habitId, userId, { completed: true })
-        done.push({ type: "HABIT_LOGGED", id: a.habitId, title: habitIds.get(a.habitId)! })
+        const log = await logHabitService(a.habitId, userId, { completed: true }, { source: "CHAT" })
+        done.push({ type: "HABIT_LOGGED", id: a.habitId, title: habitIds.get(a.habitId)!, activityId: log.activityId })
       } else if (a.type === "SET_NUDGE" && (a.kind === "NIGHTLY" || a.kind === "MORNING")) {
         const time = typeof a.time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(a.time) ? a.time : null
         if (a.time && !time) continue
+        let activityId: string | undefined
         if (a.kind === "NIGHTLY") {
           await upsertSettings(userId, { nightlyTime: time })
+          const event = await recordActivity(userId, {
+            type: "UPDATED",
+            itemType: "SETTING",
+            title: time ? `Nightly nudge at ${time}` : "Nightly nudge off",
+            source: "CHAT",
+            undo: { kind: "RESTORE_SETTING", field: "nightlyTime", prev: ctx.nightlyNudge },
+          })
+          activityId = event?.id
         }
-        done.push({ type: "NUDGE_SET", kind: a.kind, time })
+        done.push({ type: "NUDGE_SET", kind: a.kind, time, activityId })
       } else if (a.type === "SET_REMINDER" && a.text?.trim() && a.at) {
         const at = localToUtc(a.at, ctx.timeZone)
         if (!at || at.getTime() < Date.now() - 60_000) continue
-        const r = await prisma.reminder.create({ data: { userId, text: a.text.trim().slice(0, 300), remindAt: at } })
-        done.push({ type: "REMINDER_SET", id: r.id, text: r.text, remindAt: r.remindAt.toISOString() })
+        // A reminder is a to-do with a time.
+        const task = await createTaskService(
+          userId,
+          { title: a.text.trim().slice(0, 200), remindAt: at, dueDate: at, source: "REMINDER" },
+          { source: "CHAT" },
+        )
+        done.push({
+          type: "REMINDER_SET",
+          id: task.id,
+          text: task.title,
+          remindAt: at.toISOString(),
+          activityId: task.activityId,
+        })
       }
     } catch (err) {
       logger.warn(`Chat action ${a.type} failed:`, err)
@@ -406,8 +434,8 @@ export const assistantChat = async (
     saveMemories(userId, plan.remember, ctx.memories).catch(() => []),
   ])
   const memoryActions: ChatAction[] = [
-    ...forgotten.map((m) => ({ type: "FORGOT" as const, id: m.id, text: m.content })),
-    ...remembered.map((m) => ({ type: "REMEMBERED" as const, id: m.id, text: m.content })),
+    ...forgotten.map((m) => ({ type: "FORGOT" as const, id: m.id, text: m.content, activityId: m.activityId })),
+    ...remembered.map((m) => ({ type: "REMEMBERED" as const, id: m.id, text: m.content, activityId: m.activityId })),
   ]
   // The reply was written before anything ran. If an action didn't go
   // through, say so rather than let the reply claim it did.

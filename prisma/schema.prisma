@@ -44,6 +44,9 @@ model User {
   nightlyCommitments  NightlyCommitment[]
   reminders           Reminder[]
   memories            Memory[]
+  activityEvents      ActivityEvent[]
+  daySchedules        DaySchedule[]
+  allyNotes           AllyNote[]
 }
 
 model Identity {
@@ -160,13 +163,69 @@ model Project {
   status      ProjectStatus @default(ACTIVE)
   deadline    DateTime?
 
+  // How progress is measured: OUTCOME = a metric (weight 85→70), MILESTONE =
+  // ordered stages (job switch), PRACTICE = weekly minutes (English), WORK =
+  // to-dos against a deadline (client project).
+  kind                ProjectKind @default(WORK)
+  why                 String?
+  priority            Priority    @default(MEDIUM)
+  weeklyTargetMinutes Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
-  tasks Task[]
+  tasks      Task[]
+  milestones Milestone[]
+  metric     Metric?
 
   @@index([userId, status])
+}
+
+enum ProjectKind {
+  OUTCOME
+  MILESTONE
+  PRACTICE
+  WORK
+}
+
+model Milestone {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  title     String
+  order     Int
+  // Optional countable target inside a milestone ("50 DSA problems").
+  target    Int?
+  doneAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([projectId, order])
+}
+
+model Metric {
+  id        String  @id @default(cuid())
+  projectId String  @unique
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  name        String // "Weight"
+  unit        String // "kg"
+  startValue  Float
+  targetValue Float
+  createdAt   DateTime @default(now())
+
+  entries MetricEntry[]
+}
+
+model MetricEntry {
+  id       String   @id @default(cuid())
+  metricId String
+  metric   Metric   @relation(fields: [metricId], references: [id], onDelete: Cascade)
+  value    Float
+  at       DateTime @default(now())
+
+  @@index([metricId, at])
 }
 
 enum ProjectStatus {
@@ -217,6 +276,15 @@ model Task {
 
   dueDate DateTime?
 
+  // A to-do with a time is a reminder. remindAt alone = "at 7"; with
+  // windowEnd = "sometime between remindAt and windowEnd". repeatRule is an
+  // RRULE string ("FREQ=WEEKLY;BYDAY=SU") for repeating to-dos.
+  remindAt    DateTime?
+  windowEnd   DateTime?
+  repeatRule  String?
+  sizeMinutes Int?
+  archivedAt  DateTime?
+
   isRecurring Boolean     @default(false)
   recurrence  Recurrence?
 
@@ -252,6 +320,8 @@ enum TaskSource {
   DUMP
   LEARN
   BACKLOG_REMINDER
+  REMINDER
+  SAVE
 }
 
 enum Recurrence {
@@ -284,6 +354,14 @@ model Habit {
 
   reminderTime String?
   isActive     Boolean @default(true)
+
+  // "After X, I do Y" holds better than a clock time when days vary.
+  anchor    String?
+  timeBlock String? // MORNING | COMMUTE | OFFICE | GYM | EVENING | NIGHT
+  // Sized versions: [{"minutes":2,"label":"read 2 pages"}, ...]
+  sizes     Json?
+  prepTime  String? // HH:MM, when the prepare-ahead step is due (evening before)
+  stage     HabitStage @default(NEW)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -319,6 +397,12 @@ enum HabitType {
   BOOLEAN
   COUNT
   TIMER
+}
+
+enum HabitStage {
+  NEW
+  BUILDING
+  AUTOMATIC
 }
 
 enum HabitFrequency {
@@ -514,12 +598,23 @@ model Capture {
   suggestedOutputs Json?
   createdOutputs   Json?
 
+  // As a Save: what it's for. LEARN turns into actions; FEELING comes back
+  // when the person feels that way ("lazy", "sad", "anxious").
+  purpose  SavePurpose?
+  feelings String[]
+  summary  String?
+
   status     CaptureStatus @default(PENDING)
   confidence Float?
 
   createdAt DateTime @default(now())
 
   @@index([userId, status])
+}
+
+enum SavePurpose {
+  LEARN
+  FEELING
 }
 
 enum CaptureStatus {
@@ -745,6 +840,11 @@ model UserSettings {
   // When this person usually has time for themselves (local HH:MM), chosen
   // in setup. The phone schedules the nudge; the server stores the choice.
   nightlyTime String?
+
+  // NORMAL | BUSY | SICK | TRAVEL | HOLIDAY. Lowers or pauses suggestions
+  // until modeUntil (null = until changed).
+  mode      String    @default("NORMAL")
+  modeUntil DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1012,12 +1112,21 @@ model Memory {
 
   content    String
   kind       MemoryKind
-  importance Int        @default(2) // 1 = minor, 3 = core
+  importance Int          @default(2) // 1 = minor, 3 = core
+  // SAID = the person told Ally directly; INFERRED = Ally concluded it.
+  source     MemorySource @default(INFERRED)
+  // Health / mental-health details: never brought up unless the person does.
+  sensitive  Boolean      @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId, createdAt])
+}
+
+enum MemorySource {
+  SAID
+  INFERRED
 }
 
 enum MemoryKind {
@@ -1028,4 +1137,109 @@ enum MemoryKind {
   FEELING
   PERSON
   EVENT
+}
+
+// The shape of a weekday: [{"block":"MORNING","start":"08:00","end":"09:30","freeMinutes":30}, ...]
+// Suggestions only use items that fit the current block.
+model DaySchedule {
+  id      String @id @default(cuid())
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  weekday Int // 0 = Sunday … 6 = Saturday
+  blocks  Json
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, weekday])
+}
+
+// "Teach Ally": things the person teaches so Ally can answer later
+// (breakfast options, gym warm-up, "when anxious, do X", client details).
+model AllyNote {
+  id           String       @id @default(cuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  collection   String // "Breakfast", "Gym", "Office", "Situations"
+  template     NoteTemplate @default(INFO)
+  title        String
+  items        String[]
+  text         String?
+  sourceSaveId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, collection])
+}
+
+enum NoteTemplate {
+  LIST
+  ROUTINE
+  PLAYBOOK
+  INFO
+}
+
+// Append-only history of everything that happened. Progress, patterns,
+// forecasts, the weekly view and undo are all computed from this; nothing
+// progress-related is hand-maintained.
+model ActivityEvent {
+  id       String         @id @default(cuid())
+  userId   String
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type     ActivityType
+  itemType ActivityItem
+  itemId   String?
+  title    String? // human label at the time ("Call mom")
+  value    Float? // metric value, pages, count
+  minutes  Int?
+  reason   String? // skip reason
+  mood     String?
+  block    String? // day block at the time
+  source   ActivitySource @default(APP)
+  // Everything needed to reverse it (previous state).
+  undo     Json?
+  undoneAt DateTime?
+  at       DateTime       @default(now())
+
+  @@index([userId, at])
+  @@index([userId, itemType, itemId])
+}
+
+enum ActivityType {
+  CREATED
+  UPDATED
+  DONE
+  MINIMUM
+  SKIPPED
+  SNOOZED
+  REOPENED
+  ARCHIVED
+  DELETED
+  LOGGED
+  REMEMBERED
+  FORGOTTEN
+  MOOD
+}
+
+enum ActivityItem {
+  TASK
+  HABIT
+  PROJECT
+  MILESTONE
+  METRIC
+  NOTE
+  SAVE
+  MEMORY
+  DAY
+  SETTING
+}
+
+enum ActivitySource {
+  APP
+  CHAT
+  VOICE
+  NOTIFICATION
+  WIDGET
+  SHARE
+  SYSTEM
 }

@@ -1,3 +1,4 @@
+import { recordActivity, type ActivityOptions } from "../activity/activity.service.js"
 import { Prisma } from "@prisma/client"
 import type { NightlyCommitment } from "@prisma/client"
 import {
@@ -209,7 +210,11 @@ export const swapTonightService = async (userId: string): Promise<TonightDto> =>
   return { date: todayKey, commitment, emptyMessage: null, missedNights: misses }
 }
 
-export const respondTonightService = async (userId: string, input: RespondDto): Promise<NightlyCommitment> => {
+export const respondTonightService = async (
+  userId: string,
+  input: RespondDto,
+  opts: ActivityOptions = {},
+): Promise<NightlyCommitment & { activityId?: string }> => {
   const { date } = await loadToday(userId)
   // Answering late (after midnight) still lands on the night it was for.
   const target =
@@ -227,14 +232,38 @@ export const respondTonightService = async (userId: string, input: RespondDto): 
   // Doing it counts everywhere else too: a habit gets its log, a task done in
   // full is completed. The minimum on a task keeps it open for next time.
   const firstAnswer = target.status === "PENDING"
+  let sideEffectEventId: string | undefined
   if (firstAnswer && input.status !== "SKIPPED") {
     if (target.sourceType === "HABIT") {
-      await logHabitService(target.sourceId, userId, { date: target.date, completed: true }).catch(() => undefined)
+      const log = await logHabitService(
+        target.sourceId,
+        userId,
+        { date: target.date, completed: true },
+        { ...opts, type: input.status === "MINIMUM" ? "MINIMUM" : "LOGGED" },
+      ).catch(() => undefined)
+      sideEffectEventId = log?.activityId
     } else if (input.status === "DONE") {
-      await completeTaskService(target.sourceId, userId).catch(() => undefined)
+      const task = await completeTaskService(target.sourceId, userId, opts).catch(() => undefined)
+      sideEffectEventId = task?.activityId
     }
   }
-  return updated
+
+  // The answer itself is history too (skips and their reasons drive the
+  // patterns). Undo resets the day's pick and reverses what it caused.
+  const event = await recordActivity(userId, {
+    type: input.status === "DONE" ? "DONE" : input.status === "MINIMUM" ? "MINIMUM" : "SKIPPED",
+    itemType: target.sourceType === "HABIT" ? "HABIT" : "TASK",
+    itemId: target.sourceId,
+    title: target.title,
+    reason: input.status === "SKIPPED" ? (input.reason?.trim() || null) : null,
+    source: opts.source,
+    undo: {
+      kind: "RESET_COMMITMENT",
+      commitmentId: target.id,
+      ...(sideEffectEventId ? { then: { kind: "UNDO_EVENT" as const, eventId: sideEffectEventId } } : {}),
+    },
+  })
+  return { ...updated, activityId: event?.id }
 }
 
 // A save turned into "do it tonight" takes tonight's slot, unless tonight

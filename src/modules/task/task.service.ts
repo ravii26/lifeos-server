@@ -1,3 +1,4 @@
+import { recordActivity, type ActivityOptions } from "../activity/activity.service.js"
 import { NotFoundError } from "../../shared/utils/errors.util.js"
 import { logBehavior } from "../behavior/behavior.service.js"
 import { findAreaById } from "../area/area.repository.js"
@@ -49,14 +50,15 @@ const assertLinksOwned = async (
 export const createTaskService = async (
   userId: string,
   input: CreateTaskDto,
-): Promise<TaskDto> => {
+  opts: ActivityOptions = {},
+): Promise<TaskDto & { activityId?: string }> => {
   const { project } = await assertLinksOwned(userId, input)
 
   // Inherit the project's goal when a task is filed under a project but no goal
   // was given explicitly — so project work rolls up to the goal's confidence.
   const goalId = input.goalId ?? project?.goalId ?? null
 
-  return createTask({
+  const task = await createTask({
     userId,
     areaId: input.areaId ?? null,
     goalId,
@@ -74,7 +76,20 @@ export const createTaskService = async (
     recurrence: input.recurrence ?? null,
     source: input.source ?? "MANUAL",
     sourceId: input.sourceId ?? null,
+    remindAt: input.remindAt ?? null,
+    windowEnd: input.windowEnd ?? null,
+    repeatRule: input.repeatRule ?? null,
+    sizeMinutes: input.sizeMinutes ?? null,
   })
+  const event = await recordActivity(userId, {
+    type: "CREATED",
+    itemType: "TASK",
+    itemId: task.id,
+    title: task.title,
+    source: opts.source,
+    undo: { kind: "ARCHIVE_TASK", taskId: task.id },
+  })
+  return { ...task, activityId: event?.id }
 }
 
 export const listTasksService = async (
@@ -151,7 +166,8 @@ export const updateTaskService = async (
 export const completeTaskService = async (
   id: string,
   userId: string,
-): Promise<TaskDto> => {
+  opts: ActivityOptions & { minutes?: number } = {},
+): Promise<TaskDto & { activityId?: string }> => {
   const existing = await getOwnedTask(id, userId)
   await updateTask(id, userId, {
     status: "COMPLETED",
@@ -160,10 +176,26 @@ export const completeTaskService = async (
   logBehavior(userId, "TASK_COMPLETED", { taskId: id })
   // Advance any Learn resources this task is linked to — but only on the real
   // →COMPLETED crossing, so completing an already-done task can't double-count.
+  let activityId: string | undefined
   if (existing.status !== "COMPLETED") {
     await rollupTaskAdvances(userId, id, 1)
+    const event = await recordActivity(userId, {
+      type: "DONE",
+      itemType: "TASK",
+      itemId: id,
+      title: existing.title,
+      minutes: opts.minutes ?? null,
+      source: opts.source,
+      undo: {
+        kind: "REOPEN_TASK",
+        taskId: id,
+        prevStatus: existing.status,
+        prevCompletedAt: existing.completedAt ? new Date(existing.completedAt).toISOString() : null,
+      },
+    })
+    activityId = event?.id
   }
-  return getOwnedTask(id, userId)
+  return { ...(await getOwnedTask(id, userId)), activityId }
 }
 
 export const deleteTaskService = async (id: string, userId: string): Promise<void> => {

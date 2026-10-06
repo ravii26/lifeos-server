@@ -10,7 +10,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "backfill:links": "tsx src/scripts/backfill-entity-links.ts",
-    "backfill:knowledge": "tsx src/scripts/backfill-knowledge-chunks.ts"
+    "backfill:knowledge": "tsx src/scripts/backfill-knowledge-chunks.ts",
+    "evals": "tsx src/evals/run-evals.ts"
   },
   "keywords": [],
   "author": "",

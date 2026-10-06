@@ -38,21 +38,32 @@ export const assistantChatController = async (req: Request, res: Response) => {
 // GET /assistant/reminders — upcoming reminders, so the phone can
 // (re)schedule them after a reinstall or on another device.
 export const listRemindersController = async (req: Request, res: Response) => {
-  const rows = await prisma.reminder.findMany({
-    where: { userId: req.user!.id, status: "PENDING", remindAt: { gte: new Date(Date.now() - 60_000) } },
+  // Reminders are to-dos with a time (see Task.remindAt).
+  const rows = await prisma.task.findMany({
+    where: {
+      userId: req.user!.id,
+      status: { in: ["TODO", "IN_PROGRESS"] },
+      archivedAt: null,
+      remindAt: { gte: new Date(Date.now() - 60_000) },
+    },
     orderBy: { remindAt: "asc" },
     take: 50,
+    select: { id: true, title: true, remindAt: true, windowEnd: true, repeatRule: true },
   })
-  sendSuccess(res, "Reminders", rows)
+  sendSuccess(
+    res,
+    "Reminders",
+    rows.map((r) => ({ id: r.id, text: r.title, remindAt: r.remindAt, windowEnd: r.windowEnd, repeatRule: r.repeatRule })),
+  )
 }
 
 // PATCH /assistant/reminders/:id — mark DONE or CANCELLED.
 export const updateReminderController = async (req: Request, res: Response) => {
   const status = (req.body as { status?: string }).status
   if (status !== "DONE" && status !== "CANCELLED") throw new ValidationError("status must be DONE or CANCELLED")
-  const result = await prisma.reminder.updateMany({
-    where: { id: String(req.params.id), userId: req.user!.id },
-    data: { status },
+  const result = await prisma.task.updateMany({
+    where: { id: String(req.params.id), userId: req.user!.id, remindAt: { not: null } },
+    data: status === "DONE" ? { status: "COMPLETED", completedAt: new Date() } : { status: "CANCELLED", archivedAt: new Date() },
   })
   if (result.count === 0) throw new NotFoundError("Reminder not found")
   sendSuccess(res, "Updated")

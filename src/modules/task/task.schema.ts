@@ -4,12 +4,16 @@ const taskStatus = z.enum(["TODO", "IN_PROGRESS", "COMPLETED", "CANCELLED"])
 const priority = z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"])
 const taskType = z.enum(["BOOLEAN", "COUNT", "TIMER"])
 const recurrence = z.enum(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"])
-const taskSource = z.enum(["MANUAL", "DUMP", "LEARN", "BACKLOG_REMINDER"])
+const taskSource = z.enum(["MANUAL", "DUMP", "LEARN", "BACKLOG_REMINDER", "REMINDER", "SAVE"])
 
 export const createTaskSchema = z.object({
   title: z.string().min(1, "Title is required").max(200),
   description: z.string().max(2000).optional(),
   minimumVersion: z.string().max(200).optional(),
+  remindAt: z.coerce.date().optional(),
+  windowEnd: z.coerce.date().optional(),
+  repeatRule: z.string().max(200).optional(),
+  sizeMinutes: z.number().int().positive().max(1440).optional(),
   areaId: z.string().optional(),
   goalId: z.string().optional(),
   projectId: z.string().optional(),
@@ -31,6 +35,10 @@ export const updateTaskSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   description: z.string().max(2000).nullable().optional(),
   minimumVersion: z.string().max(200).nullable().optional(),
+  remindAt: z.coerce.date().nullable().optional(),
+  windowEnd: z.coerce.date().nullable().optional(),
+  repeatRule: z.string().max(200).nullable().optional(),
+  sizeMinutes: z.number().int().positive().max(1440).nullable().optional(),
   areaId: z.string().nullable().optional(),
   goalId: z.string().nullable().optional(),
   projectId: z.string().nullable().optional(),

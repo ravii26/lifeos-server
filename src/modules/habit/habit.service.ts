@@ -1,3 +1,5 @@
+import { recordActivity, type ActivityOptions } from "../activity/activity.service.js"
+import prisma from "../../lib/prisma.js"
 import { NotFoundError } from "../../shared/utils/errors.util.js"
 import { logBehavior } from "../behavior/behavior.service.js"
 import { findAreaById } from "../area/area.repository.js"
@@ -126,14 +128,16 @@ export const logHabitService = async (
   id: string,
   userId: string,
   input: LogHabitDto,
-): Promise<HabitLogDto> => {
-  await getOwnedHabit(id, userId)
+  opts: ActivityOptions & { type?: "LOGGED" | "MINIMUM" } = {},
+): Promise<HabitLogDto & { activityId?: string }> => {
+  const habit = await getOwnedHabit(id, userId)
   // A logged-for-now entry lands on the user's LOCAL day; an explicit date the
   // client sends is treated as the calendar date it already is.
   const date = input.date
     ? toDateOnly(input.date)
     : localDateOnly(new Date(), await getUserTimezone(userId))
 
+  const prev = await prisma.habitLog.findUnique({ where: { habitId_date: { habitId: id, date } } })
   const log = await upsertHabitLog(id, userId, date, {
     completed: input.completed ?? true,
     count: input.count ?? 0,
@@ -141,7 +145,22 @@ export const logHabitService = async (
     notes: input.notes ?? null,
   })
   logBehavior(userId, "HABIT_LOGGED", { habitId: id })
-  return log
+  const event = await recordActivity(userId, {
+    type: opts.type ?? "LOGGED",
+    itemType: "HABIT",
+    itemId: id,
+    title: habit.title,
+    minutes: input.minutes ?? null,
+    value: input.count ?? null,
+    source: opts.source,
+    undo: {
+      kind: "UNLOG_HABIT",
+      habitId: id,
+      date: date.toISOString(),
+      prev: prev ? { completed: prev.completed, count: prev.count, minutes: prev.minutes } : null,
+    },
+  })
+  return { ...log, activityId: event?.id }
 }
 
 export const listHabitLogsService = async (
