@@ -4,4 +4,5 @@ dist/
 *.log
 md_files/
 postman/
-uploads/evals-reports/
+uploads/
+evals-reports/
