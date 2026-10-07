@@ -20,6 +20,8 @@ export const createHabitSchema = z.object({
   isActive: z.boolean().optional(),
   // Step 2: where the habit sits in the day (see plan §3).
   anchor: z.string().max(200).optional(),
+  // Sized versions of the habit, smallest first ("2 min: read 2 pages").
+  sizes: z.array(z.object({ minutes: z.number().int().positive().max(600), label: z.string().max(120) })).max(4).optional(),
   timeBlock: z.enum(["MORNING", "COMMUTE", "OFFICE", "GYM", "EVENING", "NIGHT"]).optional(),
   prepTime: z.string().regex(/^\d{2}:\d{2}$/, "prepTime must be HH:MM").optional(),
 })

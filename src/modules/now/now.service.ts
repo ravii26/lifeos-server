@@ -155,6 +155,7 @@ const loadCandidates = async (userId: string, c: Clock): Promise<NowCandidate[]>
       block: asBlock(h.timeBlock),
       sizeMinutes: h.targetMinutes,
       sizes: parseSizes(h.sizes),
+      anchor: h.anchor,
       minimum: h.minimumVersion,
       tier: area.get(h.areaId)?.tier ?? "MAINTAIN",
       dueKey: null,

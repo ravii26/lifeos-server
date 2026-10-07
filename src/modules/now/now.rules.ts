@@ -128,6 +128,7 @@ export interface NowCandidate {
   block: Block | null // null = anytime (but never during office hours)
   sizeMinutes: number | null
   sizes?: HabitSize[]
+  anchor?: string | null // "after my morning coffee"
   minimum: string | null
   tier: Tier
   priority?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
@@ -189,6 +190,8 @@ const rankScore = (c: NowCandidate, todayKey: string, minutes: number, size: num
   let s = TIER_WEIGHT[c.tier] + (c.priority ? PRIORITY_WEIGHT[c.priority] : 0)
   if (c.dueKey) s += c.dueKey < todayKey ? 25 : c.dueKey === todayKey ? 15 : 0
   if (c.goalTitle) s += 10
+  // A habit anchored to this part of the day is exactly what belongs here.
+  if (c.anchor && c.block) s += 12
   // "I have 20 minutes": prefer what fills them without overflowing.
   s += Math.max(0, 10 - Math.abs(minutes - size) / 3)
   return s
@@ -254,7 +257,7 @@ export const rightNow = (input: NowInput): NowResult => {
     minutes: size.minutes,
     smaller: size.smaller,
     minimum: c.minimum?.trim() || "Just start. 2 minutes on it counts.",
-    why: block.block === "OFFICE" ? officeWhy(c, input.todayKey) : whyFor({ ...c, sourceType: c.sourceType, minimumVersion: c.minimum, areaId: null, goalId: null }),
+    why: block.block === "OFFICE" ? officeWhy(c, input.todayKey) : c.anchor ? anchorWhy(c.anchor) : whyFor({ ...c, sourceType: c.sourceType, minimumVersion: c.minimum, areaId: null, goalId: null }),
   }))
 
   const state = { ...base, mode: input.mode, block: block.block, availableMinutes: available, smaller: minimumOnly, freshStart, welcomeBack }
@@ -281,6 +284,11 @@ export const rightNow = (input: NowInput): NowResult => {
         : ""
   const how = top.smaller ? `just ${top.minimum.replace(/\.$/, "").toLowerCase()} (${top.minutes} min)` : `${top.title} (${top.minutes} min)`
   return { ...state, kind: "PICK", message: `${lead}${block.block === "OFFICE" ? "First up" : "Right now"}: ${how}. ${top.why}`.replace(/\s+/g, " ").trim(), options }
+}
+
+const anchorWhy = (anchor: string): string => {
+  const a = anchor.trim().replace(/[.!]$/, "")
+  return /^(after|before|when|once)\b/i.test(a) ? `${a[0]!.toUpperCase()}${a.slice(1)}.` : `After ${a}.`
 }
 
 const officeWhy = (c: NowCandidate, todayKey: string): string => {

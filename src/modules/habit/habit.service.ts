@@ -69,6 +69,7 @@ export const createHabitService = async (
     reminderTime: input.reminderTime ?? null,
     isActive: input.isActive ?? true,
     anchor: input.anchor ?? null,
+    sizes: input.sizes?.length ? input.sizes : undefined,
     timeBlock: input.timeBlock ?? null,
     prepTime: input.prepTime ?? null,
   })

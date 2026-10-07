@@ -362,6 +362,24 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    id: "B7",
+    name: "A habit keeps its sizes and its anchor, and right-now uses them",
+    status: "ready",
+    async run({ say, api }) {
+      const r = await say(
+        "Every morning after my coffee I want to read: 2 pages is the minimum, 10 pages normally, 30 on a good day",
+      )
+      const h = ofType(r, "HABIT_ADDED")[0] as any
+      if (!h) return `no habit (reply: ${r.reply.slice(0, 80)})`
+      if (!/coffee/i.test(h.anchor ?? "")) return `anchor ${h.anchor}`
+      if ((h.sizes?.length ?? 0) < 2 || h.sizes[0].minutes > 5) return `sizes ${JSON.stringify(h.sizes)}`
+      const now = await nowAt(api, `${nextWednesday()}T07:00`, 5)
+      const o = now.options.find((x: any) => x.sourceId === h.id)
+      if (!o || o.minutes > 5 || !o.smaller) return `not offered small in 5 minutes: ${JSON.stringify(now.options)}`
+      return /coffee/i.test(o.why) ? null : `reason "${o.why}" does not mention the anchor`
+    },
+  },
+  {
     id: "B6",
     name: "Telling Ally your day sets the schedule",
     status: "ready",

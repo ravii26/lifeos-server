@@ -39,7 +39,7 @@ export type ChatAction = (
   | { type: "TASK_COMPLETED"; id: string; title: string }
   | { type: "HABIT_LOGGED"; id: string; title: string }
   | { type: "REMINDER_SET"; id: string; text: string; remindAt: string; windowEnd?: string; repeatRule?: string }
-  | { type: "HABIT_ADDED"; id: string; title: string; timeBlock?: string; prep?: string }
+  | { type: "HABIT_ADDED"; id: string; title: string; timeBlock?: string; prep?: string; anchor?: string; sizes?: { minutes: number; label: string }[] }
   | { type: "PROJECT_ADDED"; id: string; title: string; kind: string; deadline?: string; priority: string; tasks: number }
   | { type: "NOTE_ADDED"; id: string; title: string; collection: string; template: string; items: string[] }
   // The right-now answer from the rules engine (sized options, never invented).
@@ -186,7 +186,7 @@ You can take actions. Only use ids that appear in the context. Actions:
 - {"type":"WHAT_NOW","minutes":number|null}   (they ask what to do now / what to work on / "I have 20 minutes". The app answers from their real day, you only emit this. minutes = the time they said, else null.)
 - {"type":"SET_MODE","mode":"NORMAL"|"BUSY"|"SICK"|"TRAVEL"|"HOLIDAY","until":"YYYY-MM-DD"|null}   ("I'm sick" -> SICK; "busy week" -> BUSY with until = this Sunday; "I'm better / back to normal" -> NORMAL; "I'm travelling / on holiday until Friday" -> TRAVEL / HOLIDAY.)
 - {"type":"SET_SCHEDULE","days":["MON"..],"blocks":[{"block":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT","start":"HH:mm","end":"HH:mm"}]}   (they describe their day: "I work 10 to 8:30 on weekdays, gym right after". Give the blocks they described; the app fills the rest. Also remember it.)
-- {"type":"ADD_HABIT","title":string,"minimum":string|null,"prepare":string|null,"prepTime":"HH:mm"|null,"timeBlock":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT"|null,"days":["MON"...]|null,"anchor":string|null,"reminderTime":"HH:mm"|null,"areaId":string|null}   (something they want to do repeatedly. A habit that needs setup the night before ("prep the night before") is TWO ADD_HABITs: the habit, and a "Prep ..." habit with timeBlock EVENING and reminderTime at the prep time, 21:30 if not said.)
+- {"type":"ADD_HABIT","title":string,"minimum":string|null,"prepare":string|null,"prepTime":"HH:mm"|null,"timeBlock":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT"|null,"days":["MON"...]|null,"anchor":string|null,"sizes":[{"minutes":number,"label":string}]|null,"reminderTime":"HH:mm"|null,"areaId":string|null}   (something they want to do repeatedly. anchor = what it follows ("after my morning coffee"); set timeBlock to the part of the day that anchor falls in. sizes = their smaller and bigger versions, smallest first, e.g. [{"minutes":2,"label":"read 2 pages"},{"minutes":10,"label":"read 10 pages"}]; always include a 2-minute size when they give any. A habit that needs setup the night before ("prep the night before") is TWO ADD_HABITs: the habit, and a "Prep ..." habit with timeBlock EVENING and reminderTime at the prep time, 21:30 if not said.)
 - {"type":"ADD_PROJECT","title":string,"kind":"OUTCOME"|"MILESTONE"|"PRACTICE"|"WORK","why":string|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL","deadline":"YYYY-MM-DD"|null,"areaId":string|null,"milestones":[string]|null,"tasks":[{"title":string,"due":"YYYY-MM-DD"|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|null}]}   (anything with an outcome. WORK = a deliverable with a deadline; MILESTONE = a goal with stages like a job switch; OUTCOME = a number to move; PRACTICE = weekly practice time. Always include 1-4 concrete first to-dos in "tasks" (for WORK the first to-do is the deliverable itself, with the project's deadline and priority). Put "why" in their words if they said it.)
 - {"type":"ADD_NOTE","collection":string,"template":"LIST"|"ROUTINE"|"PLAYBOOK"|"INFO","title":string,"items":[string],"text":string|null}   (something they TEACH you to keep: their breakfast options, gym warm-up steps, "when X do Y", client details. LIST/ROUTINE use items; PLAYBOOK/INFO use text. collection is a short name like "Breakfast" or "Gym".)
 - {"type":"SET_NUDGE","kind":"NIGHTLY"|"MORNING","time":"HH:mm"|null}   (null turns it off)
@@ -239,6 +239,7 @@ interface PlannedAction {
   deadline?: string | null
   milestones?: unknown
   tasks?: { title?: string; due?: string | null; priority?: string | null }[]
+  sizes?: unknown
   collection?: string
   template?: string
   items?: unknown
@@ -388,6 +389,15 @@ const size = (v: unknown) => {
 }
 const blockOf = (v: unknown) => (BLOCKS as readonly string[]).includes(String(v).toUpperCase()) ? (String(v).toUpperCase() as (typeof BLOCKS)[number]) : undefined
 const WEEKDAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
+const habitSizes = (v: unknown) => {
+  if (!Array.isArray(v)) return undefined
+  const out = v
+    .map((s) => ({ minutes: Math.round(Number((s as { minutes?: unknown })?.minutes)), label: String((s as { label?: unknown })?.label ?? "").trim().slice(0, 120) }))
+    .filter((s) => Number.isFinite(s.minutes) && s.minutes > 0 && s.minutes <= 600 && s.label)
+    .sort((a, b) => a.minutes - b.minutes)
+    .slice(0, 4)
+  return out.length ? out : undefined
+}
 const dayOnly = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null)
 const clock = (v: unknown) => (typeof v === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? v : undefined)
 const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9ऀ-ॿ]+/g, " ").trim()
@@ -555,6 +565,7 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
             specificDays: days.length ? (days as ("MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN")[]) : undefined,
             reminderTime: clock(a.reminderTime),
             anchor: a.anchor?.trim() || undefined,
+            sizes: habitSizes(a.sizes),
           },
           { source: "CHAT" },
         )
@@ -565,6 +576,8 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
           title: habit.title,
           ...(habit.timeBlock && { timeBlock: habit.timeBlock }),
           ...(habit.prepareAhead && { prep: habit.prepareAhead }),
+          ...(habit.anchor && { anchor: habit.anchor }),
+          ...(habitSizes(a.sizes) && { sizes: habitSizes(a.sizes) }),
           activityId: habit.activityId,
         })
       } else if (a.type === "ADD_PROJECT" && a.title?.trim()) {

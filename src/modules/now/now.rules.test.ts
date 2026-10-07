@@ -137,6 +137,30 @@ describe("right now", () => {
     expect(r.options).toHaveLength(1)
     expect(r.message).toMatch(/Welcome back/)
   })
+  it("an anchored habit says what it follows and uses its sizes", () => {
+    const r = rightNow(
+      input({
+        nowMin: toMin("07:00"),
+        minutes: 5,
+        candidates: [
+          cand({
+            sourceId: "read",
+            sourceType: "HABIT",
+            block: "MORNING",
+            anchor: "after my morning coffee",
+            sizes: [
+              { minutes: 2, label: "read 2 pages" },
+              { minutes: 10, label: "read 10 pages" },
+            ],
+            sizeMinutes: 30,
+          }),
+        ],
+      }),
+    )
+    expect(r.options[0]!.minutes).toBe(2)
+    expect(r.options[0]!.smaller).toBe(true)
+    expect(r.options[0]!.why).toBe("After my morning coffee.")
+  })
   it("busy mode asks for minimums only", () => {
     const r = rightNow(input({ nowMin: toMin("20:00"), mode: "BUSY", candidates: [cand({ sourceId: "a", sizeMinutes: 30 })] }))
     expect(r.options[0]!.minutes).toBe(2)
