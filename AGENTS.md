@@ -59,10 +59,10 @@ Production Neon is the only working DB. Migrations are additive and generated **
 - New scenario coverage goes in `src/evals/scenarios.ts` (flip `status` to `"ready"` and add `run`).
 
 ## Env (`.env`, never commit)
-`DATABASE_URL`, `JWT_SECRET`, `PORT`, `NODE_ENV`, `CORS_ORIGINS`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `PREFERRED_AI_PROVIDER` (`gemini` | `groq`).
+`DATABASE_URL`, `JWT_SECRET`, `PORT`, `NODE_ENV`, `CORS_ORIGINS`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `PREFERRED_AI_PROVIDER` (`gemini` | `groq`).
 
 ## Gotchas
-- `gemini-2.5-flash` (in `src/lib/gemini.ts`) retires **2026-10-16**. Update the model id.
+- Gemini model ids get retired. Set `GEMINI_MODEL` (default `gemini-3.5-flash-lite`). Bigger flash models often 503 on the free tier.
 - Groq free tier: 200k tokens/day. Heavy eval runs exhaust it, and chat then returns `usedAi: false`.
 - Render free plan sleeps (~50 s first request). Deploys are manual (`docs/runbooks/deploy.md`).
 - Don't write regexes through bash heredocs (`\b` becomes a backspace byte). Use file edit tools.

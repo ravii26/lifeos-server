@@ -11,6 +11,7 @@ const envSchema = z.object({
   // Comma-separated list of allowed browser origins (e.g. "https://app.lifeos.app,https://lifeos.app")
   CORS_ORIGINS: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().min(1).default("gemini-3.5-flash-lite"),
   GROQ_API_KEY: z.string().optional(),
   PREFERRED_AI_PROVIDER: z.enum(["gemini", "groq"]).default("groq"),
   PUBLIC_BASE_URL: z.string().url().optional(),
