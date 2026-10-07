@@ -1,3 +1,5 @@
+> **⚠️ Superseded (2026-10-07):** this file describes old LifeOS and is outdated. Read `AGENTS.md` in this repo (and the workspace root `AGENTS.md`) instead.
+
 # LifeOS Server — Complete Project Context
 
 > **Purpose of this file:** Drop this into any new Claude session as the first message (use the prompt at the very bottom). The model will have full context without needing the chat history. Keep this file updated every session.
