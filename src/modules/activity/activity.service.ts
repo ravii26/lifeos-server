@@ -28,6 +28,11 @@ export type UndoPayload =
   | { kind: "ARCHIVE_TASK"; taskId: string }
   | { kind: "REOPEN_TASK"; taskId: string; prevStatus: string; prevCompletedAt: string | null }
   | { kind: "UNLOG_HABIT"; habitId: string; date: string; prev: { completed: boolean; count: number; minutes: number } | null }
+  | { kind: "ARCHIVE_HABIT"; habitId: string }
+  | { kind: "ARCHIVE_PROJECT"; projectId: string }
+  | { kind: "DELETE_ALLY_NOTE"; noteId: string }
+  // One chat message can create several things; one payload reverses them all.
+  | { kind: "MANY"; items: UndoPayload[] }
   | { kind: "DELETE_MEMORY"; memoryId: string }
   | { kind: "RESTORE_MEMORY"; memory: { content: string; kind: string; importance: number; source: string; sensitive: boolean } }
   | { kind: "RESTORE_SETTING"; field: "nightlyTime"; prev: string | null }
@@ -88,6 +93,23 @@ const applyUndo = async (userId: string, undo: UndoPayload): Promise<void> => {
           completedAt: undo.prevCompletedAt ? new Date(undo.prevCompletedAt) : null,
         },
       })
+      return
+    case "ARCHIVE_HABIT":
+      await prisma.habit.updateMany({ where: { id: undo.habitId, userId }, data: { isActive: false } })
+      return
+    case "ARCHIVE_PROJECT":
+      // Undoing a creation never deletes: the project is let go, its to-dos archived.
+      await prisma.project.updateMany({ where: { id: undo.projectId, userId }, data: { status: "ABANDONED" } })
+      await prisma.task.updateMany({
+        where: { projectId: undo.projectId, userId, status: { in: ["TODO", "IN_PROGRESS"] } },
+        data: { archivedAt: new Date(), status: "CANCELLED" },
+      })
+      return
+    case "DELETE_ALLY_NOTE":
+      await prisma.allyNote.deleteMany({ where: { id: undo.noteId, userId } })
+      return
+    case "MANY":
+      for (const item of undo.items) await applyUndo(userId, item)
       return
     case "UNLOG_HABIT": {
       const date = new Date(undo.date)

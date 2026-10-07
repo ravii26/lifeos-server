@@ -15,7 +15,22 @@ export interface Turn {
 export interface ChatReplyShape {
   role: string
   reply: string
-  actions: { type: string; activityId?: string; time?: string | null; kind?: string; remindAt?: string }[]
+  actions: {
+    type: string
+    activityId?: string
+    time?: string | null
+    kind?: string
+    remindAt?: string
+    windowEnd?: string
+    repeatRule?: string
+    title?: string
+    priority?: string
+    deadline?: string
+    tasks?: number
+    items?: string[]
+    options?: { id: string; title: string }[]
+  }[]
+  suggestions?: { kind: string; title: string }[]
   usedAi: boolean
 }
 
@@ -35,21 +50,115 @@ export interface Scenario {
 
 const has = (r: ChatReplyShape, type: string) => r.actions.some((a) => a.type === type)
 const questions = (t: string) => (t.match(/\?/g) ?? []).length
+const ofType = (r: ChatReplyShape, type: string) => r.actions.filter((a) => a.type === type)
+const IST = "Asia/Kolkata"
+const hourIst = (iso: string) =>
+  Number(new Intl.DateTimeFormat("en-GB", { timeZone: IST, hour: "2-digit", hour12: false }).format(new Date(iso))) % 24
+const weekdayIst = (iso: string) => new Intl.DateTimeFormat("en-US", { timeZone: IST, weekday: "long" }).format(new Date(iso))
+const taskList = async (api: ScenarioContext["api"]) => ((await api("get", "/tasks")).body.data ?? []) as any[]
 
 export const scenarios: Scenario[] = [
-  { id: "F1", name: "Voice ramble → habit + breakfast note + prep habit, confirm card", status: { pendingUntil: 2 } },
+  {
+    id: "F1",
+    name: "Voice ramble → habit + breakfast note + prep habit, confirm card",
+    status: "ready",
+    async run({ say }) {
+      const r = await say(
+        "I want to drink warm water every morning, and here are my breakfasts: poha, oats, eggs; prep the night before",
+      )
+      const habits = ofType(r, "HABIT_ADDED")
+      const notes = ofType(r, "NOTE_ADDED")
+      if (!habits.some((h) => /water/i.test(h.title ?? ""))) return "no warm-water habit"
+      if (!habits.some((h) => /prep/i.test(h.title ?? ""))) return "no prep habit"
+      const note = notes.find((n) => /breakfast/i.test(n.title ?? ""))
+      if (!note) return "no Breakfast note"
+      if ((note.items?.length ?? 0) !== 3) return `breakfast note has ${note.items?.length} items, expected 3`
+      const made = habits.length + notes.length
+      if (made !== 3) return `${made} things saved, expected 3`
+      if (r.actions.some((a) => !a.activityId && ["HABIT_ADDED", "NOTE_ADDED"].includes(a.type))) return "something has no undo"
+      return null
+    },
+  },
   { id: "F2", name: '"What can I eat?" answered from the Breakfast note', status: { pendingUntil: 4 } },
   { id: "F3", name: "Prep reminder at prep time", status: { pendingUntil: 3 } },
-  { id: "F4", name: "Two office projects with deadlines and priorities from one message", status: { pendingUntil: 2 } },
+  {
+    id: "F4",
+    name: "Two office projects with deadlines and priorities from one message",
+    status: "ready",
+    async run({ say, api }) {
+      const r = await say("Project A: API due Thursday, high priority. Project B: UI, next week")
+      const projects = ofType(r, "PROJECT_ADDED")
+      if (projects.length !== 2) return `${projects.length} projects, expected 2`
+      const a = projects.find((p) => /api/i.test(p.title ?? ""))
+      const b = projects.find((p) => /ui/i.test(p.title ?? ""))
+      if (!a || !b) return "projects not named after API / UI"
+      if (a.priority !== "HIGH" && a.priority !== "CRITICAL") return `API priority ${a.priority}, expected HIGH`
+      if (!a.deadline) return "API has no deadline"
+      if (weekdayIst(`${a.deadline}T12:00:00+05:30`) !== "Thursday") return `API deadline ${a.deadline} is not a Thursday`
+      if (!b.deadline) return "UI has no deadline"
+      const tasks = await taskList(api)
+      if (tasks.filter((t) => t.projectId && t.dueDate).length < 2) return "fewer than 2 to-dos with deadlines inside the projects"
+      return null
+    },
+  },
   { id: "F5", name: '"What should I work on?" during office hours → deadline first', status: { pendingUntil: 3 } },
-  { id: "F6", name: "Reminder with a time window (between 5 and 7)", status: { pendingUntil: 2 } },
-  { id: "F7", name: "Repeating reminder (every Sunday)", status: { pendingUntil: 2 } },
+  {
+    id: "F6",
+    name: "Reminder with a time window (between 5 and 7)",
+    status: "ready",
+    async run({ say }) {
+      const r = await say("Remind me to follow up with the client sometime between 5 and 7 pm")
+      const rem = ofType(r, "REMINDER_SET")[0]
+      if (!rem?.remindAt) return `no reminder (reply: ${r.reply.slice(0, 80)})`
+      if (!rem.windowEnd) return "no window end"
+      if (hourIst(rem.remindAt) !== 17) return `window starts at ${hourIst(rem.remindAt)}:00, expected 17:00`
+      if (hourIst(rem.windowEnd) !== 19) return `window ends at ${hourIst(rem.windowEnd)}:00, expected 19:00`
+      return null
+    },
+  },
+  {
+    id: "F7",
+    name: "Repeating reminder (every Sunday)",
+    status: "ready",
+    async run({ say, api }) {
+      const r = await say("Every Sunday remind me to wash the car")
+      const rem = ofType(r, "REMINDER_SET")[0]
+      if (!rem?.remindAt) return `no reminder (reply: ${r.reply.slice(0, 80)})`
+      if (!/FREQ=WEEKLY/.test(rem.repeatRule ?? "") || !/BYDAY=SU/.test(rem.repeatRule ?? "")) return `repeat rule ${rem.repeatRule}`
+      if (weekdayIst(rem.remindAt) !== "Sunday") return `first one is on a ${weekdayIst(rem.remindAt)}`
+      // Completing one occurrence creates the next one a week later.
+      const id = (await taskList(api)).find((t) => t.repeatRule)?.id
+      if (!id) return "repeating to-do not stored"
+      const done = await api("patch", `/tasks/${id}/complete`)
+      if (done.status !== 200) return `complete returned ${done.status}`
+      const next = (await taskList(api)).find((t) => t.status === "TODO" && t.repeatRule)
+      if (!next) return "no next occurrence after completing"
+      const gap = (new Date(next.remindAt).getTime() - new Date(rem.remindAt).getTime()) / 86_400_000
+      return Math.round(gap) === 7 ? null : `next occurrence is ${gap} days later`
+    },
+  },
   { id: "F8", name: "Gym warm-up answered from the Gym note", status: { pendingUntil: 4 } },
   { id: "F9", name: "\"I have 20 minutes\" → Main-area item sized to 20 min, or rest", status: { pendingUntil: 3 } },
   { id: "F10", name: "YouTube video → summary + actions", status: { pendingUntil: 6 } },
   { id: "F11", name: "Instagram reel purpose guessed (learning vs feeling)", status: { pendingUntil: 6 } },
   { id: "F12", name: '"I feel lazy" → your saved comfort item', status: { pendingUntil: 6 } },
-  { id: "F13", name: "Goal → milestone project with starter steps", status: { pendingUntil: 4 } },
+  {
+    id: "F13",
+    name: "Goal → milestone project with starter steps",
+    status: "ready",
+    async run({ say }) {
+      const r = await say("I want to switch jobs in 6 months")
+      const p = ofType(r, "PROJECT_ADDED")[0]
+      if (!p) return `no project (reply: ${r.reply.slice(0, 80)})`
+      if (p.kind !== "MILESTONE") return `project kind ${p.kind}, expected MILESTONE`
+      if ((p.tasks ?? 0) < 3) return `${p.tasks} starter to-dos, expected 3`
+      if (ofType(r, "HABIT_ADDED").length) return "created a habit without asking"
+      if (!r.suggestions?.length) return "no habit suggestion to confirm"
+      if (!p.deadline) return "no deadline from '6 months'"
+      const months = (new Date(p.deadline).getTime() - Date.now()) / (30.4 * 86_400_000)
+      return months > 4.5 && months < 7.5 ? null : `deadline is ${months.toFixed(1)} months away`
+    },
+  },
   { id: "F14", name: "After 2 missed days → smallest version only", status: { pendingUntil: 3 } },
   { id: "F15", name: "Back after 2 weeks → warm welcome, overdue moved", status: { pendingUntil: 3 } },
   {
@@ -69,7 +178,20 @@ export const scenarios: Scenario[] = [
   {
     id: "F16b",
     name: '"Done with the report" with two matching to-dos asks which one',
-    status: { pendingUntil: 2 },
+    status: "ready",
+    async run({ say, api }) {
+      await api("post", "/tasks", { title: "Finish the report for client A" })
+      await api("post", "/tasks", { title: "Send the weekly report" })
+      const r = await say("done with the report")
+      if (has(r, "TASK_COMPLETED")) return "guessed instead of asking"
+      const ask = ofType(r, "ASK")[0]
+      if (!ask || (ask.options?.length ?? 0) < 2) return "no question with the two options"
+      const open = (await taskList(api)).filter((t) => t.status === "TODO").length
+      if (open !== 2) return `${open} open to-dos, expected both still open`
+      // Picking one by its exact title completes exactly that one.
+      const pick = await say(`Done: ${ask.options![0]!.title}`)
+      return ofType(pick, "TASK_COMPLETED").length === 1 ? null : "picking an option did not complete exactly one"
+    },
   },
   {
     id: "F17",

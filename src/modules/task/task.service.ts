@@ -12,6 +12,8 @@ import {
   updateTask,
   deleteTask,
 } from "./task.repository.js"
+import { getUserTimezone } from "../auth/auth.repository.js"
+import { nextOccurrence } from "../assistant/assistant.capture.js"
 import { getPagination, paginatedResponse } from "../../shared/utils/pagination.util.js"
 import { rollupTaskAdvances } from "../link/link.rollup.js"
 import { deleteLinksForEntity } from "../link/link.repository.js"
@@ -179,6 +181,38 @@ export const completeTaskService = async (
   let activityId: string | undefined
   if (existing.status !== "COMPLETED") {
     await rollupTaskAdvances(userId, id, 1)
+    // A repeating to-do (every Sunday…) gets its next occurrence the moment
+    // this one is done, so the series never silently ends.
+    let nextId: string | null = null
+    if (existing.repeatRule && existing.remindAt) {
+      const next = nextOccurrence(existing.repeatRule, existing.remindAt, await getUserTimezone(userId))
+      if (next) {
+        const shift = next.getTime() - existing.remindAt.getTime()
+        const created = await createTask({
+          userId,
+          areaId: existing.areaId,
+          goalId: existing.goalId,
+          projectId: existing.projectId,
+          title: existing.title,
+          description: existing.description,
+          minimumVersion: existing.minimumVersion,
+          priority: existing.priority,
+          dueDate: next,
+          remindAt: next,
+          windowEnd: existing.windowEnd ? new Date(existing.windowEnd.getTime() + shift) : null,
+          repeatRule: existing.repeatRule,
+          sizeMinutes: existing.sizeMinutes,
+          source: existing.source,
+        })
+        nextId = created.id
+      }
+    }
+    const reopen = {
+      kind: "REOPEN_TASK" as const,
+      taskId: id,
+      prevStatus: existing.status,
+      prevCompletedAt: existing.completedAt ? new Date(existing.completedAt).toISOString() : null,
+    }
     const event = await recordActivity(userId, {
       type: "DONE",
       itemType: "TASK",
@@ -186,12 +220,7 @@ export const completeTaskService = async (
       title: existing.title,
       minutes: opts.minutes ?? null,
       source: opts.source,
-      undo: {
-        kind: "REOPEN_TASK",
-        taskId: id,
-        prevStatus: existing.status,
-        prevCompletedAt: existing.completedAt ? new Date(existing.completedAt).toISOString() : null,
-      },
+      undo: nextId ? { kind: "MANY", items: [reopen, { kind: "ARCHIVE_TASK", taskId: nextId }] } : reopen,
     })
     activityId = event?.id
   }

@@ -44,7 +44,8 @@ export const listRemindersController = async (req: Request, res: Response) => {
       userId: req.user!.id,
       status: { in: ["TODO", "IN_PROGRESS"] },
       archivedAt: null,
-      remindAt: { gte: new Date(Date.now() - 60_000) },
+      // A window that has started still has its closing nudge to fire.
+      OR: [{ remindAt: { gte: new Date(Date.now() - 60_000) } }, { windowEnd: { gte: new Date() } }],
     },
     orderBy: { remindAt: "asc" },
     take: 50,
@@ -79,4 +80,23 @@ export const deleteMemoryController = async (req: Request, res: Response) => {
   const result = await deleteMemory(req.user!.id, String(req.params.id))
   if (result.count === 0) throw new NotFoundError("Memory not found")
   sendSuccess(res, "Forgotten")
+}
+
+// PATCH /assistant/items/:type/:id — fix the title of something Ally just
+// captured (the "edit" on the confirm card). Scoped to the user's own rows.
+export const renameCapturedItemController = async (req: Request, res: Response) => {
+  const title = z.string().trim().min(1).max(200).safeParse((req.body as { title?: unknown }).title)
+  if (!title.success) throw new ValidationError("title is required")
+  const where = { id: String(req.params.id), userId: req.user!.id }
+  const data = { title: title.data }
+  const type = String(req.params.type)
+  const result =
+    type === "task" ? await prisma.task.updateMany({ where, data })
+    : type === "habit" ? await prisma.habit.updateMany({ where, data })
+    : type === "project" ? await prisma.project.updateMany({ where, data })
+    : type === "note" ? await prisma.allyNote.updateMany({ where, data })
+    : null
+  if (!result) throw new ValidationError("type must be task, habit, project or note")
+  if (result.count === 0) throw new NotFoundError("Item not found")
+  sendSuccess(res, "Renamed")
 }

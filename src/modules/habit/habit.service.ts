@@ -49,10 +49,11 @@ const toDateOnly = (date: Date): Date => {
 export const createHabitService = async (
   userId: string,
   input: CreateHabitDto,
-): Promise<HabitDto> => {
+  opts: ActivityOptions = {},
+): Promise<HabitDto & { activityId?: string }> => {
   await assertAreaOwned(input.areaId, userId)
 
-  return createHabit({
+  const habit = await createHabit({
     userId,
     areaId: input.areaId,
     title: input.title,
@@ -67,7 +68,19 @@ export const createHabitService = async (
     specificDays: input.specificDays ?? [],
     reminderTime: input.reminderTime ?? null,
     isActive: input.isActive ?? true,
+    anchor: input.anchor ?? null,
+    timeBlock: input.timeBlock ?? null,
+    prepTime: input.prepTime ?? null,
   })
+  const event = await recordActivity(userId, {
+    type: "CREATED",
+    itemType: "HABIT",
+    itemId: habit.id,
+    title: habit.title,
+    source: opts.source,
+    undo: { kind: "ARCHIVE_HABIT", habitId: habit.id },
+  })
+  return { ...habit, activityId: event?.id }
 }
 
 export const listHabitsService = async (

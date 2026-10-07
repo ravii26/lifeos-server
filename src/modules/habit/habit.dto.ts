@@ -13,6 +13,9 @@ export interface HabitDto {
   weeklyTarget: number | null
   specificDays: string[]
   reminderTime: string | null
+  anchor: string | null
+  timeBlock: string | null
+  prepTime: string | null
   isActive: boolean
   createdAt: Date
   updatedAt: Date

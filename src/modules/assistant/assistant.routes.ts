@@ -7,6 +7,7 @@ import {
   updateReminderController,
   listMemoriesController,
   deleteMemoryController,
+  renameCapturedItemController,
 } from "./assistant.controller.js"
 
 const router = Router()
@@ -24,6 +25,7 @@ router.post("/ask", assistantAskController)
 router.post("/chat", assistantChatController)
 router.get("/reminders", listRemindersController)
 router.patch("/reminders/:id", updateReminderController)
+router.patch("/items/:type/:id", renameCapturedItemController)
 router.get("/memories", listMemoriesController)
 router.delete("/memories/:id", deleteMemoryController)
 

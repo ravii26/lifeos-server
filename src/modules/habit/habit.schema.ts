@@ -18,6 +18,10 @@ export const createHabitSchema = z.object({
   specificDays: z.array(day).optional(),
   reminderTime: z.string().regex(/^\d{2}:\d{2}$/, "reminderTime must be HH:MM").optional(),
   isActive: z.boolean().optional(),
+  // Step 2: where the habit sits in the day (see plan §3).
+  anchor: z.string().max(200).optional(),
+  timeBlock: z.enum(["MORNING", "COMMUTE", "OFFICE", "GYM", "EVENING", "NIGHT"]).optional(),
+  prepTime: z.string().regex(/^\d{2}:\d{2}$/, "prepTime must be HH:MM").optional(),
 })
 
 export const updateHabitSchema = z.object({

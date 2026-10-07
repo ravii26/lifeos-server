@@ -7,6 +7,9 @@ export interface ProjectDto {
   description: string | null
   status: string
   deadline: Date | null
+  kind: string
+  why: string | null
+  priority: string
   createdAt: Date
   updatedAt: Date
 }

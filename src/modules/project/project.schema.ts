@@ -9,6 +9,10 @@ export const createProjectSchema = z.object({
   goalId: z.string().optional(),
   status: projectStatus.optional(),
   deadline: z.coerce.date().optional(),
+  kind: z.enum(["OUTCOME", "MILESTONE", "PRACTICE", "WORK"]).optional(),
+  why: z.string().max(500).optional(),
+  priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).optional(),
+  milestones: z.array(z.object({ title: z.string().min(1).max(200), target: z.number().int().positive().optional() })).max(12).optional(),
 })
 
 export const updateProjectSchema = z.object({
