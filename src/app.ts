@@ -1,4 +1,4 @@
-import "./config/env.config.js"
+import { env } from "./config/env.config.js"
 import express from "express"
 import cors from "cors"
 import helmet from "helmet"
@@ -38,7 +38,8 @@ app.use(rateLimit({
 // Stricter limiter on auth endpoints to slow credential brute-forcing
 app.use("/api/v1/auth", rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20,
+  // Production stays strict; dev/test runs register one throwaway user per eval scenario.
+  max: env.NODE_ENV === "production" ? 20 : 500,
   standardHeaders: true,
   legacyHeaders: false,
   message: "Too many authentication attempts, please try again later"

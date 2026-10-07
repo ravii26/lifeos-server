@@ -283,6 +283,9 @@ model Task {
   windowEnd   DateTime?
   repeatRule  String?
   sizeMinutes Int?
+  // Where in the day this belongs: MORNING | COMMUTE | OFFICE | GYM | EVENING | NIGHT.
+  // Null = anytime. Right-now suggestions only use items that fit the current block.
+  block       String?
   archivedAt  DateTime?
 
   isRecurring Boolean     @default(false)

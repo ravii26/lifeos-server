@@ -13,6 +13,14 @@ import { logHabitService, createHabitService } from "../habit/habit.service.js"
 import { createProjectService } from "../project/project.service.js"
 import { createAllyNoteService } from "../allynote/allynote.service.js"
 import { localToUtc, repeatToRule, isAmbiguousCompletion } from "./assistant.capture.js"
+import {
+  getNowService,
+  setModeService,
+  setScheduleService,
+  capacityTodayService,
+  type NowDto,
+} from "../now/now.service.js"
+import { MODES, BLOCKS, type Mode } from "../now/now.rules.js"
 import { getTonightService } from "../guide/guide.service.js"
 import { extractUrl } from "../guide/guide.saves.ai.js"
 import { upsertSettings } from "../settings/settings.repository.js"
@@ -34,6 +42,10 @@ export type ChatAction = (
   | { type: "HABIT_ADDED"; id: string; title: string; timeBlock?: string; prep?: string }
   | { type: "PROJECT_ADDED"; id: string; title: string; kind: string; deadline?: string; priority: string; tasks: number }
   | { type: "NOTE_ADDED"; id: string; title: string; collection: string; template: string; items: string[] }
+  // The right-now answer from the rules engine (sized options, never invented).
+  | { type: "NOW_PICK"; kind: string; options: { id: string; sourceType: string; title: string; minutes: number; smaller: boolean; minimum: string }[] }
+  | { type: "MODE_SET"; mode: string; until?: string }
+  | { type: "SCHEDULE_SET"; days: string[] }
   // Ambiguous request: nothing was changed, the person picks (tap sends the exact title).
   | { type: "ASK"; question: string; options: { id: string; title: string }[] }
   | { type: "OPEN_SAVE"; text: string }
@@ -50,6 +62,8 @@ export interface ChatResult {
   actions: ChatAction[]
   // Things Ally would add but wants a yes first (e.g. a habit for a new goal).
   suggestions?: { kind: "HABIT"; title: string }[]
+  // More planned for today than there is free time: what stays, what could move.
+  capacity?: { message: string; plannedMinutes: number; freeMinutes: number; keep: { id: string; title: string }[]; move: { id: string; title: string }[] }
   usedAi: boolean
 }
 
@@ -165,17 +179,20 @@ Patterns (patternsNoticed in context are computed from their real data):
 - Don't lecture. Never mention a pattern when they are venting or low.
 
 You can take actions. Only use ids that appear in the context. Actions:
-- {"type":"ADD_TASK","title":string,"minimum":string|null,"areaId":string|null,"due":"YYYY-MM-DD"|null}
+- {"type":"ADD_TASK","title":string,"minimum":string|null,"areaId":string|null,"due":"YYYY-MM-DD"|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|null,"sizeMinutes":number|null,"block":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT"|null}   (sizeMinutes = a realistic estimate, block = where in the day it belongs, null if anytime; office work is OFFICE.)
 - {"type":"COMPLETE_TASK","taskId":string}
 - {"type":"LOG_HABIT","habitId":string}
 - {"type":"SET_REMINDER","text":string,"at":"YYYY-MM-DDTHH:mm","windowEnd":"YYYY-MM-DDTHH:mm"|null,"repeat":{"freq":"DAILY"|"WEEKLY"|"MONTHLY","days":["SU"...]}|null}   (local time; resolve "at 7" / "tomorrow" / "in 2 hours" from "now". "sometime between 5 and 7" -> at=5, windowEnd=7. "every Sunday" -> repeat WEEKLY days ["SU"], at = the next Sunday; with no time said use 09:00.)
+- {"type":"WHAT_NOW","minutes":number|null}   (they ask what to do now / what to work on / "I have 20 minutes". The app answers from their real day, you only emit this. minutes = the time they said, else null.)
+- {"type":"SET_MODE","mode":"NORMAL"|"BUSY"|"SICK"|"TRAVEL"|"HOLIDAY","until":"YYYY-MM-DD"|null}   ("I'm sick" -> SICK; "busy week" -> BUSY with until = this Sunday; "I'm better / back to normal" -> NORMAL; "I'm travelling / on holiday until Friday" -> TRAVEL / HOLIDAY.)
+- {"type":"SET_SCHEDULE","days":["MON"..],"blocks":[{"block":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT","start":"HH:mm","end":"HH:mm"}]}   (they describe their day: "I work 10 to 8:30 on weekdays, gym right after". Give the blocks they described; the app fills the rest. Also remember it.)
 - {"type":"ADD_HABIT","title":string,"minimum":string|null,"prepare":string|null,"prepTime":"HH:mm"|null,"timeBlock":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT"|null,"days":["MON"...]|null,"anchor":string|null,"reminderTime":"HH:mm"|null,"areaId":string|null}   (something they want to do repeatedly. A habit that needs setup the night before ("prep the night before") is TWO ADD_HABITs: the habit, and a "Prep ..." habit with timeBlock EVENING and reminderTime at the prep time, 21:30 if not said.)
 - {"type":"ADD_PROJECT","title":string,"kind":"OUTCOME"|"MILESTONE"|"PRACTICE"|"WORK","why":string|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL","deadline":"YYYY-MM-DD"|null,"areaId":string|null,"milestones":[string]|null,"tasks":[{"title":string,"due":"YYYY-MM-DD"|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|null}]}   (anything with an outcome. WORK = a deliverable with a deadline; MILESTONE = a goal with stages like a job switch; OUTCOME = a number to move; PRACTICE = weekly practice time. Always include 1-4 concrete first to-dos in "tasks" (for WORK the first to-do is the deliverable itself, with the project's deadline and priority). Put "why" in their words if they said it.)
 - {"type":"ADD_NOTE","collection":string,"template":"LIST"|"ROUTINE"|"PLAYBOOK"|"INFO","title":string,"items":[string],"text":string|null}   (something they TEACH you to keep: their breakfast options, gym warm-up steps, "when X do Y", client details. LIST/ROUTINE use items; PLAYBOOK/INFO use text. collection is a short name like "Breakfast" or "Gym".)
 - {"type":"SET_NUDGE","kind":"NIGHTLY"|"MORNING","time":"HH:mm"|null}   (null turns it off)
 
 Action rules:
-- "What should I do now?" or similar: answer with tonightsOneThing (title + one-line why). If it is done, suggest one open task from a MAIN or SECONDARY area.
+- "What should I do now / what should I work on / I have N minutes" (any language): emit WHAT_NOW. Do not pick the item yourself.
 - When they say they finished something, complete the matching task or habit.
 - When they ask to be reminded, set a reminder. When they clearly mention something they need to do, add a task (ask nothing unless truly unclear).
 - One long message can hold many things: emit one action per thing (up to 12). Do not merge unrelated things and do not invent extra ones. Do not duplicate what activeProjects, habits or openTasks already hold.
@@ -225,6 +242,12 @@ interface PlannedAction {
   collection?: string
   template?: string
   items?: unknown
+  minutes?: number | null
+  mode?: string
+  until?: string | null
+  blocks?: unknown
+  sizeMinutes?: number | null
+  block?: string | null
 }
 
 export const ROLES = ["FRIEND", "ASSISTANT", "MENTOR", "COACH", "GUIDE"] as const
@@ -359,6 +382,12 @@ const prio = (p: unknown): Prio | undefined => {
   const v = String(p ?? "").toUpperCase()
   return (PRIORITIES as readonly string[]).includes(v) ? (v as Prio) : undefined
 }
+const size = (v: unknown) => {
+  const n = Math.round(Number(v))
+  return Number.isFinite(n) && n > 0 && n <= 1440 ? n : undefined
+}
+const blockOf = (v: unknown) => (BLOCKS as readonly string[]).includes(String(v).toUpperCase()) ? (String(v).toUpperCase() as (typeof BLOCKS)[number]) : undefined
+const WEEKDAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
 const dayOnly = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null)
 const clock = (v: unknown) => (typeof v === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? v : undefined)
 const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9ऀ-ॿ]+/g, " ").trim()
@@ -381,13 +410,23 @@ const pickArea = async (userId: string, ctx: Ctx, areaId?: string | null): Promi
 
 interface ExecResult {
   done: ChatAction[]
+  say: string | null // the exact reply when rules, not the model, produce the answer
   skipped: number // duplicates we did not create again: not a failure
   asked: Extract<ChatAction, { type: "ASK" }> | null
+}
+
+const MODE_SAY: Record<Mode, string> = {
+  NORMAL: "Back to normal. I'll plan your days again.",
+  BUSY: "Busy mode on. I'll only ask for the smallest version of things until you say otherwise.",
+  SICK: "Sick mode on. Everything is paused and I won't prompt you. Rest, drink water. Tell me when you're better.",
+  TRAVEL: "Travel mode on. Plans are paused and I'll only ask for minimums until you're back.",
+  HOLIDAY: "Holiday mode on. Plans are paused. Enjoy it, tell me when you're back.",
 }
 
 const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], message = ""): Promise<ExecResult> => {
   const done: ChatAction[] = []
   let skipped = 0
+  let say: string | null = null
   let asked: ExecResult["asked"] = null
   const taskIds = new Map(ctx.tasks.map((t) => [t.id, t.title]))
   const habitIds = new Map(ctx.habits.map((h) => [h.id, h.title]))
@@ -412,6 +451,8 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
             areaId: a.areaId && areaIds.has(a.areaId) ? a.areaId : undefined,
             dueDate: dueKey ? dateFromKey(dueKey) : undefined,
             priority: prio(a.priority),
+            sizeMinutes: size(a.sizeMinutes),
+            block: blockOf(a.block),
             source: "DUMP",
           },
           { source: "CHAT" },
@@ -475,6 +516,25 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
           ...(repeatRule && { repeatRule }),
           activityId: task.activityId,
         })
+      } else if (a.type === "WHAT_NOW") {
+        const now: NowDto = await getNowService(userId, { minutes: size(a.minutes) ?? null })
+        const prep = now.prep.map((p) => `Tonight's prep: ${p.prepare}.`).join(" ")
+        say = [now.message, prep].filter(Boolean).join(" ")
+        done.push({
+          type: "NOW_PICK",
+          kind: now.kind,
+          options: now.options.map((o) => ({ id: o.sourceId, sourceType: o.sourceType, title: o.title, minutes: o.minutes, smaller: o.smaller, minimum: o.minimum })),
+        })
+      } else if (a.type === "SET_MODE" && MODES.includes(String(a.mode).toUpperCase() as Mode)) {
+        const mode = String(a.mode).toUpperCase() as Mode
+        const until = dayOnly(a.until)
+        const set = await setModeService(userId, mode, until, "CHAT")
+        say = MODE_SAY[mode]
+        done.push({ type: "MODE_SET", mode, ...(until && mode !== "NORMAL" && { until }), activityId: set.activityId })
+      } else if (a.type === "SET_SCHEDULE") {
+        const days = strings(a.days, 7).map((d) => WEEKDAYS.indexOf(d.toUpperCase().slice(0, 3))).filter((d) => d >= 0)
+        const set = await setScheduleService(userId, days, a.blocks, "CHAT")
+        if (set) done.push({ type: "SCHEDULE_SET", days: set.weekdays.map((d) => WEEKDAYS[d]!), activityId: set.activityId })
       } else if (a.type === "ADD_HABIT" && a.title?.trim()) {
         if (habitTitles.has(norm(a.title))) {
           skipped++
@@ -590,7 +650,7 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
       logger.warn(`Chat action ${a.type} failed:`, err)
     }
   }
-  return { done, skipped, asked }
+  return { done, say, skipped, asked }
 }
 
 // ---- entry ---------------------------------------------------------
@@ -649,7 +709,7 @@ export const assistantChat = async (
   if (plan.role === "FRIEND" && !EXPLICIT_TASK.test(text)) {
     plan.actions = plan.actions.filter((a) => !CREATES.has(a.type ?? ""))
   }
-  const { done: actions, skipped, asked } = await execute(userId, ctx, plan.actions, text)
+  const { done: actions, say, skipped, asked } = await execute(userId, ctx, plan.actions, text)
   const [forgotten, remembered] = await Promise.all([
     forgetMemories(userId, plan.forget, ctx.memories).catch(() => []),
     saveMemories(userId, plan.remember, ctx.memories).catch(() => []),
@@ -668,13 +728,30 @@ export const assistantChat = async (
   // An ambiguous completion: the question replaces a reply that may have said "done".
   const reply = asked
     ? `Which one did you finish: ${asked.options.map((o) => `"${o.title}"`).join(" or ")}?`
-    : [plan.reply, ...notes].join("\n\n")
+    : say
+      ? [say, ...notes].join("\n\n")
+      : [plan.reply, ...notes].join("\n\n")
+  // Capacity guard: never silently overload today (plan rule 6).
+  let capacity: ChatResult["capacity"]
+  if (actions.some((x) => x.type === "TASK_ADDED" || x.type === "PROJECT_ADDED")) {
+    const cap = await capacityTodayService(userId).catch(() => null)
+    if (cap?.over) {
+      capacity = {
+        message: cap.message,
+        plannedMinutes: cap.plannedMinutes,
+        freeMinutes: cap.freeMinutes,
+        keep: cap.keep.map((id) => ({ id, title: cap.titles[id] ?? "" })),
+        move: cap.move.map((id) => ({ id, title: cap.titles[id] ?? "" })),
+      }
+    }
+  }
   const have = new Set(ctx.habits.map((h) => norm(h.title)))
   const suggestions = plan.suggest.filter((s) => !have.has(norm(s.title)))
   return {
     role: plan.role,
-    reply,
+    reply: capacity ? `${reply}\n\n${capacity.message}` : reply,
     actions: [...(asked ? [asked] : []), ...actions, ...memoryActions],
+    ...(capacity && { capacity }),
     ...(suggestions.length && { suggestions }),
     usedAi: true,
   }

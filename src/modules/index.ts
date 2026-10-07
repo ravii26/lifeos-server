@@ -25,6 +25,7 @@ import onboardingRoutes from "./onboarding/onboarding.routes.js"
 import assistantRoutes from "./assistant/assistant.routes.js"
 import guideRoutes from "./guide/guide.routes.js"
 import activityRoutes from "./activity/activity.routes.js"
+import nowRoutes from "./now/now.routes.js"
 
 const router = Router()
 
@@ -56,5 +57,6 @@ router.use("/onboarding", onboardingRoutes)
 router.use("/assistant", assistantRoutes)
 router.use("/guide", guideRoutes)
 router.use("/activity", activityRoutes)
+router.use("/now", nowRoutes)
 
 export default router

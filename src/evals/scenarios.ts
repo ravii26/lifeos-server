@@ -31,10 +31,16 @@ export interface ChatReplyShape {
     options?: { id: string; title: string }[]
   }[]
   suggestions?: { kind: string; title: string }[]
+  capacity?: { message: string; plannedMinutes: number; freeMinutes: number; keep: { id: string; title: string }[]; move: { id: string; title: string }[] }
   usedAi: boolean
 }
 
+import type { PrismaClient } from "@prisma/client"
+
 export interface ScenarioContext {
+  // For checks the API cannot do (e.g. backdating activity to simulate days away).
+  db: PrismaClient
+  userId: string
   // Fresh per scenario: an empty account with one MAIN area (Career).
   say: (message: string) => Promise<ChatReplyShape>
   api: (method: "get" | "post" | "patch", path: string, body?: unknown) => Promise<{ status: number; body: any }>
@@ -55,6 +61,20 @@ const IST = "Asia/Kolkata"
 const hourIst = (iso: string) =>
   Number(new Intl.DateTimeFormat("en-GB", { timeZone: IST, hour: "2-digit", hour12: false }).format(new Date(iso))) % 24
 const weekdayIst = (iso: string) => new Intl.DateTimeFormat("en-US", { timeZone: IST, weekday: "long" }).format(new Date(iso))
+const dayKey = (offsetDays = 0) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: IST }).format(new Date(Date.now() + offsetDays * 86_400_000))
+// The next Wednesday (today if it is one): a weekday where 11:00 is office hours.
+const nextWednesday = () => {
+  for (let i = 0; i < 7; i++) {
+    const k = dayKey(i)
+    if (weekdayIst(`${k}T12:00:00+05:30`) === "Wednesday") return k
+  }
+  return dayKey()
+}
+const nowAt = (api: ScenarioContext["api"], at: string, minutes?: number) =>
+  api("get", `/now?at=${at}${minutes ? `&minutes=${minutes}` : ""}`).then((r) => r.body.data)
+const careerId = async (api: ScenarioContext["api"]) => ((await api("get", "/areas")).body.data as any[])[0].id as string
+const ago = (days: number) => new Date(Date.now() - days * 86_400_000)
 const taskList = async (api: ScenarioContext["api"]) => ((await api("get", "/tasks")).body.data ?? []) as any[]
 
 export const scenarios: Scenario[] = [
@@ -79,8 +99,27 @@ export const scenarios: Scenario[] = [
       return null
     },
   },
-  { id: "F2", name: '"What can I eat?" answered from the Breakfast note', status: { pendingUntil: 4 } },
-  { id: "F3", name: "Prep reminder at prep time", status: { pendingUntil: 3 } },
+  // F2 and F8 answer from notes, which needs note search (build step 5), not the step-3 engine.
+  { id: "F2", name: '"What can I eat?" answered from the Breakfast note', status: { pendingUntil: 5 } },
+  {
+    id: "F3",
+    name: "Prep reminder at prep time",
+    status: "ready",
+    async run({ api }) {
+      const area = await careerId(api)
+      const prep = await api("post", "/habits", { title: "Overnight oats", areaId: area, prepareAhead: "soak the oats", prepTime: "21:30" })
+      await api("post", "/habits", { title: "Warm water", areaId: area })
+      const day = dayKey()
+      const before = await nowAt(api, `${day}T14:00`)
+      if (before.prep.length) return "prep surfaced in the afternoon"
+      const at = await nowAt(api, `${day}T21:35`)
+      if (at.prep.length !== 1 || !/oats/i.test(at.prep[0].prepare)) return `expected the oats prep at 21:35, got ${JSON.stringify(at.prep)}`
+      const done = await api("post", `/now/prep/${prep.body.data.id}/done`)
+      if (done.status !== 200) return `prep done returned ${done.status}`
+      const after = await nowAt(api, `${day}T21:40`)
+      return after.prep.length === 0 ? null : "prep still showing after it was done"
+    },
+  },
   {
     id: "F4",
     name: "Two office projects with deadlines and priorities from one message",
@@ -101,7 +140,21 @@ export const scenarios: Scenario[] = [
       return null
     },
   },
-  { id: "F5", name: '"What should I work on?" during office hours → deadline first', status: { pendingUntil: 3 } },
+  {
+    id: "F5",
+    name: '"What should I work on?" during office hours → deadline first',
+    status: "ready",
+    async run({ say, api }) {
+      const made = await say("Project A: API due Thursday, high priority. Project B: UI, due a week from Thursday")
+      if (ofType(made, "PROJECT_ADDED").length !== 2) return "projects not created"
+      const now = await nowAt(api, `${nextWednesday()}T11:00`)
+      if (now.kind !== "PICK" || now.block !== "OFFICE") return `not an office pick: ${now.kind} ${now.block}`
+      if (!/api/i.test(now.options[0]?.title ?? "")) return `first pick was "${now.options[0]?.title}", expected the API work`
+      if (!/due|deadline|priority/i.test(now.message)) return `no reason in "${now.message}"`
+      const r = await say("what should I work on?")
+      return ofType(r, "NOW_PICK").length ? null : "chat did not ask the right-now engine"
+    },
+  },
   {
     id: "F6",
     name: "Reminder with a time window (between 5 and 7)",
@@ -137,8 +190,24 @@ export const scenarios: Scenario[] = [
       return Math.round(gap) === 7 ? null : `next occurrence is ${gap} days later`
     },
   },
-  { id: "F8", name: "Gym warm-up answered from the Gym note", status: { pendingUntil: 4 } },
-  { id: "F9", name: "\"I have 20 minutes\" → Main-area item sized to 20 min, or rest", status: { pendingUntil: 3 } },
+  { id: "F8", name: "Gym warm-up answered from the Gym note", status: { pendingUntil: 5 } },
+  {
+    id: "F9",
+    name: '"I have 20 minutes" → Main-area item sized to 20 min, or rest',
+    status: "ready",
+    async run({ say, api }) {
+      const area = await careerId(api)
+      await api("post", "/tasks", { title: "Read 10 pages of the DSA book", areaId: area, sizeMinutes: 20 })
+      await api("post", "/tasks", { title: "Redo the whole system design course", areaId: area, sizeMinutes: 90, minimumVersion: "Read one page" })
+      await api("post", "/tasks", { title: "Tidy the desk", sizeMinutes: 10 })
+      const now = await nowAt(api, `${dayKey()}T21:45`, 20)
+      if (now.kind !== "PICK") return `kind ${now.kind}`
+      if (!/DSA/.test(now.options[0].title)) return `first pick "${now.options[0].title}", expected the 20-minute Main item`
+      if (now.options.some((o: any) => o.minutes > 20)) return "an option longer than 20 minutes"
+      const r = await say("I have 20 minutes")
+      return ofType(r, "NOW_PICK").length ? null : "chat did not ask the right-now engine"
+    },
+  },
   { id: "F10", name: "YouTube video → summary + actions", status: { pendingUntil: 6 } },
   { id: "F11", name: "Instagram reel purpose guessed (learning vs feeling)", status: { pendingUntil: 6 } },
   { id: "F12", name: '"I feel lazy" → your saved comfort item', status: { pendingUntil: 6 } },
@@ -159,8 +228,40 @@ export const scenarios: Scenario[] = [
       return months > 4.5 && months < 7.5 ? null : `deadline is ${months.toFixed(1)} months away`
     },
   },
-  { id: "F14", name: "After 2 missed days → smallest version only", status: { pendingUntil: 3 } },
-  { id: "F15", name: "Back after 2 weeks → warm welcome, overdue moved", status: { pendingUntil: 3 } },
+  {
+    id: "F14",
+    name: "After 2 missed days → smallest version only",
+    status: "ready",
+    async run({ api, db, userId }) {
+      const area = await careerId(api)
+      await api("post", "/tasks", { title: "Write the design doc", areaId: area, sizeMinutes: 40, minimumVersion: "Open the doc and write one line" })
+      const at = `${dayKey()}T20:00`
+      const normal = await nowAt(api, at)
+      if (normal.smaller) return "smaller before any days away"
+      await db.activityEvent.updateMany({ where: { userId }, data: { at: ago(3) } })
+      const away = await nowAt(api, at)
+      if (!away.smaller || away.options[0]?.minutes !== 2) return `still asking for ${away.options[0]?.minutes} min after 3 days away`
+      return /no restart needed/i.test(away.message) && !/miss|fail|behind/i.test(away.message) ? null : `wording: ${away.message}`
+    },
+  },
+  {
+    id: "F15",
+    name: "Back after 2 weeks → warm welcome, overdue moved",
+    status: "ready",
+    async run({ api, db, userId }) {
+      const area = await careerId(api)
+      for (const t of ["Renew passport", "Call the bank", "Fix the bike"]) {
+        await api("post", "/tasks", { title: t, areaId: area, dueDate: dayKey(-5) })
+      }
+      await db.activityEvent.updateMany({ where: { userId }, data: { at: ago(16) } })
+      const now = await nowAt(api, `${dayKey()}T20:00`)
+      if (!now.welcomeBack || !/welcome back/i.test(now.message)) return `no welcome: ${now.message}`
+      if (now.moved !== 3) return `moved ${now.moved}, expected 3`
+      if (now.options.length !== 1) return `${now.options.length} options, expected one tiny step`
+      const stillOverdue = (await taskList(api)).filter((t) => t.dueDate && t.dueDate.slice(0, 10) < dayKey())
+      return stillOverdue.length === 0 ? null : `${stillOverdue.length} still overdue`
+    },
+  },
   {
     id: "F16",
     name: "Completing something by chat is visible and undoable",
@@ -218,8 +319,62 @@ export const scenarios: Scenario[] = [
   { id: "F20", name: "Offline / server waking → last known card, queued chat", status: { pendingUntil: 7 } },
   { id: "F21", name: '"Where do I stand on my job switch?"', status: { pendingUntil: 4 } },
   { id: "F22", name: "Weight trend + forecast", status: { pendingUntil: 4 } },
-  { id: "F23", name: "Capacity guard on overcommitting", status: { pendingUntil: 3 } },
-  { id: "F24", name: '"I\'m sick" → sick mode', status: { pendingUntil: 3 } },
+  {
+    id: "F23",
+    name: "Capacity guard on overcommitting",
+    status: "ready",
+    async run({ say, api }) {
+      const r = await say(
+        "Today I need to do all of these, about an hour each: clean the garage, wash the car, do the laundry, " +
+          "cook for the week, fix the bike, sort the paperwork, call the bank, renew the passport, repaint the shelf, " +
+          "write the report, plan the trip, organise photos",
+      )
+      const cap = r.capacity
+      if (!cap) return `no capacity warning (${ofType(r, "TASK_ADDED").length} to-dos added)`
+      if (cap.plannedMinutes <= cap.freeMinutes) return "warning although it fits"
+      if (!cap.keep.length || cap.move.length < 5) return `keep ${cap.keep.length} / move ${cap.move.length}`
+      if (!/planned for/.test(r.reply)) return "reply does not say it"
+      const moved = await api("post", "/now/move", { taskIds: cap.move.map((m) => m.id) })
+      if (moved.status !== 200 || !moved.body.data.activityId) return `move returned ${moved.status}`
+      const after = (await api("get", "/now/capacity")).body.data
+      const undo = await api("post", `/activity/${moved.body.data.activityId}/undo`)
+      return after.move.length < cap.move.length && undo.status === 200 ? null : "moving did not lower today's load or can't be undone"
+    },
+  },
+  {
+    id: "F24",
+    name: '"I\'m sick" → sick mode',
+    status: "ready",
+    async run({ say, api }) {
+      const area = await careerId(api)
+      await api("post", "/tasks", { title: "Prepare the demo", areaId: area })
+      const r = await say("I'm sick")
+      const set = ofType(r, "MODE_SET")[0] as any
+      if (set?.mode !== "SICK") return `mode ${set?.mode}`
+      if (ofType(r, "TASK_ADDED").length) return "made a task out of being sick"
+      const now = await nowAt(api, `${dayKey()}T20:00`)
+      if (now.kind !== "REST" || now.options.length) return `sick mode still offers things: ${now.kind}`
+      const tonight = (await api("get", "/guide/tonight")).body.data
+      if (tonight.commitment) return "tonight still picks something"
+      const undo = await api("post", `/activity/${set.activityId}/undo`)
+      const back = await nowAt(api, `${dayKey()}T20:00`)
+      return undo.status === 200 && back.mode === "NORMAL" ? null : "undo did not restore normal mode"
+    },
+  },
+  {
+    id: "B6",
+    name: "Telling Ally your day sets the schedule",
+    status: "ready",
+    async run({ say, api }) {
+      const r = await say("I work 10am to 8:30pm on weekdays")
+      if (!ofType(r, "SCHEDULE_SET").length) return "no schedule set"
+      const days = (await api("get", "/now/schedule")).body.data as any[]
+      const mon = days.find((d) => d.weekday === 1)
+      const office = mon?.blocks.find((b: any) => b.block === "OFFICE")
+      if (!mon?.custom || office?.start !== "10:00" || office?.end !== "20:30") return `Monday office is ${office?.start}-${office?.end}`
+      return days.find((d) => d.weekday === 0).custom ? "weekend changed too" : null
+    },
+  },
   { id: "F25", name: "Habit graduates after ~8 weeks at ~80%", status: { pendingUntil: 4 } },
   { id: "F26", name: "Pause / let go of a goal guilt-free", status: { pendingUntil: 4 } },
   { id: "F27", name: '"What did I save about caching?" search', status: { pendingUntil: 5 } },

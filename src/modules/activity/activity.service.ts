@@ -28,6 +28,9 @@ export type UndoPayload =
   | { kind: "ARCHIVE_TASK"; taskId: string }
   | { kind: "REOPEN_TASK"; taskId: string; prevStatus: string; prevCompletedAt: string | null }
   | { kind: "UNLOG_HABIT"; habitId: string; date: string; prev: { completed: boolean; count: number; minutes: number } | null }
+  | { kind: "RESTORE_DUE"; items: { taskId: string; prev: string | null }[] }
+  | { kind: "RESTORE_MODE"; prev: string; prevUntil: string | null }
+  | { kind: "RESTORE_SCHEDULE"; weekdays: number[]; prev: { weekday: number; blocks: unknown }[] }
   | { kind: "ARCHIVE_HABIT"; habitId: string }
   | { kind: "ARCHIVE_PROJECT"; projectId: string }
   | { kind: "DELETE_ALLY_NOTE"; noteId: string }
@@ -94,6 +97,26 @@ const applyUndo = async (userId: string, undo: UndoPayload): Promise<void> => {
         },
       })
       return
+    case "RESTORE_DUE":
+      for (const i of undo.items) {
+        await prisma.task.updateMany({ where: { id: i.taskId, userId }, data: { dueDate: i.prev ? new Date(i.prev) : null } })
+      }
+      return
+    case "RESTORE_MODE":
+      await prisma.userSettings.updateMany({
+        where: { userId },
+        data: { mode: undo.prev, modeUntil: undo.prevUntil ? new Date(undo.prevUntil) : null },
+      })
+      return
+    case "RESTORE_SCHEDULE": {
+      // Days that had no custom schedule go back to the default (row removed).
+      const had = new Set(undo.prev.map((p) => p.weekday))
+      await prisma.daySchedule.deleteMany({ where: { userId, weekday: { in: undo.weekdays.filter((d) => !had.has(d)) } } })
+      for (const p of undo.prev) {
+        await prisma.daySchedule.updateMany({ where: { userId, weekday: p.weekday }, data: { blocks: p.blocks as Prisma.InputJsonValue } })
+      }
+      return
+    }
     case "ARCHIVE_HABIT":
       await prisma.habit.updateMany({ where: { id: undo.habitId, userId }, data: { isActive: false } })
       return

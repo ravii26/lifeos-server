@@ -82,6 +82,7 @@ export const createTaskService = async (
     windowEnd: input.windowEnd ?? null,
     repeatRule: input.repeatRule ?? null,
     sizeMinutes: input.sizeMinutes ?? null,
+    block: input.block ?? null,
   })
   const event = await recordActivity(userId, {
     type: "CREATED",

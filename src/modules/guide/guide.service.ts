@@ -19,6 +19,7 @@ import {
   type Tier,
 } from "./guide.rules.js"
 import { chooseTonight, heuristicPick, type GuideAiInput } from "./guide.ai.js"
+import { getModeService } from "../now/now.service.js"
 import { completeTaskService } from "../task/task.service.js"
 import { logHabitService } from "../habit/habit.service.js"
 import { todayKeyInTz, dateFromKey, addUtcDays, utcDayKey, weekdayInTz } from "../../shared/utils/time.util.js"
@@ -147,6 +148,12 @@ export const getTonightService = async (userId: string): Promise<TonightDto> => 
   const { now, ctx, todayKey, date } = await loadToday(userId)
   const recent = toRecent(ctx)
   const misses = missedStreak(recent, todayKey)
+
+  // Sick, travelling or on holiday: nothing new is picked and nothing prompts.
+  const { mode: lifeMode } = await getModeService(userId)
+  if (lifeMode === "SICK" || lifeMode === "TRAVEL" || lifeMode === "HOLIDAY") {
+    return { date: todayKey, commitment: null, emptyMessage: lifeMode === "SICK" ? "Sick mode is on. Rest. Nothing is needed from you." : `${lifeMode === "TRAVEL" ? "Travel" : "Holiday"} mode is on. Plans are paused.`, missedNights: 0 }
+  }
 
   const existing = await findCommitment(userId, date)
   if (existing) return { date: todayKey, commitment: existing, emptyMessage: null, missedNights: misses }

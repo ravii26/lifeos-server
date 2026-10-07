@@ -14,7 +14,13 @@ const only = new Set(process.argv.slice(2).filter((a) => !a.startsWith("-")))
 
 const newContext = async (): Promise<{ ctx: ScenarioContext; cleanup: () => Promise<void> }> => {
   const email = `eval-${randomUUID()}@test.local`
-  const reg = await request(app).post("/api/v1/auth/register").send({ email, password: "password123", name: "Eval" })
+  // One retry: a slow Neon wake-up or a rate limit should not lose the whole report.
+  let reg = await request(app).post("/api/v1/auth/register").send({ email, password: "password123", name: "Eval" })
+  if (!reg.body?.data?.token) {
+    await new Promise((r) => setTimeout(r, 20_000))
+    reg = await request(app).post("/api/v1/auth/register").send({ email, password: "password123", name: "Eval" })
+  }
+  if (!reg.body?.data?.token) throw new Error(`could not register an eval user (HTTP ${reg.status})`)
   const token = reg.body.data.token as string
   const userId = reg.body.data.user.id as string
   const auth = { Authorization: `Bearer ${token}` }
@@ -31,7 +37,7 @@ const newContext = async (): Promise<{ ctx: ScenarioContext; cleanup: () => Prom
     history.push({ role: "user", text: message }, { role: "assistant", text: res.body.data.reply })
     return res.body.data
   }
-  return { ctx: { say, api }, cleanup: async () => void (await prisma.user.delete({ where: { id: userId } })) }
+  return { ctx: { say, api, db: prisma, userId }, cleanup: async () => void (await prisma.user.delete({ where: { id: userId } })) }
 }
 
 const main = async () => {
@@ -43,7 +49,14 @@ const main = async () => {
       results.push({ id: s.id, name: s.name, result: "pending", detail: `build step ${typeof s.status === "object" ? s.status.pendingUntil : "?"}` })
       continue
     }
-    const { ctx, cleanup } = await newContext()
+    let made: Awaited<ReturnType<typeof newContext>>
+    try {
+      made = await newContext()
+    } catch (err) {
+      results.push({ id: s.id, name: s.name, result: "error", detail: err instanceof Error ? err.message : String(err) })
+      continue
+    }
+    const { ctx, cleanup } = made
     const started = Date.now()
     let usedAi = true
     const tracked: ScenarioContext = {
