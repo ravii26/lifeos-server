@@ -7,11 +7,13 @@ import {
   nextController,
   createSaveController,
   decideSaveController,
+  getSaveController,
+  setSavePurposeController,
 } from "./guide.controller.js"
 import { validate, validateQuery } from "../../shared/middleware/validate.middleware.js"
 import { authenticate } from "../../shared/middleware/auth.middleware.js"
 import { uploadCaptureMedia } from "../../shared/middleware/upload.middleware.js"
-import { respondSchema, historySchema, createSaveSchema, decideSaveSchema } from "./guide.schema.js"
+import { respondSchema, historySchema, createSaveSchema, decideSaveSchema, savePurposeSchema } from "./guide.schema.js"
 
 const router = Router()
 
@@ -32,5 +34,9 @@ router.get("/history", validateQuery(historySchema), historyController)
 router.post("/saves", uploadCaptureMedia, validate(createSaveSchema), createSaveController)
 // POST /guide/saves/:id/decide — ACTION (make it a task) | SHELF (hard days) | DROP.
 router.post("/saves/:id/decide", validate(decideSaveSchema), decideSaveController)
+// GET /guide/saves/:id — current state (poll for the video summary).
+router.get("/saves/:id", getSaveController)
+// POST /guide/saves/:id/purpose — correct the guess: LEARN | FEELING.
+router.post("/saves/:id/purpose", validate(savePurposeSchema), setSavePurposeController)
 
 export default router

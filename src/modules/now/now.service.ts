@@ -219,7 +219,7 @@ const moveOverdueToThisWeek = async (userId: string, c: Clock): Promise<number> 
   return overdue.length
 }
 
-export const getNowService = async (userId: string, opts: { minutes?: number | null; at?: string } = {}): Promise<NowDto> => {
+export const getNowService = async (userId: string, opts: { minutes?: number | null; at?: string; smallest?: boolean } = {}): Promise<NowDto> => {
   const c = await getClock(userId, opts.at)
   const [{ mode }, blocks, gapDays, candidates, prep] = await Promise.all([
     getMode(userId, c.now),
@@ -239,6 +239,7 @@ export const getNowService = async (userId: string, opts: { minutes?: number | n
     mode,
     minutes,
     gapDays,
+    forceSmaller: opts.smallest === true,
     // After a move the old overdue dates are gone, so rebuild what was loaded.
     candidates: moved ? await loadCandidates(userId, c) : candidates,
   })

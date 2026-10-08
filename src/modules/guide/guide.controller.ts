@@ -7,7 +7,7 @@ import {
   nextService,
 } from "./guide.service.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
-import { createSaveService, decideSaveService } from "./guide.saves.service.js"
+import { createSaveService, decideSaveService, getSaveService, setSavePurposeService } from "./guide.saves.service.js"
 import { HttpStatus } from "../../shared/constants/httpStatus.js"
 import { ValidationError } from "../../shared/utils/errors.util.js"
 import type { HistoryQueryDto } from "./guide.schema.js"
@@ -49,4 +49,14 @@ export const createSaveController = async (req: Request, res: Response) => {
 
 export const decideSaveController = async (req: Request, res: Response) => {
   sendSuccess(res, "Decided", await decideSaveService(req.user!.id, String(req.params.id), req.body))
+}
+
+// GET /guide/saves/:id — the save as it is now (the video summary arrives after a few seconds).
+export const getSaveController = async (req: Request, res: Response) => {
+  sendSuccess(res, "Save", await getSaveService(req.user!.id, String(req.params.id)))
+}
+
+// POST /guide/saves/:id/purpose — one tap to correct learning ↔ feeling.
+export const setSavePurposeController = async (req: Request, res: Response) => {
+  sendSuccess(res, "Save updated", await setSavePurposeService(req.user!.id, String(req.params.id), req.body.purpose))
 }

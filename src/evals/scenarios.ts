@@ -28,6 +28,9 @@ export interface ChatReplyShape {
     deadline?: string
     tasks?: number
     items?: string[]
+    feeling?: string
+    item?: { id: string; title: string; url: string | null } | null
+    step?: string | null
     collection?: string
     template?: string
     notes?: { id: string; title: string; collection: string }[]
@@ -111,7 +114,7 @@ export const scenarios: Scenario[] = [
       // No note yet: ask once, never invent.
       const none = await say("what can I eat for breakfast?")
       if (ofType(none, "NOTES_USED").length) return "claimed a note that does not exist"
-      if (!/\?/.test(none.reply)) return `did not ask to be taught: ${none.reply.slice(0, 100)}`
+      if (!/\?|tell me|teach me|let me know/i.test(none.reply)) return `did not ask to be taught: ${none.reply.slice(0, 100)}`
       if (/poha|oats|eggs|idli|toast/i.test(none.reply)) return `invented breakfasts: ${none.reply.slice(0, 100)}`
       // They teach it, in one plain reply.
       const taught = await say("poha, oats and eggs")
@@ -220,7 +223,7 @@ export const scenarios: Scenario[] = [
     status: "ready",
     async run({ say }) {
       const ask = await say("what's my warm-up?")
-      if (!/\?/.test(ask.reply)) return `did not ask once: ${ask.reply.slice(0, 100)}`
+      if (!/\?|tell me|teach me|let me know/i.test(ask.reply)) return `did not ask once: ${ask.reply.slice(0, 100)}`
       if (/jog|stretch|squat|jumping|lunge|push-?up/i.test(ask.reply)) return `invented a warm-up: ${ask.reply.slice(0, 100)}`
       const taught = await say("5 minutes jog, arm circles, 10 squats, 10 push-ups")
       const note = ofType(taught, "NOTE_ADDED")[0]
@@ -248,9 +251,95 @@ export const scenarios: Scenario[] = [
       return ofType(r, "NOW_PICK").length ? null : "chat did not ask the right-now engine"
     },
   },
-  { id: "F10", name: "YouTube video → summary + actions", status: { pendingUntil: 6 } },
-  { id: "F11", name: "Instagram reel purpose guessed (learning vs feeling)", status: { pendingUntil: 6 } },
-  { id: "F12", name: '"I feel lazy" → your saved comfort item', status: { pendingUntil: 6 } },
+  {
+    id: "F10",
+    name: "YouTube video → summary + actions",
+    status: "ready",
+    async run({ api }) {
+      const made = await api("post", "/guide/saves", { text: "https://www.youtube.com/watch?v=DHjqpvDnNGE" })
+      if (made.status !== 201) return `save returned ${made.status}`
+      let save = made.body.data
+      if (!save.proposal.actions?.length) return "no proposal"
+      // The video is watched in the background; the app polls until it is read.
+      for (let i = 0; i < 30 && save.summary.state === "PENDING"; i++) {
+        await new Promise((r) => setTimeout(r, 4000))
+        save = (await api("get", `/guide/saves/${save.id}`)).body.data
+      }
+      if (save.summary.state === "PENDING") return "still watching after 2 minutes"
+      if (save.summary.state === "READY") {
+        const n = save.summary.lines.length
+        if (n < 3 || n > 5) return `summary has ${n} lines, expected 3 to 5`
+      } else if (save.summary.lines.length) return "no summary expected when the video could not be read"
+      // A tutorial is something to learn: if guessed as comfort, one tap fixes it.
+      if (save.proposal.purpose !== "LEARN") save = (await api("post", `/guide/saves/${save.id}/purpose`, { purpose: "LEARN" })).body.data
+      const actions = save.proposal.actions as any[]
+      if (actions.length < 1 || actions.length > 3) return `${actions.length} actions, expected 1 to 3`
+      const pick = actions.slice(0, 2).map((a) => ({ action: a.action, minimum: a.minimum, as: a.as, when: "THIS_WEEK" }))
+      const decided = await api("post", `/guide/saves/${save.id}/decide`, { choice: "ACTION", actions: pick })
+      if (decided.status !== 200) return `decide returned ${decided.status}`
+      const made2 = decided.body.data.taskIds.length + decided.body.data.habitIds.length
+      if (made2 !== pick.length) return `made ${made2} of ${pick.length} chosen actions`
+      if (save.summary.state === "READY") {
+        if (!decided.body.data.noteId) return "summary was not saved as a note"
+        const notes = (await api("get", "/ally-notes")).body.data as any[]
+        const note = notes.find((x) => x.id === decided.body.data.noteId)
+        if (!note || note.items.length !== save.summary.lines.length) return "saved note does not hold the summary"
+      }
+      return null
+    },
+  },
+  {
+    id: "F11",
+    name: "Instagram reel purpose guessed (learning vs feeling)",
+    status: "ready",
+    async run({ api }) {
+      const feel = await api("post", "/guide/saves", {
+        text: "https://www.instagram.com/reel/Cabc123/ Monday motivation: nobody is coming to save you. Get up, do the work, you can do hard things. Watch this on the days you want to quit.",
+      })
+      const learn = await api("post", "/guide/saves", {
+        text: "https://www.instagram.com/reel/Cdef456/ 3 SQL window function tricks every backend developer should know: ROW_NUMBER, LAG and running totals explained with examples",
+      })
+      if (feel.status !== 201 || learn.status !== 201) return `save returned ${feel.status}/${learn.status}`
+      const f = feel.body.data
+      const l = learn.body.data
+      if (f.proposal.purpose !== "FEELING" || !f.proposal.feelings.length || !f.shelved) return `motivation guessed as ${f.proposal.purpose} (shelved ${f.shelved}, feelings ${f.proposal.feelings})`
+      if (l.proposal.purpose !== "LEARN" || l.shelved) return `tutorial guessed as ${l.proposal.purpose} (shelved ${l.shelved})`
+      if (l.proposal.actions.length < 1) return "learning save has no actions"
+      // One tap corrects the guess, and corrects it back.
+      const fixed = (await api("post", `/guide/saves/${f.id}/purpose`, { purpose: "LEARN" })).body.data
+      if (fixed.proposal.purpose !== "LEARN" || fixed.shelved) return "correcting to LEARN did not take the save off the shelf"
+      const back = (await api("post", `/guide/saves/${f.id}/purpose`, { purpose: "FEELING" })).body.data
+      return back.proposal.purpose === "FEELING" && back.shelved ? null : "correcting back to FEELING did not shelve it"
+    },
+  },
+  {
+    id: "F12",
+    name: '"I feel lazy" → your saved comfort item',
+    status: "ready",
+    async run({ say, api, db, userId }) {
+      // Nothing saved yet: Ally supports you itself, with no tasks and no shaming.
+      const none = await say("I feel lazy today")
+      if (ofType(none, "COMFORT_SHOWN").length) return "showed a save that does not exist"
+      if (ofType(none, "TASK_ADDED").length) return "turned a low day into a task"
+      if (!none.reply.trim() || questions(none.reply) > 1) return `reply: ${none.reply.slice(0, 100)}`
+      if (/no excuses|should have|stop being|lazy bones|just do it/i.test(none.reply)) return `shaming: ${none.reply}`
+      const area = await careerId(api)
+      await api("post", "/tasks", { title: "Write the design doc", areaId: area, sizeMinutes: 40, minimumVersion: "Open the doc and write one line" })
+      await api("post", "/tasks", { title: "Review the pull request", areaId: area, block: "OFFICE", sizeMinutes: 20, minimumVersion: "Read the description" })
+      await db.vaultItem.create({
+        data: { userId, title: "Nobody is coming to save you", content: "https://www.instagram.com/reel/Cabc123/", url: "https://www.instagram.com/reel/Cabc123/", vaultType: "MOTIVATION", mediaType: "VIDEO", triggerTags: ["lazy", "unmotivated"] },
+      })
+      const r = await say("ugh I feel so lazy")
+      const shown = ofType(r, "COMFORT_SHOWN")[0]
+      if (!shown) return `no comfort (reply: ${r.reply.slice(0, 100)})`
+      if (shown.item?.title !== "Nobody is coming to save you") return `showed ${shown.item?.title}`
+      if (!/Nobody is coming to save you/.test(r.reply)) return "reply does not show the saved item"
+      if (!/Smallest next step: .*\(2 min\)/.test(r.reply)) return `no smallest step in: ${r.reply.slice(-160)}`
+      if (ofType(r, "TASK_ADDED").length) return "made a task while comforting"
+      const used = await db.vaultItem.findFirst({ where: { userId }, select: { usedCount: true } })
+      return used?.usedCount === 1 ? null : `usedCount ${used?.usedCount}`
+    },
+  },
   {
     id: "F13",
     name: "Goal → milestone project with starter steps",

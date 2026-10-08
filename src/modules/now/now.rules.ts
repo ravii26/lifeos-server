@@ -160,6 +160,7 @@ export interface NowInput {
   mode: Mode
   minutes: number | null // "I have 20 minutes"
   gapDays: number // days since the person last did anything
+  forceSmaller?: boolean // "just the smallest step" (a low day), without calling it a busy week
   candidates: NowCandidate[]
 }
 
@@ -230,7 +231,7 @@ export const rightNow = (input: NowInput): NowResult => {
 
   const welcomeBack = input.gapDays >= WELCOME_BACK_AFTER_DAYS
   const smallerAfterAbsence = input.gapDays >= SMALLER_AFTER_DAYS
-  const minimumOnly = input.mode !== "NORMAL" || smallerAfterAbsence
+  const minimumOnly = input.mode !== "NORMAL" || smallerAfterAbsence || input.forceSmaller === true
   // Rule 8: Monday, the 1st, and after a break are fresh starts: one clean step.
   const freshStart = welcomeBack || input.weekday === 1 || input.dayOfMonth === 1
 

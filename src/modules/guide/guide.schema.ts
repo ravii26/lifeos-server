@@ -23,7 +23,22 @@ export const decideSaveSchema = z.object({
   minimum: z.string().max(200).optional(),
   areaId: z.string().optional(),
   when: z.enum(["TONIGHT", "THIS_WEEK", "LATER"]).optional(),
+  // One to three steps to make (each a to-do or a habit). `action` alone still works.
+  actions: z
+    .array(
+      z.object({
+        action: z.string().min(1).max(200),
+        minimum: z.string().max(200).optional(),
+        as: z.enum(["TODO", "HABIT"]).optional(),
+        when: z.enum(["TONIGHT", "THIS_WEEK", "LATER"]).optional(),
+        areaId: z.string().optional(),
+      }),
+    )
+    .max(3)
+    .optional(),
 })
+
+export const savePurposeSchema = z.object({ purpose: z.enum(["LEARN", "FEELING"]) })
 
 export type DecideSaveDto = z.infer<typeof decideSaveSchema>
 export type RespondDto = z.infer<typeof respondSchema>

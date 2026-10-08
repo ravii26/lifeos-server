@@ -13,6 +13,9 @@ import { logHabitService, createHabitService } from "../habit/habit.service.js"
 import { createProjectService } from "../project/project.service.js"
 import { createAllyNoteService, updateAllyNoteService } from "../allynote/allynote.service.js"
 import { searchAllService } from "../search/search.service.js"
+import { projectAsTask } from "./assistant.guards.js"
+import { correctActionDates } from "./assistant.dates.js"
+import { feelingIn, normalizeFeeling, matchComfort, comfortBlock } from "../guide/comfort.rules.js"
 import { searchMessage, pickNotesForPrompt } from "../search/search.rules.js"
 import { localToUtc, repeatToRule, isAmbiguousCompletion } from "./assistant.capture.js"
 import {
@@ -55,6 +58,7 @@ export type ChatAction = (
   | { type: "NOTE_ADDED"; id: string; title: string; collection: string; template: string; items: string[] }
   // The right-now answer from the rules engine (sized options, never invented).
   | { type: "NOW_PICK"; kind: string; options: { id: string; sourceType: string; title: string; minutes: number; smaller: boolean; minimum: string }[] }
+  | { type: "COMFORT_SHOWN"; feeling: string; item: { id: string; title: string; url: string | null }; step: string | null }
   | { type: "NOTES_USED"; notes: { id: string; title: string; collection: string }[] }
   | { type: "NOTE_UPDATED"; id: string; title: string; items: string[] }
   | { type: "SEARCH_RESULTS"; query: string; results: { kind: string; id: string; title: string; snippet: string }[] }
@@ -211,6 +215,7 @@ You can take actions. Only use ids that appear in the context. Actions:
 - {"type":"LOG_PROGRESS","projectId":string,"count":number|null,"minutes":number|null,"value":number|null,"milestoneDone":boolean|null}   (they report progress on a project in activeProjects: "I solved 23 DSA problems" -> count 23 on the MILESTONE project; "did 45 minutes of English" -> minutes 45 on the PRACTICE project; "weight is 83.2" -> value 83.2 on the OUTCOME project; "my resume is ready" -> milestoneDone true. Only one of count / minutes / value / milestoneDone.)
 - {"type":"SET_PROJECT_STATUS","projectId":string,"status":"PAUSED"|"ABANDONED"|"ACTIVE"|"COMPLETED"}   ("pause my investing goal" -> PAUSED; "let it go / drop it / I don't want this any more" -> ABANDONED; "resume it" -> ACTIVE; "I finished it" -> COMPLETED. Never delete.)
 - {"type":"WEEK_CARD"}   ("how was my week", "weekly review". Only when they ask.)
+- {"type":"COMFORT","feeling":"lazy"|"low"|"sad"|"anxious"|"stressed"|"unmotivated"|"stuck"|"tired"|"lonely"|"angry"}   (they say how they feel. Reply as a FRIEND: listen first, warm, no tasks, no advice dump. The app adds anything they saved for exactly that feeling plus the smallest next step. If you have nothing for them, your own words are the support.)
 - {"type":"USE_NOTES","noteIds":[string]}   (your reply used what they taught you in yourNotes: emit this with the ids you used. The app adds "From your X note".)
 - {"type":"UPDATE_NOTE","noteId":string,"add":[string]|null,"remove":[string]|null}   ("add pancakes to my breakfasts", "remove poha". noteId from yourNotes.)
 - {"type":"SEARCH","query":string}   ("what did I save about caching", "find my notes on X". The app searches notes, saves, to-dos and goals and writes the answer.)
@@ -218,7 +223,7 @@ You can take actions. Only use ids that appear in the context. Actions:
 - {"type":"SET_MODE","mode":"NORMAL"|"BUSY"|"SICK"|"TRAVEL"|"HOLIDAY","until":"YYYY-MM-DD"|null}   ("I'm sick" -> SICK; "busy week" -> BUSY with until = this Sunday; "I'm better / back to normal" -> NORMAL; "I'm travelling / on holiday until Friday" -> TRAVEL / HOLIDAY.)
 - {"type":"SET_SCHEDULE","days":["MON"..],"blocks":[{"block":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT","start":"HH:mm","end":"HH:mm"}]}   (they describe their day: "I work 10 to 8:30 on weekdays, gym right after". Give the blocks they described; the app fills the rest. Also remember it.)
 - {"type":"ADD_HABIT","title":string,"minimum":string|null,"prepare":string|null,"prepTime":"HH:mm"|null,"timeBlock":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT"|null,"days":["MON"...]|null,"anchor":string|null,"sizes":[{"minutes":number,"label":string}]|null,"reminderTime":"HH:mm"|null,"areaId":string|null}   (something they want to do repeatedly. anchor = what it follows ("after my morning coffee"); set timeBlock to the part of the day that anchor falls in. sizes = their smaller and bigger versions, smallest first, e.g. [{"minutes":2,"label":"read 2 pages"},{"minutes":10,"label":"read 10 pages"}]; always include a 2-minute size when they give any. A habit that needs setup the night before ("prep the night before") is TWO ADD_HABITs: the habit, and a "Prep ..." habit with timeBlock EVENING and reminderTime at the prep time, 21:30 if not said.)
-- {"type":"ADD_PROJECT","title":string,"kind":"OUTCOME"|"MILESTONE"|"PRACTICE"|"WORK","why":string|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL","deadline":"YYYY-MM-DD"|null,"areaId":string|null,"milestones":[string|{"title":string,"target":number|null}]|null,"metric":{"name":string,"unit":string,"start":number,"target":number}|null,"weeklyTargetMinutes":number|null,"tasks":[{"title":string,"due":"YYYY-MM-DD"|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|null}]}   (anything with an outcome. WORK = a deliverable with a deadline; MILESTONE = a goal with stages like a job switch; OUTCOME = a number to move; PRACTICE = weekly practice time. Always include 1-4 concrete first to-dos in "tasks" (for WORK the first to-do is the deliverable itself, with the project's deadline and priority). Put "why" in their words if they said it. OUTCOME needs "metric" (weight 85 -> 70 kg: name Weight, unit kg, start 85, target 70). PRACTICE needs "weeklyTargetMinutes". MILESTONE stages that are counted carry a target, e.g. {"title":"50 DSA problems","target":50}; uncounted ones ("Resume ready") have target null. Stages they say are already done are still listed, then logged with LOG_PROGRESS milestoneDone.)
+- {"type":"ADD_PROJECT","title":string,"kind":"OUTCOME"|"MILESTONE"|"PRACTICE"|"WORK","why":string|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL","deadline":"YYYY-MM-DD"|null,"areaId":string|null,"milestones":[string|{"title":string,"target":number|null}]|null,"metric":{"name":string,"unit":string,"start":number,"target":number}|null,"weeklyTargetMinutes":number|null,"tasks":[{"title":string,"due":"YYYY-MM-DD"|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|null}]}   (Use it for a goal or effort that takes weeks and has several steps: a job switch, losing weight, learning English, a client deliverable with parts. ALSO always use it when they say the word "project" or name projects ("Project A: API due Thursday. Project B: UI next week" is TWO ADD_PROJECTs, titled by what each is, "API" and "UI", not "Project A"). A single errand they did not call a project, even an important one with a deadline ("update my resume this week", "renew my passport"), is an ADD_TASK. WORK = a deliverable with a deadline; MILESTONE = a goal with stages like a job switch; OUTCOME = a number to move; PRACTICE = weekly practice time. Always include 1-4 concrete first to-dos in "tasks" (for WORK the first to-do is the deliverable itself, with the project's deadline and priority). Put "why" in their words if they said it. OUTCOME needs "metric" (weight 85 -> 70 kg: name Weight, unit kg, start 85, target 70). PRACTICE needs "weeklyTargetMinutes". MILESTONE stages that are counted carry a target, e.g. {"title":"50 DSA problems","target":50}; uncounted ones ("Resume ready") have target null. Stages they say are already done are still listed, then logged with LOG_PROGRESS milestoneDone.)
 - {"type":"ADD_NOTE","collection":string,"template":"LIST"|"ROUTINE"|"PLAYBOOK"|"INFO","title":string,"items":[string],"text":string|null}   (something they TEACH you to keep: their breakfast options, gym warm-up steps, "when X do Y", client details. LIST/ROUTINE use items; PLAYBOOK/INFO use text. collection is a short name like "Breakfast" or "Gym".)
 - {"type":"SET_NUDGE","kind":"NIGHTLY"|"MORNING","time":"HH:mm"|null}   (null turns it off)
 
@@ -281,6 +286,7 @@ interface PlannedAction {
   collection?: string
   template?: string
   items?: unknown
+  feeling?: string
   noteIds?: unknown
   noteId?: string | null
   add?: unknown
@@ -607,6 +613,20 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
           ...(repeatRule && { repeatRule }),
           activityId: task.activityId,
         })
+      } else if (a.type === "COMFORT") {
+        const feeling = normalizeFeeling(String(a.feeling ?? ""))
+        if (!feeling) continue
+        await recordActivity(userId, { type: "MOOD", itemType: "DAY", mood: feeling, source: "CHAT" })
+        const shelf = await prisma.vaultItem.findMany({ where: { userId }, select: { id: true, title: true, url: true, triggerTags: true, usedCount: true, helpfulCount: true } })
+        const best = matchComfort(feeling, shelf)[0]
+        if (best) {
+          const next = await getNowService(userId, { smallest: true }).catch(() => null)
+          const o = next?.kind === "PICK" ? next.options[0] : undefined
+          const step = o ? `${o.smaller ? o.minimum.replace(/\.$/, "") : o.title} (${o.minutes} min)` : null
+          await prisma.vaultItem.update({ where: { id: best.id }, data: { usedCount: { increment: 1 } } })
+          cite = comfortBlock(best, step)
+          done.push({ type: "COMFORT_SHOWN", feeling, item: { id: best.id, title: best.title, url: best.url }, step })
+        }
       } else if (a.type === "USE_NOTES") {
         const used = strings(a.noteIds, 5).map((id) => ctx.notes.find((n) => n.id === id)).filter((n): n is NonNullable<typeof n> => !!n)
         if (used.length) {
@@ -838,6 +858,13 @@ export const assistantChat = async (
     return { role: "ASSISTANT", reply: old.answer, actions: [], usedAi: false }
   }
 
+  // How someone feels is recognised in code, so comfort never depends on the model noticing.
+  const felt = feelingIn(text)
+  if (felt && !plan.actions.some((a) => a.type === "COMFORT")) plan.actions = [...plan.actions, { type: "COMFORT", feeling: felt }]
+  // One errand is a to-do, not a project, whatever the model proposed.
+  plan.actions = plan.actions.map((a) => projectAsTask(a, text) ?? a)
+  // "Due Thursday" lands on a Thursday and "next week" gets a date, per sentence, whatever the model computed.
+  plan.actions = plan.actions.map((a) => correctActionDates(a, text, ctx.todayKey))
   const searching = searchRequest(text)
   if (searching) plan.actions = [...plan.actions.filter((a) => a.type !== "USE_NOTES" && a.type !== "SEARCH"), searching]
 
