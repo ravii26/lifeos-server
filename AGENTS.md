@@ -59,7 +59,8 @@ Production Neon is the only working DB. Migrations are additive and generated **
 - New scenario coverage goes in `src/evals/scenarios.ts` (flip `status` to `"ready"` and add `run`).
 
 ## Env (`.env`, never commit)
-`DATABASE_URL`, `JWT_SECRET`, `PORT`, `NODE_ENV`, `CORS_ORIGINS`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `PREFERRED_AI_PROVIDER` (`gemini` | `groq`).
+`DATABASE_URL`, `JWT_SECRET`, `PORT`, `NODE_ENV`, `CORS_ORIGINS`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `AICREDITS_API_KEY`, `AICREDITS_MODELS`, `AICREDITS_DAILY_CALL_LIMIT`, `PREFERRED_AI_PROVIDER` (`aicredits` | `gemini` | `groq`; unset = AICredits if its key is set, else Groq).
+AI order: preferred first, then AICredits → Gemini → Groq (ADR 0020). AICredits reuses the Groq-shaped functions through `lib/groq.ts`; audio is Groq-only, YouTube watching is Gemini-only.
 
 ## Gotchas
 - Gemini model ids get retired. Set `GEMINI_MODEL` (default `gemini-3.5-flash-lite`). Bigger flash models often 503 on the free tier.
