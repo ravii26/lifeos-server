@@ -317,8 +317,77 @@ export const scenarios: Scenario[] = [
     },
   },
   { id: "F20", name: "Offline / server waking → last known card, queued chat", status: { pendingUntil: 7 } },
-  { id: "F21", name: '"Where do I stand on my job switch?"', status: { pendingUntil: 4 } },
-  { id: "F22", name: "Weight trend + forecast", status: { pendingUntil: 4 } },
+  {
+    id: "F21",
+    name: '"Where do I stand on my job switch?"',
+    status: "ready",
+    async run({ say, api, db }) {
+      const area = await careerId(api)
+      const made = await api("post", "/projects", {
+        title: "Switch jobs",
+        areaId: area,
+        kind: "MILESTONE",
+        why: "A better job with better growth",
+        deadline: dayKey(160),
+        milestones: [
+          { title: "Resume ready" },
+          { title: "50 DSA problems", target: 50 },
+          { title: "5 system design topics", target: 5 },
+          { title: "5 mock interviews", target: 5 },
+          { title: "20 applications", target: 20 },
+        ],
+      })
+      if (made.status !== 201) return `project create returned ${made.status}`
+      // It has existed for 50 days, so pace means something.
+      await db.project.update({ where: { id: made.body.data.id }, data: { createdAt: ago(50) } })
+      const a = await say("my resume is ready")
+      if (!ofType(a, "PROGRESS_LOGGED").length) return `resume not logged (reply: ${a.reply.slice(0, 80)})`
+      const b = await say("I solved 23 DSA problems")
+      if (!ofType(b, "PROGRESS_LOGGED").length) return `DSA count not logged (reply: ${b.reply.slice(0, 80)})`
+      const r = await say("Where do I stand on my job switch?")
+      const stand = ofType(r, "STAND")[0] as any
+      if (!stand?.items?.length) return "no stand answer"
+      const m: string = stand.items[0].message
+      if (!/^Stage 2 of 5 · 29% · next: 27 more DSA problems/.test(m)) return `wrong stand: ${m}`
+      if (!/on pace for|at this pace/.test(m)) return `no pace in: ${m}`
+      return /Stage 2 of 5/.test(r.reply) ? null : "reply does not carry the stand"
+    },
+  },
+  {
+    id: "F22",
+    name: "Weight trend + forecast",
+    status: "ready",
+    async run({ say, api }) {
+      const area = await careerId(api)
+      const weight = await api("post", "/projects", {
+        title: "Lose weight", areaId: area, kind: "OUTCOME", metric: { name: "Weight", unit: "kg", startValue: 85, targetValue: 70 },
+      })
+      const waist = await api("post", "/projects", {
+        title: "Waist size", areaId: area, kind: "OUTCOME", metric: { name: "Waist", unit: "cm", startValue: 90, targetValue: 80 },
+      })
+      if (weight.status !== 201 || waist.status !== 201) return "could not create the outcome projects"
+      const wid = weight.body.data.id as string
+      const xid = waist.body.data.id as string
+      for (const [days, v] of [[21, 85], [14, 84.4], [7, 83.8]] as const) {
+        const r = await api("post", "/progress/log", { projectId: wid, value: v, at: ago(days).toISOString() })
+        if (r.status !== 200) return `log returned ${r.status}`
+      }
+      const chat = await say("my weight today is 83.2")
+      if (!ofType(chat, "PROGRESS_LOGGED").length) return `weight not logged by chat (reply: ${chat.reply.slice(0, 80)})`
+      const w = (await api("get", `/progress/projects/${wid}`)).body.data
+      if (w.detail.trend !== "TOWARD") return `trend ${w.detail.trend}`
+      const weeks = (new Date(w.detail.forecast).getTime() - Date.now()) / (7 * 86_400_000)
+      if (!(weeks > 18 && weeks < 26)) return `forecast ${weeks.toFixed(1)} weeks away, expected about 22`
+      if (!/at this pace: /.test(w.message)) return `no forecast in: ${w.message}`
+      // A stall is shown honestly, with two options and no blame.
+      for (const [days, v] of [[21, 89], [14, 89.1], [7, 89], [0, 89.1]] as const) {
+        await api("post", "/progress/log", { projectId: xid, value: v, at: ago(days).toISOString() })
+      }
+      const x = (await api("get", `/progress/projects/${xid}`)).body.data
+      if (x.detail.trend !== "STALLED" || x.options.length !== 2) return `stall not recognised: ${x.detail.trend} / ${x.options.length} options`
+      return /fail|lazy|miss|should|behind/i.test(x.message) ? `guilt wording: ${x.message}` : null
+    },
+  },
   {
     id: "F23",
     name: "Capacity guard on overcommitting",
@@ -393,8 +462,93 @@ export const scenarios: Scenario[] = [
       return days.find((d) => d.weekday === 0).custom ? "weekend changed too" : null
     },
   },
-  { id: "F25", name: "Habit graduates after ~8 weeks at ~80%", status: { pendingUntil: 4 } },
-  { id: "F26", name: "Pause / let go of a goal guilt-free", status: { pendingUntil: 4 } },
+  {
+    id: "F25",
+    name: "Habit graduates after ~8 weeks at ~80%",
+    status: "ready",
+    async run({ api, db, userId }) {
+      const area = await careerId(api)
+      const h = await api("post", "/habits", { title: "Warm water", areaId: area })
+      const id = h.body.data.id as string
+      await db.habit.update({ where: { id }, data: { createdAt: ago(70) } })
+      // 70 days, one day in six missed (about 83%).
+      const logs = []
+      for (let i = 0; i < 70; i++) {
+        if (i > 0 && i % 6 === 0) continue
+        logs.push({ userId, habitId: id, date: new Date(`${dayKey(-i)}T00:00:00.000Z`), completed: true, count: 1 })
+      }
+      await db.habitLog.createMany({ data: logs })
+      const stages = (await api("get", "/progress/habits")).body.data as any[]
+      const mine = stages.find((x) => x.id === id)
+      if (mine?.stage !== "AUTOMATIC") return `stage ${mine?.stage} (${mine?.consistency})`
+      const after = await nowAt(api, `${dayKey()}T07:00`)
+      if (after.options.some((o: any) => o.sourceId === id)) return "an automatic habit is still being suggested"
+      const list = (await api("get", "/habits")).body.data as any[]
+      const row = (Array.isArray(list) ? list : (list as any).items ?? []).find((x: any) => x.id === id)
+      if (row?.stage !== "AUTOMATIC") return `habit list shows stage ${row?.stage}, the app needs it to stop reminders`
+      return null
+    },
+  },
+  {
+    id: "F26",
+    name: "Pause / let go of a goal guilt-free",
+    status: "ready",
+    async run({ say, api }) {
+      const area = await careerId(api)
+      const inv = await api("post", "/projects", { title: "Investing goal", areaId: area, kind: "WORK" })
+      const id = inv.body.data.id as string
+      await api("post", "/tasks", { title: "Open a brokerage account", areaId: area, projectId: id })
+      const paused = await say("pause my investing goal")
+      const p = ofType(paused, "PROJECT_STATUS")[0] as any
+      if (p?.status !== "PAUSED") return `status ${p?.status}`
+      if (/fail|lazy|give up|quit|should have/i.test(paused.reply)) return `guilt wording: ${paused.reply}`
+      const row = (await api("get", `/projects/${id}`)).body.data
+      if (row.status !== "PAUSED") return `project is ${row.status}`
+      const now = await nowAt(api, `${dayKey()}T20:00`)
+      if (now.options.some((o: any) => /brokerage/i.test(o.title))) return "a paused project's to-do is still suggested"
+      const undo = await api("post", `/activity/${p.activityId}/undo`)
+      if (undo.status !== 200 || (await api("get", `/projects/${id}`)).body.data.status !== "ACTIVE") return "undo did not resume it"
+      const gone = await say("I don't want the investing goal any more, let it go")
+      const g = ofType(gone, "PROJECT_STATUS")[0] as any
+      if (g?.status !== "ABANDONED") return `status ${g?.status}`
+      return /real decision|stays in your history/i.test(gone.reply) ? null : `no reflection line: ${gone.reply}`
+    },
+  },
+  {
+    id: "B8",
+    name: "English practice shows this week, weeks on target and total hours",
+    status: "ready",
+    async run({ say, api }) {
+      const area = await careerId(api)
+      const made = await api("post", "/projects", { title: "Better English", areaId: area, kind: "PRACTICE", weeklyTargetMinutes: 150 })
+      const id = made.body.data.id as string
+      // Same weekday, k weeks ago: always lands in the week k back.
+      for (const [k, m] of [[1, 150], [2, 90], [3, 160], [4, 150], [5, 140], [6, 170]] as const) {
+        const r = await api("post", "/progress/log", { projectId: id, minutes: m, at: ago(7 * k).toISOString() })
+        if (r.status !== 200) return `log returned ${r.status}`
+      }
+      const chat = await say("I did 75 minutes of English today")
+      if (!ofType(chat, "PROGRESS_LOGGED").length) return `not logged (reply: ${chat.reply.slice(0, 80)})`
+      const s = (await api("get", `/progress/projects/${id}`)).body.data
+      const want = "This week: 75 of 150 min · 4 of the last 6 weeks on target · 15.6 h in total"
+      return s.message === want ? null : `got "${s.message}"`
+    },
+  },
+  {
+    id: "B9",
+    name: "The weekly card is given only when asked, and never shames",
+    status: "ready",
+    async run({ say, api }) {
+      const area = await careerId(api)
+      await api("post", "/tasks", { title: "Send invoice", areaId: area })
+      await say("done, I sent the invoice")
+      const r = await say("how was my week?")
+      const card = ofType(r, "WEEK_CARD")[0] as any
+      if (!card?.message) return `no card (reply: ${r.reply.slice(0, 80)})`
+      if (!/promise/.test(card.message)) return `card: ${card.message}`
+      return /fail|lazy|behind|miss|should/i.test(card.message) ? `guilt wording: ${card.message}` : null
+    },
+  },
   { id: "F27", name: '"What did I save about caching?" search', status: { pendingUntil: 5 } },
   { id: "F28", name: "New phone restores everything", status: { pendingUntil: 7 } },
 

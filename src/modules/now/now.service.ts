@@ -50,7 +50,7 @@ export interface NowDto extends NowResult {
   prep: PrepItem[]
 }
 
-interface Clock {
+export interface Clock {
   tz: string
   now: Date
   todayKey: string
@@ -59,7 +59,7 @@ interface Clock {
   dayOfMonth: number
 }
 
-const getClock = async (userId: string, at?: string): Promise<Clock> => {
+export const getClock = async (userId: string, at?: string): Promise<Clock> => {
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { timezone: true } })
   const tz = user?.timezone ?? "Asia/Kolkata"
   // `at` ("2026-10-07T21:35", local) lets evals and support check another
@@ -147,7 +147,8 @@ const loadCandidates = async (userId: string, c: Clock): Promise<NowCandidate[]>
     })
 
   const fromHabits: NowCandidate[] = habits
-    .filter((h) => h.logs.length === 0 && habitScheduledOn(h, c.weekday))
+    // An automatic habit is part of you now: it is not prompted any more.
+    .filter((h) => h.stage !== "AUTOMATIC" && h.logs.length === 0 && habitScheduledOn(h, c.weekday))
     .map((h, i) => ({
       sourceType: "HABIT" as const,
       sourceId: h.id,

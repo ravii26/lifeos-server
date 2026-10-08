@@ -14,6 +14,7 @@ export interface HabitDto {
   specificDays: string[]
   reminderTime: string | null
   anchor: string | null
+  stage: string
   sizes: unknown
   timeBlock: string | null
   prepTime: string | null

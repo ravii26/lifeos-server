@@ -13,6 +13,10 @@ export const createProjectSchema = z.object({
   why: z.string().max(500).optional(),
   priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).optional(),
   milestones: z.array(z.object({ title: z.string().min(1).max(200), target: z.number().int().positive().optional() })).max(12).optional(),
+  weeklyTargetMinutes: z.number().int().positive().max(10080).optional(),
+  metric: z
+    .object({ name: z.string().min(1).max(80), unit: z.string().max(20), startValue: z.number(), targetValue: z.number() })
+    .optional(),
 })
 
 export const updateProjectSchema = z.object({

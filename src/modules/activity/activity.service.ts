@@ -28,6 +28,11 @@ export type UndoPayload =
   | { kind: "ARCHIVE_TASK"; taskId: string }
   | { kind: "REOPEN_TASK"; taskId: string; prevStatus: string; prevCompletedAt: string | null }
   | { kind: "UNLOG_HABIT"; habitId: string; date: string; prev: { completed: boolean; count: number; minutes: number } | null }
+  // Progress is derived from the log, so undoing a logged count only marks the event undone.
+  | { kind: "NOOP" }
+  | { kind: "DELETE_METRIC_ENTRY"; entryId: string }
+  | { kind: "RESTORE_MILESTONE"; milestoneId: string }
+  | { kind: "RESTORE_PROJECT_STATUS"; projectId: string; prev: string }
   | { kind: "RESTORE_DUE"; items: { taskId: string; prev: string | null }[] }
   | { kind: "RESTORE_MODE"; prev: string; prevUntil: string | null }
   | { kind: "RESTORE_SCHEDULE"; weekdays: number[]; prev: { weekday: number; blocks: unknown }[] }
@@ -96,6 +101,18 @@ const applyUndo = async (userId: string, undo: UndoPayload): Promise<void> => {
           completedAt: undo.prevCompletedAt ? new Date(undo.prevCompletedAt) : null,
         },
       })
+      return
+    case "NOOP":
+      return
+    case "DELETE_METRIC_ENTRY":
+      // Scoped through the metric's project so another user's entry can never be hit.
+      await prisma.metricEntry.deleteMany({ where: { id: undo.entryId, metric: { project: { userId } } } })
+      return
+    case "RESTORE_MILESTONE":
+      await prisma.milestone.updateMany({ where: { id: undo.milestoneId, project: { userId } }, data: { doneAt: null } })
+      return
+    case "RESTORE_PROJECT_STATUS":
+      await prisma.project.updateMany({ where: { id: undo.projectId, userId }, data: { status: undo.prev as "ACTIVE" } })
       return
     case "RESTORE_DUE":
       for (const i of undo.items) {

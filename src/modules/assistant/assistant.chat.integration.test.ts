@@ -71,7 +71,7 @@ describe("Assistant chat with actions", () => {
 
     // Fresh conversation (no history): it must recall from memory, not chat history.
     const ask = await say("roughly when am I free on weekdays?")
-    expect(ask.body.data.reply).toMatch(/8[:.]?30|after (work|the gym)|evening|9/i)
+    expect(ask.body.data.reply).toMatch(/8[:.]?30|20[:.]30|after (work|the gym)|evening|9/i)
 
     const list = await request(app).get("/api/v1/assistant/memories").set(auth())
     expect(list.body.data.length).toBeGreaterThan(0)

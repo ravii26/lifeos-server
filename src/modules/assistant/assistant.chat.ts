@@ -21,6 +21,15 @@ import {
   type NowDto,
 } from "../now/now.service.js"
 import { MODES, BLOCKS, type Mode } from "../now/now.rules.js"
+import {
+  getStandService,
+  listStandsService,
+  logProgressService,
+  setProjectStatusService,
+  weekCardService,
+  refreshHabitStagesService,
+  type ProjectStatusChange,
+} from "../progress/progress.service.js"
 import { getTonightService } from "../guide/guide.service.js"
 import { extractUrl } from "../guide/guide.saves.ai.js"
 import { upsertSettings } from "../settings/settings.repository.js"
@@ -44,6 +53,10 @@ export type ChatAction = (
   | { type: "NOTE_ADDED"; id: string; title: string; collection: string; template: string; items: string[] }
   // The right-now answer from the rules engine (sized options, never invented).
   | { type: "NOW_PICK"; kind: string; options: { id: string; sourceType: string; title: string; minutes: number; smaller: boolean; minimum: string }[] }
+  | { type: "STAND"; items: { id: string; title: string; kind: string; message: string; options: string[] }[] }
+  | { type: "PROGRESS_LOGGED"; id: string; title: string; what: string; message: string }
+  | { type: "PROJECT_STATUS"; id: string; title: string; status: string }
+  | { type: "WEEK_CARD"; message: string }
   | { type: "MODE_SET"; mode: string; until?: string }
   | { type: "SCHEDULE_SET"; days: string[] }
   // Ambiguous request: nothing was changed, the person picks (tap sends the exact title).
@@ -97,7 +110,7 @@ const loadContext = async (userId: string, message: string) => {
     prisma.userSettings.findUnique({ where: { userId }, select: { nightlyTime: true } }),
     recallMemories(userId, message),
     loadPatternFacts(userId).catch(() => null),
-    prisma.project.findMany({ where: { userId, status: "ACTIVE" }, take: 20, select: { id: true, title: true } }),
+    prisma.project.findMany({ where: { userId, status: { in: ["ACTIVE", "PAUSED"] } }, take: 20, select: { id: true, title: true, kind: true, status: true } }),
   ])
   return {
     timeZone,
@@ -183,11 +196,15 @@ You can take actions. Only use ids that appear in the context. Actions:
 - {"type":"COMPLETE_TASK","taskId":string}
 - {"type":"LOG_HABIT","habitId":string}
 - {"type":"SET_REMINDER","text":string,"at":"YYYY-MM-DDTHH:mm","windowEnd":"YYYY-MM-DDTHH:mm"|null,"repeat":{"freq":"DAILY"|"WEEKLY"|"MONTHLY","days":["SU"...]}|null}   (local time; resolve "at 7" / "tomorrow" / "in 2 hours" from "now". "sometime between 5 and 7" -> at=5, windowEnd=7. "every Sunday" -> repeat WEEKLY days ["SU"], at = the next Sunday; with no time said use 09:00.)
+- {"type":"WHERE_I_STAND","projectId":string|null}   ("where do I stand on my job switch / how is my weight going / how am I doing on X". projectId from activeProjects, null = all. The app computes the answer.)
+- {"type":"LOG_PROGRESS","projectId":string,"count":number|null,"minutes":number|null,"value":number|null,"milestoneDone":boolean|null}   (they report progress on a project in activeProjects: "I solved 23 DSA problems" -> count 23 on the MILESTONE project; "did 45 minutes of English" -> minutes 45 on the PRACTICE project; "weight is 83.2" -> value 83.2 on the OUTCOME project; "my resume is ready" -> milestoneDone true. Only one of count / minutes / value / milestoneDone.)
+- {"type":"SET_PROJECT_STATUS","projectId":string,"status":"PAUSED"|"ABANDONED"|"ACTIVE"|"COMPLETED"}   ("pause my investing goal" -> PAUSED; "let it go / drop it / I don't want this any more" -> ABANDONED; "resume it" -> ACTIVE; "I finished it" -> COMPLETED. Never delete.)
+- {"type":"WEEK_CARD"}   ("how was my week", "weekly review". Only when they ask.)
 - {"type":"WHAT_NOW","minutes":number|null}   (they ask what to do now / what to work on / "I have 20 minutes". The app answers from their real day, you only emit this. minutes = the time they said, else null.)
 - {"type":"SET_MODE","mode":"NORMAL"|"BUSY"|"SICK"|"TRAVEL"|"HOLIDAY","until":"YYYY-MM-DD"|null}   ("I'm sick" -> SICK; "busy week" -> BUSY with until = this Sunday; "I'm better / back to normal" -> NORMAL; "I'm travelling / on holiday until Friday" -> TRAVEL / HOLIDAY.)
 - {"type":"SET_SCHEDULE","days":["MON"..],"blocks":[{"block":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT","start":"HH:mm","end":"HH:mm"}]}   (they describe their day: "I work 10 to 8:30 on weekdays, gym right after". Give the blocks they described; the app fills the rest. Also remember it.)
 - {"type":"ADD_HABIT","title":string,"minimum":string|null,"prepare":string|null,"prepTime":"HH:mm"|null,"timeBlock":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT"|null,"days":["MON"...]|null,"anchor":string|null,"sizes":[{"minutes":number,"label":string}]|null,"reminderTime":"HH:mm"|null,"areaId":string|null}   (something they want to do repeatedly. anchor = what it follows ("after my morning coffee"); set timeBlock to the part of the day that anchor falls in. sizes = their smaller and bigger versions, smallest first, e.g. [{"minutes":2,"label":"read 2 pages"},{"minutes":10,"label":"read 10 pages"}]; always include a 2-minute size when they give any. A habit that needs setup the night before ("prep the night before") is TWO ADD_HABITs: the habit, and a "Prep ..." habit with timeBlock EVENING and reminderTime at the prep time, 21:30 if not said.)
-- {"type":"ADD_PROJECT","title":string,"kind":"OUTCOME"|"MILESTONE"|"PRACTICE"|"WORK","why":string|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL","deadline":"YYYY-MM-DD"|null,"areaId":string|null,"milestones":[string]|null,"tasks":[{"title":string,"due":"YYYY-MM-DD"|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|null}]}   (anything with an outcome. WORK = a deliverable with a deadline; MILESTONE = a goal with stages like a job switch; OUTCOME = a number to move; PRACTICE = weekly practice time. Always include 1-4 concrete first to-dos in "tasks" (for WORK the first to-do is the deliverable itself, with the project's deadline and priority). Put "why" in their words if they said it.)
+- {"type":"ADD_PROJECT","title":string,"kind":"OUTCOME"|"MILESTONE"|"PRACTICE"|"WORK","why":string|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL","deadline":"YYYY-MM-DD"|null,"areaId":string|null,"milestones":[string|{"title":string,"target":number|null}]|null,"metric":{"name":string,"unit":string,"start":number,"target":number}|null,"weeklyTargetMinutes":number|null,"tasks":[{"title":string,"due":"YYYY-MM-DD"|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|null}]}   (anything with an outcome. WORK = a deliverable with a deadline; MILESTONE = a goal with stages like a job switch; OUTCOME = a number to move; PRACTICE = weekly practice time. Always include 1-4 concrete first to-dos in "tasks" (for WORK the first to-do is the deliverable itself, with the project's deadline and priority). Put "why" in their words if they said it. OUTCOME needs "metric" (weight 85 -> 70 kg: name Weight, unit kg, start 85, target 70). PRACTICE needs "weeklyTargetMinutes". MILESTONE stages that are counted carry a target, e.g. {"title":"50 DSA problems","target":50}; uncounted ones ("Resume ready") have target null. Stages they say are already done are still listed, then logged with LOG_PROGRESS milestoneDone.)
 - {"type":"ADD_NOTE","collection":string,"template":"LIST"|"ROUTINE"|"PLAYBOOK"|"INFO","title":string,"items":[string],"text":string|null}   (something they TEACH you to keep: their breakfast options, gym warm-up steps, "when X do Y", client details. LIST/ROUTINE use items; PLAYBOOK/INFO use text. collection is a short name like "Breakfast" or "Gym".)
 - {"type":"SET_NUDGE","kind":"NIGHTLY"|"MORNING","time":"HH:mm"|null}   (null turns it off)
 
@@ -243,6 +260,13 @@ interface PlannedAction {
   collection?: string
   template?: string
   items?: unknown
+  projectId?: string | null
+  count?: number | null
+  value?: number | null
+  milestoneDone?: boolean | null
+  status?: string
+  metric?: { name?: string; unit?: string; start?: number; target?: number } | null
+  weeklyTargetMinutes?: number | null
   minutes?: number | null
   mode?: string
   until?: string | null
@@ -389,6 +413,24 @@ const size = (v: unknown) => {
 }
 const blockOf = (v: unknown) => (BLOCKS as readonly string[]).includes(String(v).toUpperCase()) ? (String(v).toUpperCase() as (typeof BLOCKS)[number]) : undefined
 const WEEKDAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
+const milestoneList = (v: unknown) =>
+  (Array.isArray(v) ? v : [])
+    .map((m) => {
+      const o = typeof m === "string" ? { title: m, target: undefined } : (m as { title?: unknown; target?: unknown })
+      const title = String(o?.title ?? "").trim().slice(0, 200)
+      const t = Math.round(Number(o?.target))
+      return { title, target: Number.isFinite(t) && t > 0 ? t : undefined }
+    })
+    .filter((m) => m.title)
+    .slice(0, 8)
+const metricOf = (v: PlannedAction["metric"], kind: string) => {
+  if (kind !== "OUTCOME" || !v?.name?.trim()) return undefined
+  const start = Number(v.start)
+  const target = Number(v.target)
+  return Number.isFinite(start) && Number.isFinite(target) && start !== target
+    ? { name: v.name.trim().slice(0, 80), unit: String(v.unit ?? "").trim().slice(0, 20), startValue: start, targetValue: target }
+    : undefined
+}
 const habitSizes = (v: unknown) => {
   if (!Array.isArray(v)) return undefined
   const out = v
@@ -398,6 +440,7 @@ const habitSizes = (v: unknown) => {
     .slice(0, 4)
   return out.length ? out : undefined
 }
+const num = (v: unknown) => (Number.isFinite(Number(v)) && v !== null && Number(v) > 0 ? Number(v) : undefined)
 const dayOnly = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null)
 const clock = (v: unknown) => (typeof v === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? v : undefined)
 const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9ऀ-ॿ]+/g, " ").trim()
@@ -526,6 +569,32 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
           ...(repeatRule && { repeatRule }),
           activityId: task.activityId,
         })
+      } else if (a.type === "WHERE_I_STAND") {
+        await refreshHabitStagesService(userId).catch(() => [])
+        const known = a.projectId && ctx.projects.some((p) => p.id === a.projectId)
+        const items = known ? [await getStandService(userId, a.projectId!)] : (await listStandsService(userId)).slice(0, 4)
+        say = items.length
+          ? items.map((s) => `${s.title}: ${s.message}`).join("\n")
+          : "You have no projects yet. Tell me a goal and I'll set it up with stages, so I can show where you stand."
+        done.push({ type: "STAND", items: items.map((s) => ({ id: s.id, title: s.title, kind: s.kind, message: s.message, options: s.options })) })
+      } else if (a.type === "LOG_PROGRESS" && a.projectId && ctx.projects.some((p) => p.id === a.projectId)) {
+        const r = await logProgressService(
+          userId,
+          { projectId: a.projectId, count: num(a.count), minutes: num(a.minutes), value: Number.isFinite(Number(a.value)) && a.value !== null ? Number(a.value) : undefined, milestoneDone: a.milestoneDone === true },
+          "CHAT",
+        )
+        say = `Logged: ${r.what}.\n${r.stand.title}: ${r.stand.message}`
+        done.push({ type: "PROGRESS_LOGGED", id: r.stand.id, title: r.stand.title, what: r.what, message: r.stand.message, activityId: r.activityId })
+      } else if (a.type === "SET_PROJECT_STATUS" && a.projectId && ctx.projects.some((p) => p.id === a.projectId)) {
+        const status = String(a.status).toUpperCase() as ProjectStatusChange
+        if (!["PAUSED", "ABANDONED", "ACTIVE", "COMPLETED"].includes(status)) continue
+        const r = await setProjectStatusService(userId, a.projectId, status, "CHAT")
+        say = `${r.title}: ${r.line}`
+        done.push({ type: "PROJECT_STATUS", id: a.projectId, title: r.title, status, activityId: r.activityId })
+      } else if (a.type === "WEEK_CARD") {
+        const card = await weekCardService(userId)
+        say = card.message
+        done.push({ type: "WEEK_CARD", message: card.message })
       } else if (a.type === "WHAT_NOW") {
         const now: NowDto = await getNowService(userId, { minutes: size(a.minutes) ?? null })
         const prep = now.prep.map((p) => `Tonight's prep: ${p.prepare}.`).join(" ")
@@ -598,7 +667,9 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
             why: a.why?.trim() || undefined,
             priority,
             deadline: deadlineKey ? dateFromKey(deadlineKey) : undefined,
-            milestones: strings(a.milestones, 8).map((title) => ({ title: title.slice(0, 200) })),
+            milestones: milestoneList(a.milestones),
+            weeklyTargetMinutes: size(a.weeklyTargetMinutes) && kind === "PRACTICE" ? size(a.weeklyTargetMinutes) : undefined,
+            metric: metricOf(a.metric, kind),
           },
           { source: "CHAT" },
         )

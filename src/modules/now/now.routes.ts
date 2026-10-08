@@ -6,6 +6,7 @@ import { sendSuccess } from "../../shared/utils/response.util.js"
 import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
 import {
   getNowService,
+  getClock,
   getModeService,
   setModeService,
   getScheduleService,
@@ -15,6 +16,7 @@ import {
   markPrepDoneService,
 } from "./now.service.js"
 import { MODES } from "./now.rules.js"
+import { maybeRefreshHabitStages } from "../progress/progress.service.js"
 
 const router = Router()
 router.use(authenticate)
@@ -30,6 +32,7 @@ const at = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).optional()
 // GET /now?minutes=20 — the right thing for right now.
 router.get("/", async (req: Request, res: Response) => {
   const q = parse(z.object({ minutes: z.coerce.number().int().positive().optional(), at }), req.query)
+  await maybeRefreshHabitStages(req.user!.id, await getClock(req.user!.id, q.at))
   sendSuccess(res, "Right now", await getNowService(req.user!.id, q))
 })
 
