@@ -7,7 +7,7 @@ import {
   nextService,
 } from "./guide.service.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
-import { createSaveService, decideSaveService, getSaveService, setSavePurposeService } from "./guide.saves.service.js"
+import { createSaveService, decideSaveService, getSaveService, listSavesService, setSavePurposeService } from "./guide.saves.service.js"
 import { HttpStatus } from "../../shared/constants/httpStatus.js"
 import { ValidationError } from "../../shared/utils/errors.util.js"
 import type { HistoryQueryDto } from "./guide.schema.js"
@@ -59,4 +59,9 @@ export const getSaveController = async (req: Request, res: Response) => {
 // POST /guide/saves/:id/purpose — one tap to correct learning ↔ feeling.
 export const setSavePurposeController = async (req: Request, res: Response) => {
   sendSuccess(res, "Save updated", await setSavePurposeService(req.user!.id, String(req.params.id), req.body.purpose))
+}
+
+// GET /guide/saves — saves waiting for a decision, and the ones kept on the shelf.
+export const listSavesController = async (req: Request, res: Response) => {
+  sendSuccess(res, "Saves", await listSavesService(req.user!.id))
 }

@@ -37,7 +37,17 @@ const newContext = async (): Promise<{ ctx: ScenarioContext; cleanup: () => Prom
     history.push({ role: "user", text: message }, { role: "assistant", text: res.body.data.reply })
     return res.body.data
   }
-  return { ctx: { say, api, db: prisma, userId }, cleanup: async () => void (await prisma.user.delete({ where: { id: userId } })) }
+  // A second phone: the same person logs in again and gets a fresh token.
+  const newDevice: ScenarioContext["newDevice"] = async () => {
+    const login = await request(app).post("/api/v1/auth/login").send({ email, password: "password123" })
+    const t = login.body?.data?.token as string | undefined
+    if (!t) throw new Error(`login on a new device returned ${login.status}`)
+    return async (method, path, body) => {
+      const res = await request(app)[method](`/api/v1${path}`).set({ Authorization: `Bearer ${t}` }).send(body as object)
+      return { status: res.status, body: res.body }
+    }
+  }
+  return { ctx: { say, api, db: prisma, userId, newDevice }, cleanup: async () => void (await prisma.user.delete({ where: { id: userId } })) }
 }
 
 const main = async () => {

@@ -8,6 +8,7 @@ import {
   createSaveController,
   decideSaveController,
   getSaveController,
+  listSavesController,
   setSavePurposeController,
 } from "./guide.controller.js"
 import { validate, validateQuery } from "../../shared/middleware/validate.middleware.js"
@@ -34,6 +35,8 @@ router.get("/history", validateQuery(historySchema), historyController)
 router.post("/saves", uploadCaptureMedia, validate(createSaveSchema), createSaveController)
 // POST /guide/saves/:id/decide — ACTION (make it a task) | SHELF (hard days) | DROP.
 router.post("/saves/:id/decide", validate(decideSaveSchema), decideSaveController)
+// GET /guide/saves — waiting for a decision, or on the shelf.
+router.get("/saves", listSavesController)
 // GET /guide/saves/:id — current state (poll for the video summary).
 router.get("/saves/:id", getSaveController)
 // POST /guide/saves/:id/purpose — correct the guess: LEARN | FEELING.

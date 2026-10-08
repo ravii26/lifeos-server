@@ -196,6 +196,47 @@ const watchInBackground = async (userId: string, id: string, url: string, areas:
   }
 }
 
+export interface SaveListItem {
+  id: string
+  title: string
+  purpose: SavePurposeGuess
+  feelings: string[]
+  shelved: boolean
+  status: string
+  url: string | null
+  platform: string | null
+  hasSummary: boolean
+  createdAt: Date
+}
+
+// What the person has saved: waiting for a decision, or kept on the shelf.
+// Saves that became actions or were let go are history, not a list to tend.
+export const listSavesService = async (userId: string): Promise<SaveListItem[]> => {
+  const rows = await prisma.capture.findMany({
+    where: { userId, status: { in: ["PENDING", "CONVERTED"] }, suggestedOutputs: { path: ["kind"], equals: "SAVE" } },
+    orderBy: { createdAt: "desc" },
+    take: 60,
+  })
+  return rows
+    .filter((c) => c.status === "PENDING" || isShelved(c))
+    .map((c) => {
+      const stored = storedOf(c.suggestedOutputs)!
+      const meta = c.urlMetadata as LinkInfo | null
+      return {
+        id: c.id,
+        title: stored.proposal.contentTitle,
+        purpose: stored.proposal.purpose,
+        feelings: stored.proposal.feelings,
+        shelved: isShelved(c),
+        status: c.status,
+        url: c.detectedUrl,
+        platform: meta?.platform ?? null,
+        hasSummary: stored.summary?.state === "READY",
+        createdAt: c.createdAt,
+      }
+    })
+}
+
 export const getSaveService = async (userId: string, id: string): Promise<SaveDto> => {
   const capture = await findCaptureById(id, userId)
   if (!capture) throw new NotFoundError("Save not found")
@@ -266,6 +307,13 @@ export const decideSaveService = async (userId: string, id: string, input: Decid
   const shelvedId = (capture.createdOutputs as { type?: string; id?: string } | null)?.id
   if (input.choice === "SHELF" && isShelved(capture) && shelvedId) {
     return { choice: "SHELF", taskId: null, taskIds: [], habitIds: [], vaultItemId: shelvedId, noteId: null, setAsTonight: false }
+  }
+  // Choosing a step, or letting it go, for a save Ally had shelved means the
+  // guess was wrong: take it off the shelf first, then carry on.
+  if (isShelved(capture) && input.choice !== "SHELF") {
+    if (shelvedId) await prisma.vaultItem.deleteMany({ where: { id: shelvedId, userId } })
+    await updateCapture(id, userId, { status: "PENDING", createdOutputs: Prisma.JsonNull })
+    return decideSaveService(userId, id, input)
   }
   if (capture.status !== "PENDING") throw new ValidationError("This save was already decided")
   const stored = storedOf(capture.suggestedOutputs)

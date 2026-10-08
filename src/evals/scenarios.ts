@@ -48,9 +48,11 @@ export interface ScenarioContext {
   // For checks the API cannot do (e.g. backdating activity to simulate days away).
   db: PrismaClient
   userId: string
+  // Logs the same person in again, as if on a new phone.
+  newDevice: () => Promise<ScenarioContext["api"]>
   // Fresh per scenario: an empty account with one MAIN area (Career).
   say: (message: string) => Promise<ChatReplyShape>
-  api: (method: "get" | "post" | "patch", path: string, body?: unknown) => Promise<{ status: number; body: any }>
+  api: (method: "get" | "post" | "patch" | "put", path: string, body?: unknown) => Promise<{ status: number; body: any }>
 }
 
 export interface Scenario {
@@ -432,7 +434,34 @@ export const scenarios: Scenario[] = [
       return /14416/.test(r.reply) ? null : "helpline missing from reply"
     },
   },
-  { id: "F18", name: "Stale to-dos: one batch question", status: { pendingUntil: 7 } },
+  {
+    id: "F18",
+    name: "Stale to-dos: one batch question",
+    status: "ready",
+    async run({ api, db, userId }) {
+      const old = []
+      for (let i = 0; i < 7; i++) {
+        old.push(await db.task.create({ data: { userId, title: `Old to-do ${i + 1}`, createdAt: ago(40 - i) } }))
+      }
+      await api("post", "/tasks", { title: "Fresh to-do" })
+      const q = (await api("get", "/now/stale")).body.data
+      if (q.total !== 7 || q.items.length !== 5) return `question covers ${q.items.length} of ${q.total}, expected 5 of 7`
+      if (q.items.some((x: any) => x.title === "Fresh to-do" || x.ageDays < 30)) return "a recent to-do is in the question"
+      const keep = q.items.slice(0, 2).map((x: any) => x.id)
+      const letGo = q.items.slice(2).map((x: any) => x.id)
+      const res = await api("post", "/now/stale/resolve", { keepIds: keep, letGoIds: letGo })
+      if (res.status !== 200 || res.body.data.letGo !== 3 || res.body.data.kept !== 2) return `resolve: ${JSON.stringify(res.body)}`
+      const after = (await api("get", "/now/stale")).body.data
+      if (after.total !== 2) return `${after.total} still stale, expected the 2 not asked about`
+      const gone = await db.task.findMany({ where: { id: { in: letGo } }, select: { archivedAt: true, status: true } })
+      if (gone.some((t) => !t.archivedAt || t.status !== "CANCELLED")) return "let-go to-dos were not archived"
+      const kept = await db.task.findMany({ where: { id: { in: keep } }, select: { archivedAt: true, status: true } })
+      if (kept.some((t) => t.archivedAt || t.status === "CANCELLED")) return "kept to-dos were changed"
+      const undo = await api("post", `/activity/${res.body.data.activityId}/undo`)
+      const back = await db.task.findMany({ where: { id: { in: letGo } }, select: { archivedAt: true, status: true } })
+      return undo.status === 200 && back.every((t) => !t.archivedAt && t.status === "TODO") ? null : "undo did not bring them back"
+    },
+  },
   {
     id: "F19",
     name: "Hinglish reminder: kal 7 baje mummy ko call yaad dilana",
@@ -664,6 +693,93 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    id: "B11",
+    name: "Plan: today by part of the day, the week, carried-over, later, habits",
+    status: "ready",
+    async run({ api }) {
+      const area = await careerId(api)
+      const day = dayKey()
+      await api("post", "/tasks", { title: "Write API", dueDate: day, block: "OFFICE", areaId: area })
+      await api("post", "/tasks", { title: "Buy groceries", dueDate: day })
+      await api("post", "/tasks", { title: "Plan the trip", dueDate: dayKey(2) })
+      await api("post", "/tasks", { title: "Old invoice", dueDate: dayKey(-3) })
+      await api("post", "/tasks", { title: "Someday task" })
+      await api("post", "/tasks", { title: "Call mom", remindAt: `${day}T19:00:00+05:30`, dueDate: `${day}T19:00:00+05:30` })
+      const finished = await api("post", "/tasks", { title: "Done earlier" })
+      await api("patch", `/tasks/${finished.body.data.id}/complete`)
+      const habit = await api("post", "/habits", { title: "Warm water", areaId: area, timeBlock: "MORNING" })
+      const hid = habit.body.data.id as string
+      const plan = (await api("get", `/now/plan?at=${day}T09:00`)).body.data
+      const names = (b: string) => (plan.today.blocks.find((x: any) => x.block === b)?.items ?? []).map((i: any) => i.title)
+      if (!names("OFFICE").includes("Write API")) return `office: ${names("OFFICE")}`
+      if (!names("MORNING").includes("Warm water")) return `morning: ${names("MORNING")}`
+      const any = names("ANYTIME")
+      if (any[0] !== "Call mom" || !any.includes("Buy groceries") || any[any.length - 1] !== "Done earlier") return `anytime order: ${any}`
+      if (plan.today.done !== 1 || plan.today.total !== 5) return `done ${plan.today.done} of ${plan.today.total}`
+      if (!plan.thisWeek.days.some((d: any) => d.date === dayKey(2) && d.items.some((i: any) => i.title === "Plan the trip"))) return "this week is missing the trip"
+      if (!plan.thisWeek.carried.some((i: any) => i.title === "Old invoice")) return "overdue was not carried into this week"
+      if (plan.later.count !== 1) return `later ${plan.later.count}`
+      const h = plan.habits.find((x: any) => x.id === hid)
+      if (!h || h.todayDone || !h.scheduledToday) return "habit not listed as due"
+      const r = await api("post", "/now/respond", { sourceType: "HABIT", sourceId: hid, action: "DONE" })
+      if (r.status !== 200) return `respond returned ${r.status}`
+      const after = (await api("get", `/now/plan?at=${day}T09:00`)).body.data
+      return after.habits.find((x: any) => x.id === hid).todayDone && after.today.done === 2 ? null : "habit not checked off on the plan"
+    },
+  },
+  {
+    id: "B12",
+    name: "Now card: Done, Smaller and Not now are each logged, and Done can be undone",
+    status: "ready",
+    async run({ api, db, userId }) {
+      const area = await careerId(api)
+      const t1 = (await api("post", "/tasks", { title: "Write the design doc", areaId: area })).body.data.id as string
+      const t2 = (await api("post", "/tasks", { title: "Review the PR", areaId: area })).body.data.id as string
+      const h = (await api("post", "/habits", { title: "Read", areaId: area })).body.data.id as string
+      const done = await api("post", "/now/respond", { sourceType: "TASK", sourceId: t1, action: "DONE" })
+      if (done.status !== 200 || !done.body.data.activityId) return `done: ${done.status}`
+      if ((await db.task.findUnique({ where: { id: t1 } }))?.status !== "COMPLETED") return "task not completed"
+      const undo = await api("post", `/activity/${done.body.data.activityId}/undo`)
+      if (undo.status !== 200 || (await db.task.findUnique({ where: { id: t1 } }))?.status !== "TODO") return "undo did not reopen it"
+      const small = await api("post", "/now/respond", { sourceType: "TASK", sourceId: t2, action: "MINIMUM" })
+      if (small.status !== 200) return `smaller: ${small.status}`
+      if ((await db.task.findUnique({ where: { id: t2 } }))?.status !== "TODO") return "the smaller version must not complete the task"
+      const hab = await api("post", "/now/respond", { sourceType: "HABIT", sourceId: h, action: "MINIMUM" })
+      if (hab.status !== 200) return `habit smaller: ${hab.status}`
+      const skip = await api("post", "/now/respond", { sourceType: "TASK", sourceId: t2, action: "SKIP" })
+      if (skip.status !== 200) return `not now: ${skip.status}`
+      const events = await db.activityEvent.findMany({ where: { userId, itemId: { in: [t2, h] } }, select: { type: true, reason: true } })
+      const types = events.map((e) => e.type).sort().join(",")
+      if (!/MINIMUM,MINIMUM,SKIPPED/.test(types)) return `events: ${types}`
+      if (events.find((e) => e.type === "SKIPPED")?.reason !== "not now") return "skip reason not recorded"
+      const bad = await api("post", "/now/respond", { sourceType: "TASK", sourceId: "nope", action: "DONE" })
+      return bad.status === 404 ? null : `unknown id returned ${bad.status}`
+    },
+  },
+  {
+    id: "B13",
+    name: "Saves list: waiting for a decision and on the shelf, nothing else",
+    status: "ready",
+    async run({ api, db, userId }) {
+      const proposal = (title: string, purpose: string) => ({
+        kind: "SAVE",
+        proposal: { contentTitle: title, kind: "LEARN", purpose, feelings: purpose === "FEELING" ? ["lazy"] : [], actions: [{ action: "Do it", minimum: "Start", as: "TODO", when: "THIS_WEEK" }], action: "Do it", minimum: "Start", areaId: null, when: "THIS_WEEK", reason: "", source: "ai" },
+        summary: { state: "NONE", lines: [] },
+      })
+      const mk = (title: string, status: "PENDING" | "CONVERTED" | "DISMISSED", purpose: string, out?: object) =>
+        db.capture.create({ data: { userId, rawText: title, status, purpose: purpose as "LEARN", suggestedOutputs: proposal(title, purpose), ...(out ? { createdOutputs: out } : {}) } })
+      await mk("Waiting save", "PENDING", "LEARN")
+      await mk("Shelf save", "CONVERTED", "FEELING", { type: "VAULT", id: "x" })
+      await mk("Became a task", "CONVERTED", "LEARN", { type: "TASK", id: "y" })
+      await mk("Let go", "DISMISSED", "LEARN")
+      const list = (await api("get", "/guide/saves")).body.data as any[]
+      const titles = list.map((x) => x.title).sort()
+      if (titles.join("|") !== "Shelf save|Waiting save") return `listed: ${titles.join("|")}`
+      const shelf = list.find((x) => x.title === "Shelf save")
+      return shelf.shelved && shelf.purpose === "FEELING" && !list.find((x) => x.title === "Waiting save").shelved ? null : "shelved flags are wrong"
+    },
+  },
+  {
     id: "B10",
     name: "Private (health) memories are never brought up unless you raise them",
     status: "ready",
@@ -721,7 +837,38 @@ export const scenarios: Scenario[] = [
       return /Redis caching explained/.test(r.reply) && /caching chapter/i.test(r.reply) ? null : `reply does not list them: ${r.reply.slice(0, 160)}`
     },
   },
-  { id: "F28", name: "New phone restores everything", status: { pendingUntil: 7 } },
+  {
+    id: "F28",
+    name: "New phone restores everything",
+    status: "ready",
+    async run({ api, db, userId, newDevice }) {
+      const area = await careerId(api)
+      await api("post", "/tasks", { title: "Renew passport", areaId: area, priority: "HIGH" })
+      await api("post", "/tasks", { title: "Call the client", remindAt: new Date(Date.now() + 86_400_000).toISOString() })
+      await api("post", "/habits", { title: "Warm water", areaId: area, prepareAhead: "fill the bottle", prepTime: "21:30" })
+      await api("post", "/projects", { title: "Switch jobs", areaId: area, kind: "MILESTONE", milestones: [{ title: "Resume ready" }, { title: "50 DSA problems", target: 50 }] })
+      await db.allyNote.create({ data: { userId, collection: "Breakfast", template: "LIST", title: "Breakfast", items: ["poha", "oats", "eggs"] } })
+      await db.memory.create({ data: { userId, content: "Works 10am to 8:30pm on weekdays", kind: "FACT", importance: 3, source: "SAID" } })
+      await api("put", "/now/schedule", { weekdays: [1, 2, 3, 4, 5], blocks: [{ block: "OFFICE", start: "10:00", end: "20:30" }] })
+      await api("put", "/now/mode", { mode: "BUSY", until: dayKey(3) })
+      const phone2 = await newDevice()
+      const ids = (r: any) => (Array.isArray(r.body.data) ? r.body.data : (r.body.data?.items ?? [])).map((x: any) => x.id).sort().join(",")
+      for (const path of ["/tasks", "/habits", "/projects", "/ally-notes", "/assistant/memories", "/assistant/reminders"]) {
+        const [a, b] = [await api("get", path), await phone2("get", path)]
+        if (a.status !== 200 || b.status !== 200) return `${path}: ${a.status}/${b.status}`
+        if (ids(a) !== ids(b) || !ids(b)) return `${path} differs on the new phone: "${ids(a)}" vs "${ids(b)}"`
+      }
+      const reminders = (await phone2("get", "/assistant/reminders")).body.data as any[]
+      if (!reminders.some((r) => r.text === "Call the client")) return "the reminder is not on the new phone, so it cannot be rescheduled there"
+      const sched = (await phone2("get", "/now/schedule")).body.data as any[]
+      const office = sched.find((d) => d.weekday === 1)?.blocks.find((b: any) => b.block === "OFFICE")
+      if (office?.start !== "10:00" || office?.end !== "20:30") return "the schedule did not come across"
+      const mode = (await phone2("get", "/now/mode")).body.data
+      if (mode.mode !== "BUSY") return `mode ${mode.mode}`
+      const prog = await phone2("get", "/progress/projects")
+      return prog.status === 200 && prog.body.data.length === 1 ? null : "where-you-stand did not come across"
+    },
+  },
 
   // Behaviour guarantees that are testable today.
   {

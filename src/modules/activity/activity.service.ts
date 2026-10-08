@@ -30,6 +30,7 @@ export type UndoPayload =
   | { kind: "UNLOG_HABIT"; habitId: string; date: string; prev: { completed: boolean; count: number; minutes: number } | null }
   // Progress is derived from the log, so undoing a logged count only marks the event undone.
   | { kind: "NOOP" }
+  | { kind: "RESTORE_ARCHIVED"; items: { taskId: string; prevStatus: string }[] }
   | { kind: "RESTORE_NOTE"; noteId: string; collection: string; title: string; items: string[]; text: string | null }
   | { kind: "RESTORE_ALLY_NOTE"; note: { collection: string; template: string; title: string; items: string[]; text: string | null } }
   | { kind: "DELETE_METRIC_ENTRY"; entryId: string }
@@ -105,6 +106,11 @@ const applyUndo = async (userId: string, undo: UndoPayload): Promise<void> => {
       })
       return
     case "NOOP":
+      return
+    case "RESTORE_ARCHIVED":
+      for (const i of undo.items) {
+        await prisma.task.updateMany({ where: { id: i.taskId, userId }, data: { archivedAt: null, status: i.prevStatus as "TODO" } })
+      }
       return
     case "RESTORE_NOTE":
       await prisma.allyNote.updateMany({
