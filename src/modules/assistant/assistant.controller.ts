@@ -70,6 +70,15 @@ export const updateReminderController = async (req: Request, res: Response) => {
   sendSuccess(res, "Updated")
 }
 
+// PATCH /assistant/memories/:id — mark a memory private (never brought up unless you raise it) or not.
+export const updateMemoryController = async (req: Request, res: Response) => {
+  const sensitive = (req.body as { sensitive?: unknown }).sensitive
+  if (typeof sensitive !== "boolean") throw new ValidationError("sensitive must be true or false")
+  const result = await prisma.memory.updateMany({ where: { id: String(req.params.id), userId: req.user!.id }, data: { sensitive } })
+  if (result.count === 0) throw new NotFoundError("Memory not found")
+  sendSuccess(res, "Updated")
+}
+
 // GET /assistant/memories — everything the assistant remembers about you.
 export const listMemoriesController = async (req: Request, res: Response) => {
   sendSuccess(res, "Memories", await listMemories(req.user!.id))

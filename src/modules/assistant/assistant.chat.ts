@@ -11,7 +11,9 @@ import { runWithAiFallback } from "../../lib/ai-fallback.js"
 import { createTaskService, completeTaskService } from "../task/task.service.js"
 import { logHabitService, createHabitService } from "../habit/habit.service.js"
 import { createProjectService } from "../project/project.service.js"
-import { createAllyNoteService } from "../allynote/allynote.service.js"
+import { createAllyNoteService, updateAllyNoteService } from "../allynote/allynote.service.js"
+import { searchAllService } from "../search/search.service.js"
+import { searchMessage, pickNotesForPrompt } from "../search/search.rules.js"
 import { localToUtc, repeatToRule, isAmbiguousCompletion } from "./assistant.capture.js"
 import {
   getNowService,
@@ -53,6 +55,9 @@ export type ChatAction = (
   | { type: "NOTE_ADDED"; id: string; title: string; collection: string; template: string; items: string[] }
   // The right-now answer from the rules engine (sized options, never invented).
   | { type: "NOW_PICK"; kind: string; options: { id: string; sourceType: string; title: string; minutes: number; smaller: boolean; minimum: string }[] }
+  | { type: "NOTES_USED"; notes: { id: string; title: string; collection: string }[] }
+  | { type: "NOTE_UPDATED"; id: string; title: string; items: string[] }
+  | { type: "SEARCH_RESULTS"; query: string; results: { kind: string; id: string; title: string; snippet: string }[] }
   | { type: "STAND"; items: { id: string; title: string; kind: string; message: string; options: string[] }[] }
   | { type: "PROGRESS_LOGGED"; id: string; title: string; what: string; message: string }
   | { type: "PROJECT_STATUS"; id: string; title: string; status: string }
@@ -86,7 +91,7 @@ const loadContext = async (userId: string, message: string) => {
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { timezone: true, name: true } })
   const timeZone = user?.timezone ?? "Asia/Kolkata"
   const todayKey = todayKeyInTz(timeZone)
-  const [areas, tasks, habits, reminders, identity, tonight, settings, memories, patternFacts, projects] = await Promise.all([
+  const [areas, tasks, habits, reminders, identity, tonight, settings, memories, patternFacts, projects, allNotes] = await Promise.all([
     prisma.area.findMany({ where: { userId, isActive: true }, select: { id: true, name: true, tier: true } }),
     prisma.task.findMany({
       where: { userId, status: { in: ["TODO", "IN_PROGRESS"] } },
@@ -111,6 +116,7 @@ const loadContext = async (userId: string, message: string) => {
     recallMemories(userId, message),
     loadPatternFacts(userId).catch(() => null),
     prisma.project.findMany({ where: { userId, status: { in: ["ACTIVE", "PAUSED"] } }, take: 20, select: { id: true, title: true, kind: true, status: true } }),
+    prisma.allyNote.findMany({ where: { userId }, orderBy: { updatedAt: "desc" }, take: 200 }),
   ])
   return {
     timeZone,
@@ -119,6 +125,8 @@ const loadContext = async (userId: string, message: string) => {
     areas,
     tasks,
     projects,
+    notes: pickNotesForPrompt(allNotes, message, 12),
+    otherNoteCollections: [...new Set(allNotes.filter((n) => !pickNotesForPrompt(allNotes, message, 12).some((p) => p.id === n.id)).map((n) => n.collection))].slice(0, 30),
     habits,
     reminders,
     identity,
@@ -154,6 +162,9 @@ const contextJson = (ctx: Ctx) =>
       }),
     ),
     activeProjects: ctx.projects,
+    // What they taught you. Answer from these, and only these.
+    yourNotes: ctx.notes.map((n) => ({ id: n.id, collection: n.collection, template: n.template, title: n.title, items: n.items, text: n.text?.slice(0, 600) ?? null })),
+    otherNoteCollections: ctx.otherNoteCollections,
     habits: ctx.habits.map((h) => h.title),
     tonightsOneThing: ctx.tonight?.commitment
       ? {
@@ -200,6 +211,9 @@ You can take actions. Only use ids that appear in the context. Actions:
 - {"type":"LOG_PROGRESS","projectId":string,"count":number|null,"minutes":number|null,"value":number|null,"milestoneDone":boolean|null}   (they report progress on a project in activeProjects: "I solved 23 DSA problems" -> count 23 on the MILESTONE project; "did 45 minutes of English" -> minutes 45 on the PRACTICE project; "weight is 83.2" -> value 83.2 on the OUTCOME project; "my resume is ready" -> milestoneDone true. Only one of count / minutes / value / milestoneDone.)
 - {"type":"SET_PROJECT_STATUS","projectId":string,"status":"PAUSED"|"ABANDONED"|"ACTIVE"|"COMPLETED"}   ("pause my investing goal" -> PAUSED; "let it go / drop it / I don't want this any more" -> ABANDONED; "resume it" -> ACTIVE; "I finished it" -> COMPLETED. Never delete.)
 - {"type":"WEEK_CARD"}   ("how was my week", "weekly review". Only when they ask.)
+- {"type":"USE_NOTES","noteIds":[string]}   (your reply used what they taught you in yourNotes: emit this with the ids you used. The app adds "From your X note".)
+- {"type":"UPDATE_NOTE","noteId":string,"add":[string]|null,"remove":[string]|null}   ("add pancakes to my breakfasts", "remove poha". noteId from yourNotes.)
+- {"type":"SEARCH","query":string}   ("what did I save about caching", "find my notes on X". The app searches notes, saves, to-dos and goals and writes the answer.)
 - {"type":"WHAT_NOW","minutes":number|null}   (they ask what to do now / what to work on / "I have 20 minutes". The app answers from their real day, you only emit this. minutes = the time they said, else null.)
 - {"type":"SET_MODE","mode":"NORMAL"|"BUSY"|"SICK"|"TRAVEL"|"HOLIDAY","until":"YYYY-MM-DD"|null}   ("I'm sick" -> SICK; "busy week" -> BUSY with until = this Sunday; "I'm better / back to normal" -> NORMAL; "I'm travelling / on holiday until Friday" -> TRAVEL / HOLIDAY.)
 - {"type":"SET_SCHEDULE","days":["MON"..],"blocks":[{"block":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT","start":"HH:mm","end":"HH:mm"}]}   (they describe their day: "I work 10 to 8:30 on weekdays, gym right after". Give the blocks they described; the app fills the rest. Also remember it.)
@@ -212,10 +226,17 @@ Action rules:
 - "What should I do now / what should I work on / I have N minutes" (any language): emit WHAT_NOW. Do not pick the item yourself.
 - When they say they finished something, complete the matching task or habit.
 - When they ask to be reminded, set a reminder. When they clearly mention something they need to do, add a task (ask nothing unless truly unclear).
+- HARD RULE for lists: when they list several things to do, count them first and emit exactly one ADD_TASK per item (up to 12). Never summarise or merge items, and never stop early. Give each a realistic sizeMinutes.
+- HARD RULE for prep: whenever they say something must be prepared the night or evening before ("prep the night before", "soak the oats at night", "raat ko tayyari"), you MUST emit an extra ADD_HABIT titled "Prep <the thing>" with timeBlock EVENING and reminderTime 21:30 (or the time they said), in addition to the habit or note itself. Never skip it, and never fold it into another habit.
 - One long message can hold many things: emit one action per thing (up to 12). Do not merge unrelated things and do not invent extra ones. Do not duplicate what activeProjects, habits or openTasks already hold.
 - When they say a goal ("I want to switch jobs in 6 months"), create the project (MILESTONE for a goal with stages, with 3-5 stage names in milestones, why, a deadline from the timeframe) plus EXACTLY 3 starter to-dos in "tasks" (concrete first steps, never fewer than 3). Do NOT add a habit for it yourself: put exactly one fitting habit in "suggest" for them to confirm.
 - If the request is unclear in a way you cannot resolve (two different readings, a missing time that matters), ask ONE short question and emit no action. Missing details that have a sensible default are not a reason to ask.
 - When two or more open to-dos could match "done with X", do not guess: ask which one and emit no COMPLETE_TASK.
+
+Notes ("Teach Ally"):
+- yourNotes holds what they taught you (lists, routines, playbooks, info). When a question can be answered from a note ("what can I eat?", "what's my warm-up?", "what do I do when anxious?"), answer ONLY from that note, in a short natural line, and emit USE_NOTES. Never add items or steps that are not in the note.
+- If they ask for something a note should hold (their breakfasts, a warm-up, a routine, client details) and no note in yourNotes has it, do NOT make one up: say you don't have it yet and ask them to tell you (one short question, no actions). If your previous message asked for it and they now give it, create it with ADD_NOTE (collection and template as usual: LIST for options, ROUTINE for ordered steps, PLAYBOOK for "when X do Y", INFO for facts).
+- otherNoteCollections are notes that exist but are not shown here: if the question is about one of those, emit SEARCH with the collection name instead of guessing.
 
 Language: they often write Hinglish (Hindi in Roman letters, sometimes Devanagari) or mix it with English. Understand it fully: kal = tomorrow, parso = day after tomorrow, aaj = today, subah = morning, dopahar = afternoon, shaam = evening, raat = night, baje = o'clock ("7 baje" in a reminder means 19:00 if it is evening/night talk, otherwise the next 7), yaad dilana / yaad dila dena = remind me, karna hai = need to do, ho gaya / kar liya = done, har roz = every day, har Sunday / har ravivar = every Sunday, mummy = their mother. Reply in the same style they wrote in (Hinglish back to Hinglish, English to English), keep reminder text in their words.
 - You never message them on your own. Only when they ask ("nudge me every night at 9:30", "stop the nightly reminders") set or clear a nudge with SET_NUDGE.
@@ -260,6 +281,11 @@ interface PlannedAction {
   collection?: string
   template?: string
   items?: unknown
+  noteIds?: unknown
+  noteId?: string | null
+  add?: unknown
+  remove?: unknown
+  query?: string
   projectId?: string | null
   count?: number | null
   value?: number | null
@@ -371,6 +397,16 @@ export const nudgeRequest = (text: string): PlannedAction | null => {
   return null
 }
 
+// "What did I save about caching?" is a search across everything, not a lookup
+// in one note, so a clear request is decided here and not left to the model.
+const SEARCH_ASK = /\b(?:what|which)\s+(?:did|do|have)\s+i\s+(?:save[d]?|note[d]?|write|wrote|add(?:ed)?|keep|kept|have|taught you)\s+(?:about|on|regarding|for)\s+([^?.!]{2,80})|\b(?:find|search|look up|show)\s+(?:me\s+)?(?:my\s+)?(?:notes?|saves?|anything|everything|things)?\s*(?:about|on|for)\s+([^?.!]{2,80})/i
+
+export const searchRequest = (text: string): PlannedAction | null => {
+  const m = text.match(SEARCH_ASK)
+  const query = (m?.[1] ?? m?.[2] ?? "").trim()
+  return query ? { type: "SEARCH", query } : null
+}
+
 // ---- safety and patterns (deterministic) ---------------------------
 
 // Crisis language always gets the same careful answer with a helpline, no
@@ -464,6 +500,7 @@ const pickArea = async (userId: string, ctx: Ctx, areaId?: string | null): Promi
 interface ExecResult {
   done: ChatAction[]
   say: string | null // the exact reply when rules, not the model, produce the answer
+  cite: string | null // "(From your Breakfast note.)" added to the reply
   skipped: number // duplicates we did not create again: not a failure
   asked: Extract<ChatAction, { type: "ASK" }> | null
 }
@@ -480,6 +517,7 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
   const done: ChatAction[] = []
   let skipped = 0
   let say: string | null = null
+  let cite: string | null = null
   let asked: ExecResult["asked"] = null
   const taskIds = new Map(ctx.tasks.map((t) => [t.id, t.title]))
   const habitIds = new Map(ctx.habits.map((h) => [h.id, h.title]))
@@ -569,6 +607,23 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
           ...(repeatRule && { repeatRule }),
           activityId: task.activityId,
         })
+      } else if (a.type === "USE_NOTES") {
+        const used = strings(a.noteIds, 5).map((id) => ctx.notes.find((n) => n.id === id)).filter((n): n is NonNullable<typeof n> => !!n)
+        if (used.length) {
+          const names = [...new Set(used.map((n) => n.collection))]
+          cite = `(From your ${names.join(" and ")} note${names.length > 1 ? "s" : ""}.)`
+          done.push({ type: "NOTES_USED", notes: used.map((n) => ({ id: n.id, title: n.title, collection: n.collection })) })
+        }
+      } else if (a.type === "UPDATE_NOTE" && a.noteId && ctx.notes.some((n) => n.id === a.noteId)) {
+        const add = strings(a.add, 10)
+        const remove = strings(a.remove, 10)
+        if (!add.length && !remove.length) continue
+        const n = await updateAllyNoteService(userId, a.noteId, { add, remove }, { source: "CHAT" })
+        if (n) done.push({ type: "NOTE_UPDATED", id: n.id, title: n.title, items: n.items, activityId: n.activityId })
+      } else if (a.type === "SEARCH" && a.query?.trim()) {
+        const results = await searchAllService(userId, a.query.trim())
+        say = searchMessage(a.query.trim(), results)
+        done.push({ type: "SEARCH_RESULTS", query: a.query.trim(), results: results.map((r) => ({ kind: r.kind, id: r.id, title: r.title, snippet: r.snippet })) })
       } else if (a.type === "WHERE_I_STAND") {
         await refreshHabitStagesService(userId).catch(() => [])
         const known = a.projectId && ctx.projects.some((p) => p.id === a.projectId)
@@ -734,7 +789,7 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
       logger.warn(`Chat action ${a.type} failed:`, err)
     }
   }
-  return { done, say, skipped, asked }
+  return { done, say, cite, skipped, asked }
 }
 
 // ---- entry ---------------------------------------------------------
@@ -783,6 +838,9 @@ export const assistantChat = async (
     return { role: "ASSISTANT", reply: old.answer, actions: [], usedAi: false }
   }
 
+  const searching = searchRequest(text)
+  if (searching) plan.actions = [...plan.actions.filter((a) => a.type !== "USE_NOTES" && a.type !== "SEARCH"), searching]
+
   if (backup) {
     // A clear nudge request is applied exactly as parsed; whatever the model
     // planned for it (a reminder, a malformed nudge) is replaced.
@@ -793,7 +851,7 @@ export const assistantChat = async (
   if (plan.role === "FRIEND" && !EXPLICIT_TASK.test(text)) {
     plan.actions = plan.actions.filter((a) => !CREATES.has(a.type ?? ""))
   }
-  const { done: actions, say, skipped, asked } = await execute(userId, ctx, plan.actions, text)
+  const { done: actions, say, cite, skipped, asked } = await execute(userId, ctx, plan.actions, text)
   const [forgotten, remembered] = await Promise.all([
     forgetMemories(userId, plan.forget, ctx.memories).catch(() => []),
     saveMemories(userId, plan.remember, ctx.memories).catch(() => []),
@@ -814,7 +872,7 @@ export const assistantChat = async (
     ? `Which one did you finish: ${asked.options.map((o) => `"${o.title}"`).join(" or ")}?`
     : say
       ? [say, ...notes].join("\n\n")
-      : [plan.reply, ...notes].join("\n\n")
+      : [cite ? `${plan.reply} ${cite}` : plan.reply, ...notes].join("\n\n")
   // Capacity guard: never silently overload today (plan rule 6).
   let capacity: ChatResult["capacity"]
   if (actions.some((x) => x.type === "TASK_ADDED" || x.type === "PROJECT_ADDED")) {

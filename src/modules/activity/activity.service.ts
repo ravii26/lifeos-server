@@ -30,6 +30,8 @@ export type UndoPayload =
   | { kind: "UNLOG_HABIT"; habitId: string; date: string; prev: { completed: boolean; count: number; minutes: number } | null }
   // Progress is derived from the log, so undoing a logged count only marks the event undone.
   | { kind: "NOOP" }
+  | { kind: "RESTORE_NOTE"; noteId: string; collection: string; title: string; items: string[]; text: string | null }
+  | { kind: "RESTORE_ALLY_NOTE"; note: { collection: string; template: string; title: string; items: string[]; text: string | null } }
   | { kind: "DELETE_METRIC_ENTRY"; entryId: string }
   | { kind: "RESTORE_MILESTONE"; milestoneId: string }
   | { kind: "RESTORE_PROJECT_STATUS"; projectId: string; prev: string }
@@ -103,6 +105,15 @@ const applyUndo = async (userId: string, undo: UndoPayload): Promise<void> => {
       })
       return
     case "NOOP":
+      return
+    case "RESTORE_NOTE":
+      await prisma.allyNote.updateMany({
+        where: { id: undo.noteId, userId },
+        data: { collection: undo.collection, title: undo.title, items: undo.items, text: undo.text },
+      })
+      return
+    case "RESTORE_ALLY_NOTE":
+      await prisma.allyNote.create({ data: { userId, ...undo.note, template: undo.note.template as "LIST" } })
       return
     case "DELETE_METRIC_ENTRY":
       // Scoped through the metric's project so another user's entry can never be hit.

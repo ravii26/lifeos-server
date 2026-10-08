@@ -27,6 +27,7 @@ import guideRoutes from "./guide/guide.routes.js"
 import activityRoutes from "./activity/activity.routes.js"
 import nowRoutes from "./now/now.routes.js"
 import progressRoutes from "./progress/progress.routes.js"
+import allyNoteRoutes, { searchRouter } from "./allynote/allynote.routes.js"
 
 const router = Router()
 
@@ -60,5 +61,7 @@ router.use("/guide", guideRoutes)
 router.use("/activity", activityRoutes)
 router.use("/now", nowRoutes)
 router.use("/progress", progressRoutes)
+router.use("/ally-notes", allyNoteRoutes)
+router.use("/search", searchRouter)
 
 export default router

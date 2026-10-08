@@ -28,6 +28,10 @@ export interface ChatReplyShape {
     deadline?: string
     tasks?: number
     items?: string[]
+    collection?: string
+    template?: string
+    notes?: { id: string; title: string; collection: string }[]
+    results?: { kind: string; id: string; title: string; snippet: string }[]
     options?: { id: string; title: string }[]
   }[]
   suggestions?: { kind: string; title: string }[]
@@ -89,7 +93,7 @@ export const scenarios: Scenario[] = [
       const habits = ofType(r, "HABIT_ADDED")
       const notes = ofType(r, "NOTE_ADDED")
       if (!habits.some((h) => /water/i.test(h.title ?? ""))) return "no warm-water habit"
-      if (!habits.some((h) => /prep/i.test(h.title ?? ""))) return "no prep habit"
+      if (!habits.some((h) => /prep/i.test(h.title ?? ""))) return `no prep habit; habits: ${habits.map((h: any) => `${h.title}${h.prep ? " [prep: " + h.prep + "]" : ""}`).join(" | ")}`
       const note = notes.find((n) => /breakfast/i.test(n.title ?? ""))
       if (!note) return "no Breakfast note"
       if ((note.items?.length ?? 0) !== 3) return `breakfast note has ${note.items?.length} items, expected 3`
@@ -99,8 +103,28 @@ export const scenarios: Scenario[] = [
       return null
     },
   },
-  // F2 and F8 answer from notes, which needs note search (build step 5), not the step-3 engine.
-  { id: "F2", name: '"What can I eat?" answered from the Breakfast note', status: { pendingUntil: 5 } },
+  {
+    id: "F2",
+    name: '"What can I eat?" answered from the Breakfast note',
+    status: "ready",
+    async run({ say }) {
+      // No note yet: ask once, never invent.
+      const none = await say("what can I eat for breakfast?")
+      if (ofType(none, "NOTES_USED").length) return "claimed a note that does not exist"
+      if (!/\?/.test(none.reply)) return `did not ask to be taught: ${none.reply.slice(0, 100)}`
+      if (/poha|oats|eggs|idli|toast/i.test(none.reply)) return `invented breakfasts: ${none.reply.slice(0, 100)}`
+      // They teach it, in one plain reply.
+      const taught = await say("poha, oats and eggs")
+      const note = ofType(taught, "NOTE_ADDED")[0]
+      if (!note || (note.items?.length ?? 0) < 3 || !/breakfast/i.test(`${note.collection} ${note.title}`)) return `note not saved from the answer (reply: ${taught.reply.slice(0, 80)})`
+      // Now it answers from the note.
+      const answer = await say("what can I eat for breakfast?")
+      if (!ofType(answer, "NOTES_USED").length) return "did not use the note"
+      const named = ["poha", "oats", "eggs"].filter((f) => new RegExp(f, "i").test(answer.reply)).length
+      if (named < 2) return `named ${named} of the 3 breakfasts: ${answer.reply.slice(0, 120)}`
+      return /From your/.test(answer.reply) ? null : "no source line"
+    },
+  },
   {
     id: "F3",
     name: "Prep reminder at prep time",
@@ -190,7 +214,23 @@ export const scenarios: Scenario[] = [
       return Math.round(gap) === 7 ? null : `next occurrence is ${gap} days later`
     },
   },
-  { id: "F8", name: "Gym warm-up answered from the Gym note", status: { pendingUntil: 5 } },
+  {
+    id: "F8",
+    name: "Gym warm-up answered from the Gym note",
+    status: "ready",
+    async run({ say }) {
+      const ask = await say("what's my warm-up?")
+      if (!/\?/.test(ask.reply)) return `did not ask once: ${ask.reply.slice(0, 100)}`
+      if (/jog|stretch|squat|jumping|lunge|push-?up/i.test(ask.reply)) return `invented a warm-up: ${ask.reply.slice(0, 100)}`
+      const taught = await say("5 minutes jog, arm circles, 10 squats, 10 push-ups")
+      const note = ofType(taught, "NOTE_ADDED")[0]
+      if (!note || (note.items?.length ?? 0) < 3) return `not saved (reply: ${taught.reply.slice(0, 80)})`
+      if (note.template !== "ROUTINE") return `saved as ${note.template}, expected ROUTINE`
+      const again = await say("what's my warm-up?")
+      if (!ofType(again, "NOTES_USED").length) return "did not read the Gym note"
+      return /squat/i.test(again.reply) ? null : `reply: ${again.reply.slice(0, 120)}`
+    },
+  },
   {
     id: "F9",
     name: '"I have 20 minutes" → Main-area item sized to 20 min, or rest',
@@ -270,7 +310,7 @@ export const scenarios: Scenario[] = [
       await say("I need to update my resume this week")
       const r = await say("done, I updated my resume")
       const done = r.actions.find((a) => a.type === "TASK_COMPLETED")
-      if (!done) return "no TASK_COMPLETED action"
+      if (!done) return `no TASK_COMPLETED action (actions: ${r.actions.map((a) => a.type).join(",") || "none"}; reply: ${r.reply.slice(0, 120)})`
       if (!done.activityId) return "no activityId for undo"
       const undo = await api("post", `/activity/${done.activityId}/undo`)
       return undo.status === 200 ? null : `undo returned ${undo.status}`
@@ -535,6 +575,21 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    id: "B10",
+    name: "Private (health) memories are never brought up unless you raise them",
+    status: "ready",
+    async run({ say, api, db, userId }) {
+      await db.memory.create({ data: { userId, content: "Gets panic attacks before presentations", kind: "STRUGGLE", importance: 3, source: "SAID", sensitive: true } })
+      const r = await say("what's a good breakfast to start the day?")
+      if (/panic|anxi|attack/i.test(r.reply)) return `brought up a private memory: ${r.reply.slice(0, 120)}`
+      const list = (await api("get", "/assistant/memories")).body.data as any[]
+      const mine = list.find((m) => /panic/i.test(m.content))
+      if (!mine || mine.sensitive !== true || mine.source !== "SAID") return "the memory list should still show it, marked private and said"
+      const flip = await api("patch", `/assistant/memories/${mine.id}`, { sensitive: false })
+      return flip.status === 200 ? null : `toggle returned ${flip.status}`
+    },
+  },
+  {
     id: "B9",
     name: "The weekly card is given only when asked, and never shames",
     status: "ready",
@@ -549,7 +604,34 @@ export const scenarios: Scenario[] = [
       return /fail|lazy|behind|miss|should/i.test(card.message) ? `guilt wording: ${card.message}` : null
     },
   },
-  { id: "F27", name: '"What did I save about caching?" search', status: { pendingUntil: 5 } },
+  {
+    id: "F27",
+    name: '"What did I save about caching?" search',
+    status: "ready",
+    async run({ say, api, db, userId }) {
+      await db.allyNote.create({
+        data: { userId, collection: "System design", template: "INFO", title: "System design", items: ["Caching: use Redis for hot reads", "Queues: Kafka for events"] },
+      })
+      await api("post", "/tasks", { title: "Read the caching chapter" })
+      await api("post", "/tasks", { title: "Buy milk" })
+      await db.capture.create({
+        data: {
+          userId,
+          rawText: "https://www.youtube.com/watch?v=abc123 caching video",
+          purpose: "LEARN",
+          summary: "How cache invalidation works",
+          suggestedOutputs: { kind: "SAVE", proposal: { contentTitle: "Redis caching explained" } },
+        },
+      })
+      const r = await say("What did I save about caching?")
+      const found = ofType(r, "SEARCH_RESULTS")[0]
+      if (!found) return `no search (reply: ${r.reply.slice(0, 100)})`
+      const kinds = new Set((found.results ?? []).map((x) => x.kind))
+      for (const k of ["NOTE", "TASK", "SAVE"]) if (!kinds.has(k)) return `missing a ${k} result: ${[...kinds].join(",")}`
+      if ((found.results ?? []).some((x) => /milk/i.test(x.title))) return "returned something unrelated"
+      return /Redis caching explained/.test(r.reply) && /caching chapter/i.test(r.reply) ? null : `reply does not list them: ${r.reply.slice(0, 160)}`
+    },
+  },
   { id: "F28", name: "New phone restores everything", status: { pendingUntil: 7 } },
 
   // Behaviour guarantees that are testable today.

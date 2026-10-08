@@ -7,6 +7,7 @@
 import type { Memory, MemoryKind } from "@prisma/client"
 import prisma from "../../lib/prisma.js"
 import { recordActivity } from "../activity/activity.service.js"
+import { visibleMemories } from "../search/search.rules.js"
 
 export const MEMORY_KINDS: MemoryKind[] = ["FACT", "PREFERENCE", "GOAL", "STRUGGLE", "FEELING", "PERSON", "EVENT"]
 
@@ -52,7 +53,8 @@ export const recallMemories = async (userId: string, message: string) => {
     orderBy: { createdAt: "desc" },
     take: POOL,
   })
-  return rankMemories(pool, message)
+  // Health and mental-health memories stay out of the prompt unless the person raises the topic.
+  return rankMemories(visibleMemories(pool, message), message)
 }
 
 export interface MemoryWrite {

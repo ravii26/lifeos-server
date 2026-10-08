@@ -7,6 +7,7 @@ import {
   updateReminderController,
   listMemoriesController,
   deleteMemoryController,
+  updateMemoryController,
   renameCapturedItemController,
 } from "./assistant.controller.js"
 
@@ -28,5 +29,6 @@ router.patch("/reminders/:id", updateReminderController)
 router.patch("/items/:type/:id", renameCapturedItemController)
 router.get("/memories", listMemoriesController)
 router.delete("/memories/:id", deleteMemoryController)
+router.patch("/memories/:id", updateMemoryController)
 
 export default router

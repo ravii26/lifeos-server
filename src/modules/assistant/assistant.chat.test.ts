@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { localToUtc, nudgeRequest, parseClock, isCrisis, contentRedirect } from "./assistant.chat.js"
+import { localToUtc, nudgeRequest, parseClock, isCrisis, contentRedirect, searchRequest } from "./assistant.chat.js"
 
 describe("localToUtc", () => {
   it("converts a local India time to UTC", () => {
@@ -38,5 +38,19 @@ describe("safety and pattern guards", () => {
     expect(contentRedirect("what should I do now", p, "Do X")).toBeNull()
     expect(contentRedirect("another video?", p, "You already saved plenty")).toBeNull()
     expect(contentRedirect("another video?", [], "Try this")).toBeNull()
+  })
+})
+
+describe("search requests", () => {
+  it("catches 'what did I save about X' and 'find my notes on X'", () => {
+    expect(searchRequest("What did I save about caching?")).toEqual({ type: "SEARCH", query: "caching" })
+    expect(searchRequest("what have I noted on system design")).toEqual({ type: "SEARCH", query: "system design" })
+    expect(searchRequest("find my notes about the gym")).toEqual({ type: "SEARCH", query: "the gym" })
+    expect(searchRequest("search for kafka")).toEqual({ type: "SEARCH", query: "kafka" })
+  })
+  it("ignores ordinary messages", () => {
+    expect(searchRequest("what can I eat for breakfast?")).toBeNull()
+    expect(searchRequest("remind me to save the file")).toBeNull()
+    expect(searchRequest("I feel low today")).toBeNull()
   })
 })
