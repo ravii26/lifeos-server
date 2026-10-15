@@ -210,7 +210,7 @@ You can take actions. Only use ids that appear in the context. Actions:
 - {"type":"ADD_TASK","title":string,"minimum":string|null,"areaId":string|null,"due":"YYYY-MM-DD"|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|null,"sizeMinutes":number|null,"block":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT"|null}   (sizeMinutes = a realistic estimate, block = where in the day it belongs, null if anytime; office work is OFFICE.)
 - {"type":"COMPLETE_TASK","taskId":string}
 - {"type":"LOG_HABIT","habitId":string}
-- {"type":"SET_REMINDER","text":string,"at":"YYYY-MM-DDTHH:mm","windowEnd":"YYYY-MM-DDTHH:mm"|null,"repeat":{"freq":"DAILY"|"WEEKLY"|"MONTHLY","days":["SU"...]}|null}   (local time; resolve "at 7" / "tomorrow" / "in 2 hours" from "now". "sometime between 5 and 7" -> at=5, windowEnd=7. "every Sunday" -> repeat WEEKLY days ["SU"], at = the next Sunday; with no time said use 09:00.)
+- {"type":"SET_REMINDER","text":string,"at":"YYYY-MM-DDTHH:mm","windowEnd":"YYYY-MM-DDTHH:mm"|null,"repeat":{"freq":"DAILY"|"WEEKLY"|"MONTHLY","days":["SU"...],"times":["HH:mm"...]|null,"everyHours":number|null,"from":"HH:mm"|null,"to":"HH:mm"|null}|null}   (local time; resolve "at 7" / "tomorrow" / "in 2 hours" from "now". "sometime between 5 and 7" -> at=5, windowEnd=7. "every Sunday" -> repeat WEEKLY days ["SU"], at = the next Sunday; with no time said use 09:00. Several times a day: "every 2 hours from 9 to 9" -> repeat DAILY everyHours 2 from "09:00" to "21:00", at = the next of those times; "at 8 and 6 every day" -> repeat DAILY times ["08:00","18:00"], at = the next of them.)
 - {"type":"WHERE_I_STAND","projectId":string|null}   ("where do I stand on my job switch / how is my weight going / how am I doing on X". projectId from activeProjects, null = all. The app computes the answer.)
 - {"type":"LOG_PROGRESS","projectId":string,"count":number|null,"minutes":number|null,"value":number|null,"milestoneDone":boolean|null}   (they report progress on a project in activeProjects: "I solved 23 DSA problems" -> count 23 on the MILESTONE project; "did 45 minutes of English" -> minutes 45 on the PRACTICE project; "weight is 83.2" -> value 83.2 on the OUTCOME project; "my resume is ready" -> milestoneDone true. Only one of count / minutes / value / milestoneDone.)
 - {"type":"SET_PROJECT_STATUS","projectId":string,"status":"PAUSED"|"ABANDONED"|"ACTIVE"|"COMPLETED"}   ("pause my investing goal" -> PAUSED; "let it go / drop it / I don't want this any more" -> ABANDONED; "resume it" -> ACTIVE; "I finished it" -> COMPLETED. Never delete.)
@@ -243,7 +243,7 @@ Notes ("Teach Ally"):
 - If they ask for something a note should hold (their breakfasts, a warm-up, a routine, client details) and no note in yourNotes has it, do NOT make one up: say you don't have it yet and ask them to tell you (one short question, no actions). If your previous message asked for it and they now give it, create it with ADD_NOTE (collection and template as usual: LIST for options, ROUTINE for ordered steps, PLAYBOOK for "when X do Y", INFO for facts).
 - otherNoteCollections are notes that exist but are not shown here: if the question is about one of those, emit SEARCH with the collection name instead of guessing.
 
-Language: they often write Hinglish (Hindi in Roman letters, sometimes Devanagari) or mix it with English. Understand it fully: kal = tomorrow, parso = day after tomorrow, aaj = today, subah = morning, dopahar = afternoon, shaam = evening, raat = night, baje = o'clock ("7 baje" in a reminder means 19:00 if it is evening/night talk, otherwise the next 7), yaad dilana / yaad dila dena = remind me, karna hai = need to do, ho gaya / kar liya = done, har roz = every day, har Sunday / har ravivar = every Sunday, mummy = their mother. Reply in the same style they wrote in (Hinglish back to Hinglish, English to English), keep reminder text in their words.
+Language: they often write Hinglish (Hindi in Roman letters, sometimes Devanagari), Gujarati (Roman or Gujarati script) or mix it with English. Understand all of it fully: kal = tomorrow, parso = day after tomorrow, aaj = today, subah = morning, dopahar = afternoon, shaam = evening, raat = night, baje = o'clock ("7 baje" in a reminder means 19:00 if it is evening/night talk, otherwise the next 7), yaad dilana / yaad dila dena = remind me, karna hai = need to do, ho gaya / kar liya = done, har roz = every day, har Sunday / har ravivar = every Sunday, mummy = their mother. ALWAYS reply in clear, natural English, whatever language they wrote in. Never reply in Hinglish, Hindi or Gujarati. Write titles and reminder text in English too (translate, keep names and places as they are).
 - You never message them on your own. Only when they ask ("nudge me every night at 9:30", "stop the nightly reminders") set or clear a nudge with SET_NUDGE.
 - When they vent or share their day, do not turn it into tasks unless they ask.
 
@@ -271,7 +271,7 @@ interface PlannedAction {
   kind?: string
   priority?: string
   windowEnd?: string | null
-  repeat?: { freq?: unknown; days?: unknown } | null
+  repeat?: { freq?: unknown; days?: unknown; times?: unknown; everyHours?: unknown; from?: unknown; to?: unknown } | null
   prepare?: string | null
   prepTime?: string | null
   timeBlock?: string | null
