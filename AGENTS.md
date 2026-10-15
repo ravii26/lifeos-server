@@ -41,6 +41,7 @@ prisma/schema.prisma, prisma/migrations/
 - **Record history:** any user-visible action calls `recordActivity(userId, { type, itemType, itemId, title, source, undo })`
   from `modules/activity/activity.service.ts`, with an `undo` payload when reversible. Return `activityId` to the client so it can offer Undo.
   To add a new reversible action, add a payload kind to `UndoPayload` and handle it in `applyUndo`.
+- **AI usage (ADR 0023):** every request through `geminiClient` / `groqClient` is logged to `AiCall` automatically; give it a feature name via `runWithAiFallback`'s label or `withAiFeature`.
 - **AI rules (ADR 0004):** use `runWithAiFallback(label, { gemini, groq }, heuristic)`. Ask for JSON, validate every field,
   check ids against the user's data, and always provide a heuristic fallback. Settings, safety, timing and ordering
   are deterministic code; the AI only picks from shortlists, writes words, parses and summarises.
@@ -59,7 +60,7 @@ Production Neon is the only working DB. Migrations are additive and generated **
 - New scenario coverage goes in `src/evals/scenarios.ts` (flip `status` to `"ready"` and add `run`).
 
 ## Env (`.env`, never commit)
-`DATABASE_URL`, `JWT_SECRET`, `PORT`, `NODE_ENV`, `CORS_ORIGINS`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `AICREDITS_API_KEY`, `AICREDITS_MODELS`, `AICREDITS_DAILY_CALL_LIMIT`, `PREFERRED_AI_PROVIDER` (`aicredits` | `gemini` | `groq`; unset = AICredits if its key is set, else Groq).
+`DATABASE_URL`, `JWT_SECRET`, `PORT`, `NODE_ENV`, `CORS_ORIGINS`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `AICREDITS_API_KEY`, `AICREDITS_MODELS`, `AICREDITS_DAILY_CALL_LIMIT`, `ADMIN_EMAILS` (who can open `/admin`), `AI_PRICES_JSON`, `AI_USD_INR` (admin cost estimate, see `config/ai-prices.ts`), `PREFERRED_AI_PROVIDER` (`aicredits` | `gemini` | `groq`; unset = AICredits if its key is set, else Groq).
 AI order: preferred first, then AICredits → Gemini → Groq (ADR 0020). AICredits reuses the Groq-shaped functions through `lib/groq.ts`; audio is Groq-only, YouTube watching is Gemini-only.
 
 ## Gotchas
