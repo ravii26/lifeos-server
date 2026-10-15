@@ -6,6 +6,8 @@ import { z } from "zod"
 import prisma from "../../lib/prisma.js"
 import { assistantChat } from "./assistant.chat.js"
 import { listMemories, deleteMemory } from "./assistant.memory.js"
+import { upcomingOccurrences } from "./assistant.capture.js"
+import { getUserTimezone } from "../auth/auth.repository.js"
 
 export const assistantAskController = async (req: Request, res: Response) => {
   const { message, history } = req.body as {
@@ -38,24 +40,39 @@ export const assistantChatController = async (req: Request, res: Response) => {
 // GET /assistant/reminders — upcoming reminders, so the phone can
 // (re)schedule them after a reinstall or on another device.
 export const listRemindersController = async (req: Request, res: Response) => {
-  // Reminders are to-dos with a time (see Task.remindAt).
+  const now = new Date()
+  // Reminders are to-dos with a time (see Task.remindAt). A repeating one is
+  // included even when its last time has passed unanswered: it still has
+  // times to come.
   const rows = await prisma.task.findMany({
     where: {
       userId: req.user!.id,
       status: { in: ["TODO", "IN_PROGRESS"] },
       archivedAt: null,
+      remindAt: { not: null },
       // A window that has started still has its closing nudge to fire.
-      OR: [{ remindAt: { gte: new Date(Date.now() - 60_000) } }, { windowEnd: { gte: new Date() } }],
+      OR: [{ remindAt: { gte: new Date(now.getTime() - 60_000) } }, { windowEnd: { gte: now } }, { repeatRule: { not: null } }],
     },
     orderBy: { remindAt: "asc" },
     take: 50,
     select: { id: true, title: true, remindAt: true, windowEnd: true, repeatRule: true },
   })
-  sendSuccess(
-    res,
-    "Reminders",
-    rows.map((r) => ({ id: r.id, text: r.title, remindAt: r.remindAt, windowEnd: r.windowEnd, repeatRule: r.repeatRule })),
-  )
+  const tz = await getUserTimezone(req.user!.id)
+  const out = rows.map((r) => {
+    // The phone schedules every one of these, so a missed reminder never stops the next.
+    const occurrences = r.repeatRule ? upcomingOccurrences(r.repeatRule, r.remindAt!, tz, now) : [r.remindAt!]
+    const moved = occurrences[0] && occurrences[0].getTime() !== r.remindAt!.getTime()
+    return {
+      id: r.id,
+      text: r.title,
+      remindAt: occurrences[0] ?? r.remindAt,
+      // A window belongs to the time it was set for, not to later repeats.
+      windowEnd: moved ? null : r.windowEnd,
+      repeatRule: r.repeatRule,
+      occurrences,
+    }
+  })
+  sendSuccess(res, "Reminders", out.filter((r) => r.occurrences.length || r.windowEnd))
 }
 
 // PATCH /assistant/reminders/:id — mark DONE or CANCELLED.

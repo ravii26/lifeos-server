@@ -345,3 +345,38 @@ export const capacityGuard = (items: PlannedItem[], freeMinutes: number): Capaci
       : "",
   }
 }
+
+// ---- first run: the day from three answers ----------------------------
+
+export interface DayBasics {
+  wake: string // HH:mm
+  sleep: string // HH:mm; after midnight counts as the end of the day
+  office?: { start: string; end: string } | null
+}
+
+// "Up at 7, sleep at 11:30, office 10 to 8:30" → the blocks for one day.
+// The last hour before sleep is NIGHT (wind down); without office hours the
+// day is a long morning and an afternoon/evening. Null when the times
+// don't make sense, so the caller can ask again instead of guessing.
+export const dayFromBasics = (b: DayBasics): DayBlock[] | null => {
+  if (!HHMM.test(b.wake) || !HHMM.test(b.sleep)) return null
+  const wake = toMin(b.wake)
+  let sleep = toMin(b.sleep)
+  // Sleeping at 00:30 or 2:00 means the day runs to midnight.
+  if (sleep <= wake) sleep = 24 * 60
+  const windDown = Math.max(wake + 60, sleep - 60)
+  const blocks: { block: Block; start: number; end: number }[] = []
+  const office = b.office && HHMM.test(b.office.start) && HHMM.test(b.office.end) ? { start: toMin(b.office.start), end: toMin(b.office.end) } : null
+  if (office && office.start > wake && office.end > office.start && office.end <= windDown) {
+    blocks.push({ block: "MORNING", start: wake, end: office.start })
+    blocks.push({ block: "OFFICE", start: office.start, end: office.end })
+    if (windDown > office.end) blocks.push({ block: "EVENING", start: office.end, end: windDown })
+  } else {
+    if (office) return null
+    const noon = Math.min(Math.max(12 * 60, wake + 60), windDown)
+    blocks.push({ block: "MORNING", start: wake, end: noon })
+    if (windDown > noon) blocks.push({ block: "EVENING", start: noon, end: windDown })
+  }
+  if (sleep > windDown) blocks.push({ block: "NIGHT", start: windDown, end: sleep })
+  return normalizeDay(blocks.map((x) => ({ block: x.block, start: fmt(x.start), end: fmt(x.end) })))
+}

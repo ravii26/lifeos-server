@@ -16,7 +16,7 @@ import {
   markPrepDoneService,
 } from "./now.service.js"
 import { getPlanService, respondNowService, getStaleService, resolveStaleService } from "./plan.service.js"
-import { MODES } from "./now.rules.js"
+import { MODES, dayFromBasics } from "./now.rules.js"
 import { maybeRefreshHabitStages } from "../progress/progress.service.js"
 
 const router = Router()
@@ -56,6 +56,31 @@ router.put("/schedule", async (req: Request, res: Response) => {
   const out = await setScheduleService(req.user!.id, b.weekdays, b.blocks)
   if (!out) throw new ValidationError("Those blocks aren't valid. Use HH:mm times and known block names.")
   sendSuccess(res, "Schedule set", out)
+})
+
+// PUT /now/basics — first run: wake and sleep time, office days and hours.
+// Builds the whole week from those answers so Ally stops guessing the day.
+router.put("/basics", async (req: Request, res: Response) => {
+  const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+  const b = parse(
+    z.object({
+      wake: hhmm,
+      sleep: hhmm,
+      officeDays: z.array(z.number().int().min(0).max(6)).max(7).default([]),
+      office: z.object({ start: hhmm, end: hhmm }).nullable().optional(),
+    }),
+    req.body,
+  )
+  const workDay = b.office && b.officeDays.length ? dayFromBasics({ wake: b.wake, sleep: b.sleep, office: b.office }) : null
+  const offDay = dayFromBasics({ wake: b.wake, sleep: b.sleep })
+  if ((b.office && b.officeDays.length && !workDay) || !offDay) {
+    throw new ValidationError("Those times don't fit together. Office should start after you wake up and end before you sleep.")
+  }
+  const officeDays = workDay ? [...new Set(b.officeDays)] : []
+  const otherDays = [0, 1, 2, 3, 4, 5, 6].filter((d) => !officeDays.includes(d))
+  if (officeDays.length) await setScheduleService(req.user!.id, officeDays, workDay)
+  if (otherDays.length) await setScheduleService(req.user!.id, otherDays, offDay)
+  sendSuccess(res, "Day set", await getScheduleService(req.user!.id))
 })
 
 // GET /now/capacity — what's planned for today against the free time left.

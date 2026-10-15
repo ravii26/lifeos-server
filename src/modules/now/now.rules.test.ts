@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   blockAt,
+  dayFromBasics,
   capacityGuard,
   defaultDay,
   fitsBlock,
@@ -178,5 +179,37 @@ describe("capacity guard", () => {
   })
   it("says nothing when it fits", () => {
     expect(capacityGuard(items.slice(0, 2), 90).over).toBe(false)
+  })
+})
+
+describe("dayFromBasics (first run)", () => {
+  it("an office day: morning, office, evening, an hour to wind down", () => {
+    const d = dayFromBasics({ wake: "07:00", sleep: "23:30", office: { start: "10:00", end: "20:30" } })!
+    expect(d.map((b) => [b.block, b.start, b.end])).toEqual([
+      ["MORNING", "07:00", "10:00"],
+      ["OFFICE", "10:00", "20:30"],
+      ["EVENING", "20:30", "22:30"],
+      ["NIGHT", "22:30", "23:30"],
+    ])
+    expect(d.find((b) => b.block === "OFFICE")!.freeMinutes).toBe(0)
+  })
+
+  it("a day off: long morning, then the rest", () => {
+    const d = dayFromBasics({ wake: "08:00", sleep: "23:00" })!
+    expect(d.map((b) => [b.block, b.start, b.end])).toEqual([
+      ["MORNING", "08:00", "12:00"],
+      ["EVENING", "12:00", "22:00"],
+      ["NIGHT", "22:00", "23:00"],
+    ])
+  })
+
+  it("sleeping after midnight runs the day to midnight", () => {
+    const d = dayFromBasics({ wake: "09:00", sleep: "01:00" })!
+    expect(d[d.length - 1]).toMatchObject({ block: "NIGHT", start: "23:00", end: "24:00" })
+  })
+
+  it("refuses times that don't make sense instead of guessing", () => {
+    expect(dayFromBasics({ wake: "7", sleep: "23:00" })).toBeNull()
+    expect(dayFromBasics({ wake: "07:00", sleep: "23:00", office: { start: "06:00", end: "15:00" } })).toBeNull()
   })
 })

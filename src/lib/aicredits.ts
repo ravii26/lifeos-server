@@ -61,6 +61,9 @@ interface ChatParams {
 
 export interface ChatResult {
   choices: { message: { content: string | null }; finish_reason?: string }[]
+  // Which model answered and what it used, for the AI usage log.
+  model?: string
+  usage?: { prompt_tokens?: number; completion_tokens?: number }
 }
 
 export interface AiCreditsAttempt {
@@ -125,7 +128,7 @@ export const aiCreditsChat = async (params: ChatParams): Promise<ChatResult> => 
         continue
       }
       logger.info(`AICredits ${model}: ${data.usage?.prompt_tokens ?? "?"} in, ${data.usage?.completion_tokens ?? "?"} out`)
-      return { choices: [{ message: { content }, finish_reason: choice?.finish_reason }] }
+      return { choices: [{ message: { content }, finish_reason: choice?.finish_reason }], model, usage: data.usage }
     } catch (err) {
       attempts.push({ model, detail: err instanceof Error ? err.message : String(err) })
     } finally {

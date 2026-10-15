@@ -47,6 +47,7 @@ model User {
   activityEvents      ActivityEvent[]
   daySchedules        DaySchedule[]
   allyNotes           AllyNote[]
+  aiCalls             AiCall[]
 }
 
 model Identity {
@@ -365,6 +366,8 @@ model Habit {
   sizes     Json?
   prepTime  String? // HH:MM, when the prepare-ahead step is due (evening before)
   stage     HabitStage @default(NEW)
+  // The video or post this habit came from (a save turned into a habit).
+  sourceUrl String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1245,4 +1248,26 @@ enum ActivitySource {
   WIDGET
   SHARE
   SYSTEM
+}
+
+// One row per AI request (every provider, every feature), so the admin page
+// can show what the AI costs and how often it fails. Cost is computed when
+// read, from the price table in config/ai-prices.ts, so a price change
+// applies to past rows too.
+model AiCall {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  feature    String // "Assistant chat", "Save video summary", ...
+  provider   String // aicredits | gemini | groq
+  model      String
+  tokensIn   Int      @default(0)
+  tokensOut  Int      @default(0)
+  durationMs Int
+  ok         Boolean
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
 }

@@ -1,6 +1,7 @@
 import Groq from "groq-sdk"
 import { env } from "../config/env.config.js"
 import { aiCreditsChat, aiCreditsConfigured, compatProvider } from "./aicredits.js"
+import { trackAiCall } from "./ai-usage.js"
 
 const realGroq = env.GROQ_API_KEY ? new Groq({ apiKey: env.GROQ_API_KEY }) : null
 
@@ -11,14 +12,22 @@ const realGroq = env.GROQ_API_KEY ? new Groq({ apiKey: env.GROQ_API_KEY }) : nul
 // lib/aicredits.ts, `compatProvider`) the same call goes to AICredits; any
 // other time it goes to Groq. Only `chat.completions.create` and
 // `audio.transcriptions.create` are used by the app, and audio is always Groq.
+//
+// Both routes record every request in the AI usage log (lib/ai-usage.ts).
+type Usage = { usage?: { prompt_tokens?: number; completion_tokens?: number } | null; model?: string }
+const usageOf = (r: unknown) => {
+  const u = r as Usage
+  return { tokensIn: u.usage?.prompt_tokens, tokensOut: u.usage?.completion_tokens, model: u.model }
+}
+
 const router = {
   chat: {
     completions: {
       create: (params: Parameters<typeof aiCreditsChat>[0]) =>
         compatProvider.getStore() === "aicredits"
-          ? aiCreditsChat(params)
+          ? trackAiCall("aicredits", "aicredits", () => aiCreditsChat(params), usageOf)
           : realGroq
-            ? realGroq.chat.completions.create(params as never)
+            ? trackAiCall("groq", String(params.model ?? "groq"), () => realGroq.chat.completions.create(params as never), usageOf)
             : Promise.reject(new Error("Groq is not configured")),
     },
   },

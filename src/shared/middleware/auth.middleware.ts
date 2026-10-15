@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken"
 import { env } from "../../config/env.config.js"
 import { UnauthorizedError } from "../utils/errors.util.js"
 import type { AuthTokenPayload } from "../types/common.types.js"
+import { enterAiUser } from "../../lib/ai-usage.js"
 
 // Verifies the JWT from the Authorization header and attaches the user
 // to req.user. Protects any route it is applied to.
@@ -15,6 +16,8 @@ export const authenticate = (req: Request, _res: Response, next: NextFunction) =
   try {
     const payload = jwt.verify(token, env.JWT_SECRET) as AuthTokenPayload
     req.user = { id: payload.id, email: payload.email }
+    // AI calls made while handling this request are logged for this user.
+    enterAiUser(payload.id)
     next()
   } catch {
     throw new UnauthorizedError("Invalid or expired token")

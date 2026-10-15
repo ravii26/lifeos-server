@@ -72,6 +72,7 @@ export const createHabitService = async (
     sizes: input.sizes?.length ? input.sizes : undefined,
     timeBlock: input.timeBlock ?? null,
     prepTime: input.prepTime ?? null,
+    sourceUrl: input.sourceUrl ?? null,
   })
   const event = await recordActivity(userId, {
     type: "CREATED",

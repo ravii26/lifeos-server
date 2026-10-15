@@ -29,9 +29,37 @@ const DAY_ALIASES: Record<string, Day> = {
 export interface RepeatInput {
   freq?: unknown
   days?: unknown
+  // Several times a day: explicit clock times, or "every N hours from A to B".
+  times?: unknown
+  everyHours?: unknown
+  from?: unknown
+  to?: unknown
+}
+
+const HHMM = /^([01]?\d|2[0-3]):([0-5]\d)$/
+const toMinutes = (v: unknown): number | null => {
+  const m = typeof v === "string" ? v.trim().match(HHMM) : null
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null
+}
+const fmtMinutes = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`
+
+// "every 2 hours from 9 to 21" → 09:00, 11:00, … 21:00. The list is worked out
+// here, not by the model, so it is always complete and in order.
+const timesOf = (r: RepeatInput): string[] => {
+  const every = Number(r.everyHours)
+  const from = toMinutes(r.from)
+  const to = toMinutes(r.to)
+  let list: number[] = []
+  if (Number.isFinite(every) && every >= 1 && every <= 12 && from !== null && to !== null && to > from) {
+    for (let m = from; m <= to; m += every * 60) list.push(m)
+  } else if (Array.isArray(r.times)) {
+    list = r.times.map(toMinutes).filter((m): m is number => m !== null)
+  }
+  return [...new Set(list)].sort((a, b) => a - b).slice(0, 24).map(fmtMinutes)
 }
 
 // The model says {freq:"WEEKLY", days:["Sunday"]}; we store an RRULE string.
+// Several times a day adds our own TIMES part: "FREQ=DAILY;TIMES=09:00,11:00".
 export const repeatToRule = (r: RepeatInput | null | undefined): string | null => {
   if (!r || typeof r !== "object") return null
   const freq = String(r.freq ?? "").toUpperCase()
@@ -39,8 +67,10 @@ export const repeatToRule = (r: RepeatInput | null | undefined): string | null =
   const days = Array.isArray(r.days)
     ? [...new Set(r.days.map((d) => DAY_ALIASES[String(d).toUpperCase()]).filter((d): d is Day => !!d))]
     : []
-  if (freq === "WEEKLY" && days.length) return `FREQ=WEEKLY;BYDAY=${days.join(",")}`
-  return `FREQ=${freq}`
+  const times = freq === "MONTHLY" ? [] : timesOf(r)
+  const timesPart = times.length > 1 ? `;TIMES=${times.join(",")}` : ""
+  if (freq === "WEEKLY" && days.length) return `FREQ=WEEKLY;BYDAY=${days.join(",")}${timesPart}`
+  return `FREQ=${freq}${timesPart}`
 }
 
 const addDaysToKey = (key: string, n: number): string => {
@@ -57,6 +87,19 @@ export const nextOccurrence = (rule: string, at: Date, timeZone: string): Date |
   const freq = parts.FREQ
   const key = dayKeyInTz(at, timeZone)
   const minutesIntoDay = Math.round((at.getTime() - localDayStartMs(key, timeZone)) / 60_000)
+  const times = (parts.TIMES ?? "").split(",").map(toMinutes).filter((m): m is number => m !== null).sort((a, b) => a - b)
+  if (times.length && (freq === "DAILY" || freq === "WEEKLY")) {
+    const wanted = (parts.BYDAY ?? "").split(",").filter(Boolean)
+    const dayOk = (k: string) => freq === "DAILY" || !wanted.length || wanted.includes(weekdayOfKey(k))
+    // Later today first, then the first time on the next day that counts.
+    const later = dayOk(key) ? times.find((m) => m > minutesIntoDay) : undefined
+    if (later !== undefined) return new Date(localDayStartMs(key, timeZone) + later * 60_000)
+    for (let n = 1; n <= 8; n++) {
+      const k = addDaysToKey(key, n)
+      if (dayOk(k)) return new Date(localDayStartMs(k, timeZone) + times[0]! * 60_000)
+    }
+    return null
+  }
   let nextKey: string | null = null
   if (freq === "DAILY") {
     nextKey = addDaysToKey(key, 1)
@@ -71,6 +114,20 @@ export const nextOccurrence = (rule: string, at: Date, timeZone: string): Date |
   }
   if (!nextKey) return null
   return new Date(localDayStartMs(nextKey, timeZone) + minutesIntoDay * 60_000)
+}
+
+// The next `count` times a repeating reminder fires, starting from the first
+// one that is not yet past. A reminder that was missed (never ticked) still
+// rolls forward, so ignoring one never stops the next.
+export const upcomingOccurrences = (rule: string, at: Date, timeZone: string, now: Date, count = 7): Date[] => {
+  let cur: Date | null = at
+  for (let guard = 0; cur && cur.getTime() < now.getTime() - 60_000 && guard < 5000; guard++) cur = nextOccurrence(rule, cur, timeZone)
+  const out: Date[] = []
+  while (cur && out.length < count) {
+    out.push(cur)
+    cur = nextOccurrence(rule, cur, timeZone)
+  }
+  return out
 }
 
 // ---- confidence tier: which to-do did they mean? --------------------

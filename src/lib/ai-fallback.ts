@@ -1,6 +1,7 @@
 import { env } from "../config/env.config.js"
 import { aiCreditsAllowed, compatProvider } from "./aicredits.js"
 import logger from "./logger.js"
+import { withAiFeature } from "./ai-usage.js"
 
 // Shared "try providers in order → deterministic heuristic" orchestration used
 // by every AI-backed feature. Availability is decided at the call site: pass
@@ -31,7 +32,16 @@ export const providerOrder = (
 
 const LABEL: Record<AiProviderName, string> = { aicredits: "AICredits", gemini: "Gemini", groq: "Groq" }
 
-export async function runWithAiFallback<T>(
+// Every request made inside is logged under `label` (lib/ai-usage.ts).
+export function runWithAiFallback<T>(
+  label: string,
+  providers: AiFallbackProviders<T>,
+  heuristic: () => T | Promise<T>,
+): Promise<T> {
+  return withAiFeature(label, () => tryProviders(label, providers, heuristic))
+}
+
+async function tryProviders<T>(
   label: string,
   providers: AiFallbackProviders<T>,
   heuristic: () => T | Promise<T>,

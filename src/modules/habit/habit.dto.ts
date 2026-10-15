@@ -18,6 +18,8 @@ export interface HabitDto {
   sizes: unknown
   timeBlock: string | null
   prepTime: string | null
+  // The video or post the habit came from, when it was made from a save.
+  sourceUrl: string | null
   isActive: boolean
   createdAt: Date
   updatedAt: Date

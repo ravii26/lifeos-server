@@ -25,6 +25,12 @@ const envSchema = z.object({
   // Which provider to try first. Unset: AICredits when its key is set, else Groq.
   PREFERRED_AI_PROVIDER: blankIsUnset(z.enum(["aicredits", "gemini", "groq"]).optional()),
   PUBLIC_BASE_URL: z.string().url().optional(),
+  // Comma-separated emails that can open the admin page (AI cost, saves, users).
+  ADMIN_EMAILS: z.string().optional(),
+  // Extra or corrected model prices for the admin page (see config/ai-prices.ts).
+  AI_PRICES_JSON: blankIsUnset(z.string().optional()),
+  // Rupees per US dollar, for showing AI cost in ₹.
+  AI_USD_INR: blankIsUnset(z.coerce.number().positive().default(88)),
 })
 
 const parsed = envSchema.safeParse(process.env)

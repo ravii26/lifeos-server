@@ -25,6 +25,7 @@ import {
 } from "./guide.saves.ai.js"
 import { setTonightToTaskService } from "./guide.service.js"
 import type { DecideSaveDto } from "./guide.schema.js"
+import { withAiFeature } from "../../lib/ai-usage.js"
 
 // "NONE" = nothing to read (not a video link), "PENDING" = Ally is watching it,
 // "READY" = the summary is in, "UNAVAILABLE" = it could not be watched.
@@ -161,7 +162,7 @@ export const createSaveService = async (userId: string, input: SaveInput): Promi
 // and the summary is marked unavailable: Ally never makes a summary up.
 const watchInBackground = async (userId: string, id: string, url: string, areas: SaveAiInput["areas"], yearGoal: string | null) => {
   try {
-    const read = await watchVideo(url, areas, yearGoal)
+    const read = await withAiFeature("Save video summary", () => watchVideo(url, areas, yearGoal))
     const row = await findCaptureById(id, userId)
     const stored = row ? storedOf(row.suggestedOutputs) : null
     if (!row || !stored) return
@@ -357,7 +358,18 @@ export const decideSaveService = async (userId: string, id: string, input: Decid
   for (const a of picked.filter((p) => p.action.trim()).slice(0, 3)) {
     const areaId = a.areaId ?? proposal?.areaId ?? MAIN_FIRST(areas)?.id
     if (a.as === "HABIT" && areaId) {
-      const habit = await createHabitService(userId, { title: a.action.trim().slice(0, 200), areaId, minimumVersion: a.minimum?.trim() || undefined }, { source: "SHARE" })
+      const habit = await createHabitService(
+        userId,
+        {
+          title: a.action.trim().slice(0, 200),
+          areaId,
+          minimumVersion: a.minimum?.trim() || undefined,
+          description: `From your save: ${contentTitle}`.slice(0, 2000),
+          // Kept so the habit can always open the video it came from.
+          sourceUrl: url && /^https?:\/\//i.test(url) ? url.slice(0, 2000) : undefined,
+        },
+        { source: "SHARE" },
+      )
       habitIds.push(habit.id)
       continue
     }

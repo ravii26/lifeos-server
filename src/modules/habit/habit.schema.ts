@@ -24,6 +24,7 @@ export const createHabitSchema = z.object({
   sizes: z.array(z.object({ minutes: z.number().int().positive().max(600), label: z.string().max(120) })).max(4).optional(),
   timeBlock: z.enum(["MORNING", "COMMUTE", "OFFICE", "GYM", "EVENING", "NIGHT"]).optional(),
   prepTime: z.string().regex(/^\d{2}:\d{2}$/, "prepTime must be HH:MM").optional(),
+  sourceUrl: z.string().url().max(2000).optional(),
 })
 
 export const updateHabitSchema = z.object({
