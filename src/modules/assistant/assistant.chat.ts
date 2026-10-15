@@ -606,10 +606,13 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
         // "Every 2 hours from 9" said at 3 pm: the model often gives today's 9:00.
         // A repeating reminder starts at its next time instead of being dropped.
         if (at && repeatRule && at.getTime() < Date.now() - 60_000) at = upcomingOccurrences(repeatRule, at, ctx.timeZone, new Date(), 1)[0] ?? null
-        if (!at || at.getTime() < Date.now() - 60_000) continue
+        if (!at) continue
         // "Between 5 and 7": the window must end after it starts.
         const end = a.windowEnd ? localToUtc(a.windowEnd, ctx.timeZone) : null
         const windowEnd = end && end.getTime() > at.getTime() ? end : null
+        // A time already past is dropped, unless its window is still open
+        // ("between 5 and 7" said at 5:50: the closing nudge is still to come).
+        if (at.getTime() < Date.now() - 60_000 && !(windowEnd && windowEnd.getTime() > Date.now())) continue
         // A reminder is a to-do with a time.
         const task = await createTaskService(
           userId,
