@@ -17,7 +17,7 @@ import { projectAsTask } from "./assistant.guards.js"
 import { correctActionDates } from "./assistant.dates.js"
 import { feelingIn, normalizeFeeling, matchComfort, comfortBlock } from "../guide/comfort.rules.js"
 import { searchMessage, pickNotesForPrompt } from "../search/search.rules.js"
-import { localToUtc, repeatToRule, isAmbiguousCompletion } from "./assistant.capture.js"
+import { localToUtc, repeatToRule, isAmbiguousCompletion, upcomingOccurrences } from "./assistant.capture.js"
 import {
   getNowService,
   setModeService,
@@ -393,10 +393,14 @@ export const parseClock = (text: string): string | null => {
   return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`
 }
 
+// "Remind me to drink water every day" names something to do: that is a
+// reminder, not Ally's own nightly/morning nudge.
+const REMINDER_OF = /\bremind\w*\s+(?:me\s+)?(?:to|about|that)\b/i
+
 export const nudgeRequest = (text: string): PlannedAction | null => {
   const kind = /morning/i.test(text) ? "MORNING" : "NIGHTLY"
   if (NUDGE_OFF.test(text)) return { type: "SET_NUDGE", kind, time: null }
-  if (NUDGE_ON.test(text)) {
+  if (NUDGE_ON.test(text) && !REMINDER_OF.test(text)) {
     const time = parseClock(text)
     return time ? { type: "SET_NUDGE", kind, time } : null
   }
@@ -585,12 +589,15 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
         }
         done.push({ type: "NUDGE_SET", kind: a.kind, time, activityId })
       } else if (a.type === "SET_REMINDER" && a.text?.trim() && a.at) {
-        const at = localToUtc(a.at, ctx.timeZone)
+        const repeatRule = repeatToRule(a.repeat)
+        let at = localToUtc(a.at, ctx.timeZone)
+        // "Every 2 hours from 9" said at 3 pm: the model often gives today's 9:00.
+        // A repeating reminder starts at its next time instead of being dropped.
+        if (at && repeatRule && at.getTime() < Date.now() - 60_000) at = upcomingOccurrences(repeatRule, at, ctx.timeZone, new Date(), 1)[0] ?? null
         if (!at || at.getTime() < Date.now() - 60_000) continue
         // "Between 5 and 7": the window must end after it starts.
         const end = a.windowEnd ? localToUtc(a.windowEnd, ctx.timeZone) : null
         const windowEnd = end && end.getTime() > at.getTime() ? end : null
-        const repeatRule = repeatToRule(a.repeat)
         // A reminder is a to-do with a time.
         const task = await createTaskService(
           userId,

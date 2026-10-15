@@ -22,6 +22,9 @@ describe("nudge requests", () => {
     expect(nudgeRequest("remind me every morning at 8")).toMatchObject({ kind: "MORNING", time: "08:00" })
     expect(nudgeRequest("stop the nightly nudges")).toMatchObject({ kind: "NIGHTLY", time: null })
     expect(nudgeRequest("remind me to call mom at 7")).toBeNull()
+    // A reminder with something to do is never the nightly/morning nudge.
+    expect(nudgeRequest("remind me to drink water every 2 hours from 9 am to 9 pm every day")).toBeNull()
+    expect(nudgeRequest("remind me to take my vitamins every morning at 8")).toBeNull()
     expect(nudgeRequest("I feel low tonight")).toBeNull()
   })
 })

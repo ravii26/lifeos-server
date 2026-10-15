@@ -17,6 +17,7 @@ export interface ChatReplyShape {
   reply: string
   actions: {
     type: string
+    id?: string
     activityId?: string
     time?: string | null
     kind?: string
@@ -923,6 +924,44 @@ export const scenarios: Scenario[] = [
       const r = await say("should I take a job with 30% more pay but a 2 hour commute?")
       if (r.reply.length > 700) return `reply too long (${r.reply.length} chars)`
       return questions(r.reply) <= 1 ? null : "more than one question"
+    },
+  },
+  {
+    id: "D1",
+    name: "Phase A whole day: first-run day, reminders that keep coming, links, AI usage logged",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      // First run: the week comes from three answers, no guessing.
+      const basics = await api("put", "/now/basics", { wake: "07:00", sleep: "23:30", officeDays: [1, 2, 3, 4, 5], office: { start: "10:00", end: "20:30" } })
+      if (basics.status !== 200) return `first-run day not saved (${basics.status})`
+      const wed = nextWednesday()
+      const morning = await nowAt(api, `${wed}T07:30`)
+      if (morning.block !== "MORNING") return `07:30 on an office day is ${morning.block}, expected MORNING`
+      const office = await nowAt(api, `${wed}T11:00`)
+      if (office.block !== "OFFICE") return `11:00 on an office day is ${office.block}, expected OFFICE`
+
+      // Water every 2 hours, said in chat: the times are worked out in code.
+      const r = await say("remind me to drink water every 2 hours from 9 am to 9 pm every day")
+      const rem = ofType(r, "REMINDER_SET")[0]
+      if (!rem) return `no reminder set (reply: ${r.reply.slice(0, 100)})`
+      if (!/TIMES=09:00,11:00,13:00,15:00,17:00,19:00,21:00/.test(rem.repeatRule ?? "")) return `repeat rule was ${rem.repeatRule}`
+
+      // Ignored for three days: the phone still gets its next 7 times.
+      await db.task.update({ where: { id: rem.id! }, data: { remindAt: ago(3) } })
+      const list = (await api("get", "/assistant/reminders")).body.data as { id: string; occurrences: string[] }[]
+      const water = list.find((x) => x.id === rem.id)
+      if (!water || water.occurrences.length !== 7) return `missed reminder has ${water?.occurrences.length ?? 0} upcoming times, expected 7`
+      if (new Date(water.occurrences[0]!).getTime() < Date.now() - 60_000) return "first upcoming time is in the past"
+
+      // A habit made from a save keeps its link.
+      const habit = await api("post", "/habits", { title: "10 min walk", areaId: await careerId(api), sourceUrl: "https://www.instagram.com/reel/abc/" })
+      if (habit.body.data?.sourceUrl !== "https://www.instagram.com/reel/abc/") return "habit lost its link"
+
+      // The chat message above was logged with tokens for this person.
+      for (let i = 0; i < 20 && !(await db.aiCall.count({ where: { userId, ok: true } })); i++) await new Promise((res) => setTimeout(res, 300))
+      const calls = await db.aiCall.findMany({ where: { userId } })
+      if (!calls.some((c) => c.ok && c.feature === "Assistant chat" && c.tokensIn > 0)) return `AI call not logged: ${JSON.stringify(calls.map((c) => [c.feature, c.provider, c.tokensIn, c.ok]))}`
+      return null
     },
   },
 ]
