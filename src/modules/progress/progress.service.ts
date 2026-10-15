@@ -8,7 +8,7 @@ import type { ActivitySource } from "@prisma/client"
 import prisma from "../../lib/prisma.js"
 import { recordActivity } from "../activity/activity.service.js"
 import { getClock, type Clock } from "../now/now.service.js"
-import { dateFromKey, dayKeyInTz, utcDayKey } from "../../shared/utils/time.util.js"
+import { dateFromKey, dayKeyInTz, localDayStartMs, utcDayKey } from "../../shared/utils/time.util.js"
 import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
 import {
   habitLife,
@@ -68,6 +68,19 @@ const standOf = async (userId: string, p: ProjectRow, c: Clock): Promise<StandDt
   if (p.kind === "OUTCOME" && p.metric) {
     const s = metricStand(p.metric, p.metric.entries, c.now)
     return { ...base, options: s.options, message: s.message, detail: { start: s.start, latest: s.latest, target: s.target, percent: s.percent, weeklyChange: s.weeklyChange, trend: s.trend, forecast: s.forecast?.toISOString() ?? null } }
+  }
+
+  // A weekly target counted in things ("10 applications a week").
+  if ((p.kind === "PRACTICE" || p.kind === "WORK") && (p.weeklyTargetCount ?? 0) > 0 && !(p.weeklyTargetMinutes && p.weeklyTargetMinutes > 0)) {
+    const weekStart = new Date(localDayStartMs(mondayKey(c.todayKey), c.tz))
+    const sum = await prisma.activityEvent.aggregate({
+      where: { userId, type: { in: ["LOGGED", "MINIMUM"] }, itemType: "PROJECT", itemId: p.id, undoneAt: null, at: { gte: weekStart } },
+      _sum: { value: true },
+    })
+    const done = Math.round(sum._sum.value ?? 0)
+    const target = p.weeklyTargetCount!
+    const unit = p.countUnit ?? "times"
+    return { ...base, message: `${done} of ${target} ${unit} this week`, detail: { done, target, unit, percent: Math.min(100, Math.round((done / target) * 100)) } }
   }
 
   if (p.kind === "PRACTICE") {
@@ -176,7 +189,14 @@ export const logProgressService = async (userId: string, input: LogInput, source
       eventId = ev?.id
       what = `${input.count} toward ${cur.title}`
     } else throw new ValidationError("Say how many, or that the stage is done.")
-  } else if (p.kind === "PRACTICE" && input.minutes !== undefined && input.minutes > 0) {
+  } else if ((p.weeklyTargetCount ?? 0) > 0 && input.count !== undefined && input.count > 0) {
+    // A counted weekly target: "applied to 2 jobs".
+    const ev = await recordActivity(userId, {
+      type: "LOGGED", itemType: "PROJECT", itemId: p.id, title: p.title, value: Math.round(input.count), source, undo: { kind: "NOOP" },
+    })
+    eventId = ev?.id
+    what = `${Math.round(input.count)} ${p.countUnit ?? ""} for ${p.title}`.replace(/\s+/g, " ")
+  } else if ((p.kind === "PRACTICE" || (p.weeklyTargetMinutes ?? 0) > 0) && input.minutes !== undefined && input.minutes > 0) {
     const ev = await recordActivity(userId, {
       type: "LOGGED", itemType: "PROJECT", itemId: p.id, title: p.title, minutes: Math.round(input.minutes), source, undo: { kind: "NOOP" },
     })

@@ -29,6 +29,7 @@ import nowRoutes from "./now/now.routes.js"
 import progressRoutes from "./progress/progress.routes.js"
 import allyNoteRoutes, { searchRouter } from "./allynote/allynote.routes.js"
 import adminRoutes from "./admin/admin.routes.js"
+import goalPlanRoutes from "./goalplan/goalplan.routes.js"
 
 const router = Router()
 
@@ -60,6 +61,7 @@ router.use("/onboarding", onboardingRoutes)
 router.use("/assistant", assistantRoutes)
 router.use("/guide", guideRoutes)
 router.use("/admin", adminRoutes)
+router.use("/goal-plan", goalPlanRoutes)
 router.use("/activity", activityRoutes)
 router.use("/now", nowRoutes)
 router.use("/progress", progressRoutes)

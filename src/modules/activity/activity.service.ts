@@ -50,6 +50,8 @@ export type UndoPayload =
   | { kind: "RESET_COMMITMENT"; commitmentId: string; then?: UndoPayload }
   // Reverse another logged event (e.g. the task a guide answer completed).
   | { kind: "UNDO_EVENT"; eventId: string }
+  // Put back a few fields the brain's advice changed (smaller, weekend, let go, busy until).
+  | { kind: "RESTORE_FIELDS"; model: "task" | "habit" | "project" | "settings" | "goal"; id: string; prev: Record<string, unknown> }
 
 export interface ActivityOptions {
   source?: ActivitySource
@@ -88,8 +90,35 @@ export const listActivity = (userId: string, since: Date, limit = 200) =>
 
 // Reverses one step. Each payload kind restores exactly the state saved when
 // the action happened; the event is marked undone so it can't run twice.
+// Only these fields can be put back by RESTORE_FIELDS; dates travel as ISO strings.
+const RESTORABLE: Record<"task" | "habit" | "project" | "settings" | "goal", string[]> = {
+  task: ["sizeMinutes", "dueDate", "status", "archivedAt"],
+  habit: ["targetMinutes", "frequency", "specificDays", "isActive"],
+  project: ["sessionMinutes", "status"],
+  settings: ["busyUntil"],
+  goal: ["status", "parkedAt"],
+}
+const DATE_FIELDS = new Set(["dueDate", "archivedAt", "busyUntil", "parkedAt"])
+
+const restoreFields = async (userId: string, undo: Extract<UndoPayload, { kind: "RESTORE_FIELDS" }>) => {
+  const data: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(undo.prev)) {
+    if (!RESTORABLE[undo.model].includes(k)) continue
+    data[k] = DATE_FIELDS.has(k) && typeof v === "string" ? new Date(v) : v
+  }
+  if (!Object.keys(data).length) return
+  if (undo.model === "task") await prisma.task.updateMany({ where: { id: undo.id, userId }, data })
+  else if (undo.model === "habit") await prisma.habit.updateMany({ where: { id: undo.id, userId }, data })
+  else if (undo.model === "project") await prisma.project.updateMany({ where: { id: undo.id, userId }, data })
+  else if (undo.model === "goal") await prisma.goal.updateMany({ where: { id: undo.id, userId }, data })
+  else await prisma.userSettings.updateMany({ where: { userId }, data })
+}
+
 const applyUndo = async (userId: string, undo: UndoPayload): Promise<void> => {
   switch (undo.kind) {
+    case "RESTORE_FIELDS":
+      await restoreFields(userId, undo)
+      return
     case "ARCHIVE_TASK":
       await prisma.task.updateMany({
         where: { id: undo.taskId, userId },

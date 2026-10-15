@@ -10,12 +10,14 @@ import {
   getModeService,
   setModeService,
   getScheduleService,
+  getDaySuggestionsService,
   setScheduleService,
   capacityTodayService,
   moveTasksToLaterService,
   markPrepDoneService,
 } from "./now.service.js"
 import { getPlanService, respondNowService, getStaleService, resolveStaleService } from "./plan.service.js"
+import { applyAdviceService, respondProjectService, setBusyService } from "./brain.actions.js"
 import { MODES, dayFromBasics } from "./now.rules.js"
 import { maybeRefreshHabitStages } from "../progress/progress.service.js"
 
@@ -98,16 +100,44 @@ router.post("/move", async (req: Request, res: Response) => {
 // GET /now/plan — today by part of the day, this week, goals, habits.
 router.get("/plan", async (req: Request, res: Response) => {
   const q = parse(z.object({ at }), req.query)
-  sendSuccess(res, "Plan", await getPlanService(req.user!.id, q.at))
+  const [plan, suggested] = await Promise.all([getPlanService(req.user!.id, q.at), getDaySuggestionsService(req.user!.id, q.at)])
+  sendSuccess(res, "Plan", { ...plan, suggested })
 })
 
 // POST /now/respond — Done / Smaller (the minimum) / Not now, for the card on Now.
 router.post("/respond", async (req: Request, res: Response) => {
   const b = parse(
-    z.object({ sourceType: z.enum(["TASK", "HABIT"]), sourceId: z.string(), action: z.enum(["DONE", "MINIMUM", "SKIP"]), reason: z.string().max(200).optional() }),
+    z.object({
+      sourceType: z.enum(["TASK", "HABIT", "PROJECT"]),
+      sourceId: z.string(),
+      action: z.enum(["DONE", "MINIMUM", "SKIP"]),
+      reason: z.string().max(200).optional(),
+      // A weekly-target session: how long it took, or how many.
+      minutes: z.number().int().positive().max(600).optional(),
+      count: z.number().int().positive().max(1000).optional(),
+    }),
     req.body,
   )
-  sendSuccess(res, "Answered", await respondNowService(req.user!.id, b))
+  if (b.sourceType === "PROJECT") {
+    sendSuccess(res, "Answered", await respondProjectService(req.user!.id, { projectId: b.sourceId, action: b.action, minutes: b.minutes, count: b.count, reason: b.reason }))
+    return
+  }
+  sendSuccess(res, "Answered", await respondNowService(req.user!.id, { ...b, sourceType: b.sourceType }))
+})
+
+// POST /now/advice — one of the advice buttons: smaller, tomorrow, weekend, let go.
+router.post("/advice", async (req: Request, res: Response) => {
+  const b = parse(
+    z.object({ sourceType: z.enum(["TASK", "HABIT", "PROJECT"]), sourceId: z.string(), choice: z.enum(["SMALLER", "TOMORROW", "WEEKEND", "LET_GO"]) }),
+    req.body,
+  )
+  sendSuccess(res, "Done", await applyAdviceService(req.user!.id, b))
+})
+
+// PUT /now/busy — "in a meeting till 4" ({until:"16:00"}), or {until:null} to clear.
+router.put("/busy", async (req: Request, res: Response) => {
+  const b = parse(z.object({ until: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable() }), req.body)
+  sendSuccess(res, "Busy", await setBusyService(req.user!.id, b.until))
 })
 
 // GET /now/stale — "still want these 5?" (to-dos untouched for 30 days).

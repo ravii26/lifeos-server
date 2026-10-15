@@ -171,6 +171,12 @@ model Project {
   why                 String?
   priority            Priority    @default(MEDIUM)
   weeklyTargetMinutes Int?
+  // A weekly target counted in things, not minutes ("10 applications").
+  weeklyTargetCount   Int?
+  countUnit           String? // "applications", "problems", "calls"
+  // How long one sitting usually is, and the part of the day it belongs to.
+  sessionMinutes      Int?
+  timeBlock           String? // MORNING | COMMUTE | OFFICE | GYM | EVENING | NIGHT
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -851,6 +857,8 @@ model UserSettings {
   // until modeUntil (null = until changed).
   mode      String    @default("NORMAL")
   modeUntil DateTime?
+  // "In a meeting till 4": nothing is suggested until then.
+  busyUntil DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

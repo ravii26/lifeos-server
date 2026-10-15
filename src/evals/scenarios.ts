@@ -37,6 +37,8 @@ export interface ChatReplyShape {
     notes?: { id: string; title: string; collection: string }[]
     results?: { kind: string; id: string; title: string; snippet: string }[]
     options?: { id: string; title: string }[]
+    proposal?: any
+    until?: string | null
   }[]
   suggestions?: { kind: string; title: string }[]
   capacity?: { message: string; plannedMinutes: number; freeMinutes: number; keep: { id: string; title: string }[]; move: { id: string; title: string }[] }
@@ -962,6 +964,124 @@ export const scenarios: Scenario[] = [
       const calls = await db.aiCall.findMany({ where: { userId } })
       if (!calls.some((c) => c.ok && c.feature === "Assistant chat" && c.tokensIn > 0)) return `AI call not logged: ${JSON.stringify(calls.map((c) => [c.feature, c.provider, c.tokensIn, c.ok]))}`
       return null
+    },
+  },
+  // ---- Phase B: the brain (plan 16 §1) -----------------------------------------
+  {
+    id: "P1",
+    name: "The brain picks the weekly target that's behind, says why, and Done counts toward the week",
+    status: "ready",
+    async run({ api }) {
+      await api("put", "/now/basics", { wake: "07:00", sleep: "23:30", officeDays: [1, 2, 3, 4, 5], office: { start: "10:00", end: "20:30" } })
+      const area = await careerId(api)
+      const dsa = await api("post", "/projects", { title: "DSA", areaId: area, kind: "PRACTICE", weeklyTargetMinutes: 360, sessionMinutes: 45, timeBlock: "MORNING" })
+      if (dsa.status !== 201) return `project not created (${dsa.status})`
+      await api("post", "/tasks", { title: "Read a novel", sizeMinutes: 20 })
+      const wed = nextWednesday()
+      const now = await nowAt(api, `${wed}T07:30`)
+      const top = now.options?.[0]
+      if (top?.sourceType !== "PROJECT" || top.sourceId !== dsa.body.data.id) return `top pick was ${top?.sourceType} ${top?.title}`
+      if (!/behind this week/.test(top.why)) return `why was: ${top.why}`
+      const done = await api("post", "/now/respond", { sourceType: "PROJECT", sourceId: dsa.body.data.id, action: "DONE", minutes: 45 })
+      if (done.status !== 200) return `respond returned ${done.status}`
+      const stand = await api("get", `/progress/projects/${dsa.body.data.id}`)
+      return /45/.test(JSON.stringify(stand.body.data)) ? null : `45 min not counted: ${stand.body.data?.message}`
+    },
+  },
+  {
+    id: "P2",
+    name: "A report due tomorrow that needs the evening takes it over and names what waits",
+    status: "ready",
+    async run({ api }) {
+      await api("put", "/now/basics", { wake: "07:00", sleep: "23:30", officeDays: [1, 2, 3, 4, 5], office: { start: "10:00", end: "20:30" } })
+      // Today (any weekday has an evening), so there is no gap in activity.
+      await api("post", "/tasks", { title: "Finish the quarterly report", sizeMinutes: 120, dueDate: dayKey(1), priority: "HIGH" })
+      await api("post", "/projects", { title: "English speaking", areaId: await careerId(api), kind: "PRACTICE", weeklyTargetMinutes: 140 })
+      const now = await nowAt(api, `${dayKey()}T20:45`)
+      if (!now.focus || !/quarterly report/i.test(now.focus.title)) return `no takeover: ${now.message}`
+      if (now.options.length !== 1) return `${now.options.length} options shown during a takeover`
+      return /can wait/.test(now.message) ? null : `doesn't say what waits: ${now.message}`
+    },
+  },
+  {
+    id: "P3",
+    name: "Late at night a big task is 'not now', with the smallest version on offer",
+    status: "ready",
+    async run({ api }) {
+      await api("put", "/now/basics", { wake: "07:00", sleep: "23:30", officeDays: [1, 2, 3, 4, 5], office: { start: "10:00", end: "20:30" } })
+      await api("post", "/projects", { title: "System design", areaId: await careerId(api), kind: "PRACTICE", weeklyTargetMinutes: 240, sessionMinutes: 45 })
+      const now = await nowAt(api, `${dayKey()}T23:00`)
+      if (now.advice?.kind !== "LATE_NIGHT") return `advice was ${now.advice?.kind ?? "none"} (${now.message})`
+      return now.advice.actions.some((a: any) => a.choice === "MINIMUM_NOW") ? null : "no smallest-version choice"
+    },
+  },
+  {
+    id: "P4",
+    name: "Put off 3 times: Ally offers smaller / weekend / let go, and the choice is undoable",
+    status: "ready",
+    async run({ api, db, userId }) {
+      await api("put", "/now/basics", { wake: "07:00", sleep: "23:30", officeDays: [1, 2, 3, 4, 5], office: { start: "10:00", end: "20:30" } })
+      const t = await api("post", "/tasks", { title: "Clean the desk", sizeMinutes: 30 })
+      const id = t.body.data.id
+      // Three earlier "Not now"s (not today, so it still comes up first).
+      for (let i = 2; i <= 4; i++) await db.activityEvent.create({ data: { userId, type: "SKIPPED", itemType: "TASK", itemId: id, title: "Clean the desk", reason: "not now", at: ago(i) } })
+      const now = await nowAt(api, `${nextWednesday()}T21:00`)
+      if (now.advice?.kind !== "KEEPS_SLIPPING") return `advice was ${now.advice?.kind ?? "none"}`
+      const r = await api("post", "/now/advice", { sourceType: "TASK", sourceId: id, choice: "SMALLER" })
+      if (r.status !== 200) return `advice choice returned ${r.status}`
+      if ((await db.task.findUnique({ where: { id } }))?.sizeMinutes !== 10) return "not made smaller"
+      await api("post", `/activity/${r.body.data.activityId}/undo`)
+      return (await db.task.findUnique({ where: { id } }))?.sizeMinutes === 30 ? null : "undo didn't restore the size"
+    },
+  },
+  {
+    id: "P5",
+    name: "'30 min DSA' and 'applied to 2 jobs' are logged by code, no AI",
+    status: "ready",
+    async run({ api, say }) {
+      const area = await careerId(api)
+      await api("post", "/projects", { title: "DSA", areaId: area, kind: "PRACTICE", weeklyTargetMinutes: 360 })
+      await api("post", "/projects", { title: "Job applications", areaId: area, kind: "PRACTICE", weeklyTargetCount: 10, countUnit: "applications" })
+      const a = await say("30 min DSA")
+      if (a.usedAi || !a.actions.some((x) => x.type === "PROGRESS_LOGGED")) return `minutes not logged by code (usedAi ${a.usedAi}): ${a.reply}`
+      const b = await say("applied to 2 jobs")
+      if (b.usedAi || !b.actions.some((x) => x.type === "PROGRESS_LOGGED")) return `count not logged by code (usedAi ${b.usedAi}): ${b.reply}`
+      return /2 of 10 applications/.test(b.reply) ? null : `reply: ${b.reply}`
+    },
+  },
+  {
+    id: "P6",
+    name: "'Make me a plan' → weekly targets to keep; kept, they show up on Now",
+    status: "ready",
+    async run({ api, say }) {
+      await api("put", "/now/basics", { wake: "07:00", sleep: "23:30", officeDays: [1, 2, 3, 4, 5], office: { start: "10:00", end: "20:30" } })
+      const r = await say("make me a plan to prepare for software interviews in 2 months: DSA, system design and English speaking")
+      const gp = r.actions.find((x) => x.type === "GOAL_PLAN")
+      const plan = gp?.proposal?.plan
+      if (!plan) return `no plan proposed (ai ${gp?.proposal?.aiAvailable}): ${r.reply.slice(0, 120)}`
+      if ((plan.targets?.length ?? 0) < 2) return `only ${plan.targets?.length} targets`
+      if ((await api("get", "/projects")).body.data?.length) return "something was created before keeping"
+      const kept = await api("post", "/goal-plan/accept", { plan })
+      if (kept.status !== 201) return `keep returned ${kept.status}`
+      const now = await nowAt(api, `${nextWednesday()}T07:30`)
+      return now.options?.some((o: any) => o.sourceType === "PROJECT") ? null : `no target session on Now: ${now.message}`
+    },
+  },
+  {
+    id: "P7",
+    name: "'Meeting till …' pauses suggestions until then",
+    status: "ready",
+    async run({ api, say }) {
+      const ist = new Intl.DateTimeFormat("en-GB", { timeZone: IST, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date())
+      const [h] = ist.split(":").map(Number)
+      if (h! >= 22) return null // too late in the day to test "till" safely
+      const until = `${h! + 1}:30`
+      const r = await say(`in a meeting till ${until}`)
+      if (r.usedAi || !r.actions.some((x) => x.type === "BUSY_SET")) return `busy not set by code: ${r.reply}`
+      const now = (await api("get", "/now")).body.data
+      if (now.kind !== "REST" || !/busy until/i.test(now.message)) return `Now still suggests: ${now.message}`
+      const free = await say("I'm free now")
+      return free.actions.some((x) => x.type === "BUSY_SET" && x.until === null) ? null : "couldn't clear busy"
     },
   },
 ]

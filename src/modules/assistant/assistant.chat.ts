@@ -19,12 +19,17 @@ import { feelingIn, normalizeFeeling, matchComfort, comfortBlock } from "../guid
 import { searchMessage, pickNotesForPrompt } from "../search/search.rules.js"
 import { localToUtc, repeatToRule, isAmbiguousCompletion, upcomingOccurrences } from "./assistant.capture.js"
 import {
+  getClock,
   getNowService,
   setModeService,
   setScheduleService,
   capacityTodayService,
   type NowDto,
 } from "../now/now.service.js"
+import { weeklyTargets } from "../now/brain.service.js"
+import { setBusyService } from "../now/brain.actions.js"
+import { proposeGoalPlanService, type GoalPlanProposal } from "../goalplan/goalplan.service.js"
+import { matchTarget, quickIntent } from "./assistant.quick.js"
 import { MODES, BLOCKS, type Mode } from "../now/now.rules.js"
 import {
   getStandService,
@@ -76,6 +81,10 @@ export type ChatAction = (
   | { type: "NUDGE_SET"; kind: "NIGHTLY" | "MORNING"; time: string | null }
   | { type: "REMEMBERED"; id: string; text: string }
   | { type: "FORGOT"; id: string; text: string }
+  // "Meeting till 4": nothing suggested until then (until = null: free again).
+  | { type: "BUSY_SET"; until: string | null }
+  // A goal turned into weekly targets: shown for the person to keep, change or park.
+  | { type: "GOAL_PLAN"; proposal: GoalPlanProposal; goalText: string }
 ) & { activityId?: string }
 
 export interface ChatResult {
@@ -223,7 +232,7 @@ You can take actions. Only use ids that appear in the context. Actions:
 - {"type":"SET_MODE","mode":"NORMAL"|"BUSY"|"SICK"|"TRAVEL"|"HOLIDAY","until":"YYYY-MM-DD"|null}   ("I'm sick" -> SICK; "busy week" -> BUSY with until = this Sunday; "I'm better / back to normal" -> NORMAL; "I'm travelling / on holiday until Friday" -> TRAVEL / HOLIDAY.)
 - {"type":"SET_SCHEDULE","days":["MON"..],"blocks":[{"block":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT","start":"HH:mm","end":"HH:mm"}]}   (they describe their day: "I work 10 to 8:30 on weekdays, gym right after". Give the blocks they described; the app fills the rest. Also remember it.)
 - {"type":"ADD_HABIT","title":string,"minimum":string|null,"prepare":string|null,"prepTime":"HH:mm"|null,"timeBlock":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT"|null,"days":["MON"...]|null,"anchor":string|null,"sizes":[{"minutes":number,"label":string}]|null,"reminderTime":"HH:mm"|null,"areaId":string|null}   (something they want to do repeatedly. anchor = what it follows ("after my morning coffee"); set timeBlock to the part of the day that anchor falls in. sizes = their smaller and bigger versions, smallest first, e.g. [{"minutes":2,"label":"read 2 pages"},{"minutes":10,"label":"read 10 pages"}]; always include a 2-minute size when they give any. A habit that needs setup the night before ("prep the night before") is TWO ADD_HABITs: the habit, and a "Prep ..." habit with timeBlock EVENING and reminderTime at the prep time, 21:30 if not said.)
-- {"type":"ADD_PROJECT","title":string,"kind":"OUTCOME"|"MILESTONE"|"PRACTICE"|"WORK","why":string|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL","deadline":"YYYY-MM-DD"|null,"areaId":string|null,"milestones":[string|{"title":string,"target":number|null}]|null,"metric":{"name":string,"unit":string,"start":number,"target":number}|null,"weeklyTargetMinutes":number|null,"tasks":[{"title":string,"due":"YYYY-MM-DD"|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|null}]}   (Use it for a goal or effort that takes weeks and has several steps: a job switch, losing weight, learning English, a client deliverable with parts. ALSO always use it when they say the word "project" or name projects ("Project A: API due Thursday. Project B: UI next week" is TWO ADD_PROJECTs, titled by what each is, "API" and "UI", not "Project A"). A single errand they did not call a project, even an important one with a deadline ("update my resume this week", "renew my passport"), is an ADD_TASK. WORK = a deliverable with a deadline; MILESTONE = a goal with stages like a job switch; OUTCOME = a number to move; PRACTICE = weekly practice time. Always include 1-4 concrete first to-dos in "tasks" (for WORK the first to-do is the deliverable itself, with the project's deadline and priority). Put "why" in their words if they said it. OUTCOME needs "metric" (weight 85 -> 70 kg: name Weight, unit kg, start 85, target 70). PRACTICE needs "weeklyTargetMinutes". MILESTONE stages that are counted carry a target, e.g. {"title":"50 DSA problems","target":50}; uncounted ones ("Resume ready") have target null. Stages they say are already done are still listed, then logged with LOG_PROGRESS milestoneDone.)
+- {"type":"ADD_PROJECT","title":string,"kind":"OUTCOME"|"MILESTONE"|"PRACTICE"|"WORK","why":string|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL","deadline":"YYYY-MM-DD"|null,"areaId":string|null,"milestones":[string|{"title":string,"target":number|null}]|null,"metric":{"name":string,"unit":string,"start":number,"target":number}|null,"weeklyTargetMinutes":number|null,"weeklyTargetCount":number|null,"countUnit":string|null,"sessionMinutes":number|null,"tasks":[{"title":string,"due":"YYYY-MM-DD"|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|null}]}   (Use it for a goal or effort that takes weeks and has several steps: a job switch, losing weight, learning English, a client deliverable with parts. ALSO always use it when they say the word "project" or name projects ("Project A: API due Thursday. Project B: UI next week" is TWO ADD_PROJECTs, titled by what each is, "API" and "UI", not "Project A"). A single errand they did not call a project, even an important one with a deadline ("update my resume this week", "renew my passport"), is an ADD_TASK. WORK = a deliverable with a deadline; MILESTONE = a goal with stages like a job switch; OUTCOME = a number to move; PRACTICE = weekly practice time. Always include 1-4 concrete first to-dos in "tasks" (for WORK the first to-do is the deliverable itself, with the project's deadline and priority). Put "why" in their words if they said it. OUTCOME needs "metric" (weight 85 -> 70 kg: name Weight, unit kg, start 85, target 70). PRACTICE needs "weeklyTargetMinutes", or "weeklyTargetCount" + "countUnit" when it is counted in things ("10 applications a week": weeklyTargetCount 10, countUnit "applications"); "sessionMinutes" if they said how long one sitting is. MILESTONE stages that are counted carry a target, e.g. {"title":"50 DSA problems","target":50}; uncounted ones ("Resume ready") have target null. Stages they say are already done are still listed, then logged with LOG_PROGRESS milestoneDone.)
 - {"type":"ADD_NOTE","collection":string,"template":"LIST"|"ROUTINE"|"PLAYBOOK"|"INFO","title":string,"items":[string],"text":string|null}   (something they TEACH you to keep: their breakfast options, gym warm-up steps, "when X do Y", client details. LIST/ROUTINE use items; PLAYBOOK/INFO use text. collection is a short name like "Breakfast" or "Gym".)
 - {"type":"SET_NUDGE","kind":"NIGHTLY"|"MORNING","time":"HH:mm"|null}   (null turns it off)
 
@@ -299,6 +308,9 @@ interface PlannedAction {
   status?: string
   metric?: { name?: string; unit?: string; start?: number; target?: number } | null
   weeklyTargetMinutes?: number | null
+  weeklyTargetCount?: number | null
+  countUnit?: string | null
+  sessionMinutes?: number | null
   minutes?: number | null
   mode?: string
   until?: string | null
@@ -751,6 +763,9 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
             deadline: deadlineKey ? dateFromKey(deadlineKey) : undefined,
             milestones: milestoneList(a.milestones),
             weeklyTargetMinutes: size(a.weeklyTargetMinutes) && kind === "PRACTICE" ? size(a.weeklyTargetMinutes) : undefined,
+            weeklyTargetCount: kind === "PRACTICE" && Number(a.weeklyTargetCount) > 0 && Number(a.weeklyTargetCount) <= 1000 ? Math.round(Number(a.weeklyTargetCount)) : undefined,
+            countUnit: kind === "PRACTICE" && typeof a.countUnit === "string" && a.countUnit.trim() ? a.countUnit.trim().slice(0, 40) : undefined,
+            sessionMinutes: Number(a.sessionMinutes) > 0 && Number(a.sessionMinutes) <= 600 ? Math.round(Number(a.sessionMinutes)) : undefined,
             metric: metricOf(a.metric, kind),
           },
           { source: "CHAT" },
@@ -821,6 +836,51 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
 
 // ---- entry ---------------------------------------------------------
 
+// ---- code-first replies (plan 16 §9b) ------------------------------------
+
+const clockNowMin = (c: { nowMin: number }) => c.nowMin
+
+const quickChat = async (userId: string, text: string): Promise<ChatResult | null> => {
+  const c = await getClock(userId)
+  const intent = quickIntent(text, clockNowMin(c))
+  if (!intent) return null
+  if (intent.kind === "BUSY") {
+    const r = await setBusyService(userId, intent.until, "CHAT").catch(() => null)
+    if (!r) return null
+    const until = r.busyUntil ? new Intl.DateTimeFormat("en-IN", { timeZone: c.tz, hour: "numeric", minute: "2-digit", hour12: true }).format(r.busyUntil) : null
+    return {
+      role: "ASSISTANT",
+      reply: until ? `Okay. Nothing from me until ${until}; I'll have the next thing ready then.` : "Welcome back. Here's what's next whenever you're ready.",
+      actions: [{ type: "BUSY_SET", until: r.busyUntil ? r.busyUntil.toISOString() : null, activityId: r.activityId }],
+      usedAi: false,
+    }
+  }
+  const unit = intent.minutes !== undefined ? "min" : "count"
+  const targets = (await weeklyTargets(userId, c)).map((t) => ({ id: t.projectId, title: t.title, countUnit: t.countUnit, unit: t.unit }))
+  const match = matchTarget(intent.what, unit, targets)
+  if (!match) return null // not clearly one of their weekly targets: the AI decides
+  const r = await logProgressService(userId, { projectId: match.id, minutes: intent.minutes, count: intent.count }, "CHAT")
+  return {
+    role: "ASSISTANT",
+    reply: `Logged ${r.what}. ${r.stand.message}.`.replace(/\.\./g, "."),
+    actions: [{ type: "PROGRESS_LOGGED", id: r.stand.id, title: r.stand.title, what: r.what, message: r.stand.message, activityId: r.activityId }],
+    usedAi: false,
+  }
+}
+
+// Asking for a plan for a goal (not just adding one): the goal planner answers.
+const PLAN_REQUEST = /\b(?:make|build|create|give|draw up|prepare)\s+(?:me\s+)?(?:a\s+)?(?:weekly\s+|study\s+|realistic\s+)?plan\b|\bplan\s+(?:my|for)\s+(?!today|tomorrow|the day|my day|this week)|\bhelp me\s+(?:plan|prepare)\b|\bhow (?:should|do) i prepare\b/i
+const NL = "\n"
+
+const goalPlanReply = (p: GoalPlanProposal): string => {
+  if (!p.aiAvailable) return "Planning a goal needs the AI, and it isn't available right now. Try again in a little while; nothing was saved."
+  if (!p.plan) return "Tell me a bit more about the goal: what you want, and by when."
+  const lines = p.plan.targets.map((t) => `${t.title}: ${t.unit === "min" ? `${Math.round(t.perWeek / 6) / 10} h` : `${t.perWeek} ${t.countUnit ?? ""}`.trim()} a week${t.note ? ` (${t.note})` : ""}`)
+  const head = p.plan.targets.length ? `Here's a weekly plan for ${p.plan.title}${p.plan.deadline ? `, by ${p.plan.deadline}` : ""}:` : ""
+  const parts = [head, ...lines.map((l) => `- ${l}`), p.fit?.message ?? "", p.caution?.message ?? "", p.plan.question ?? "", p.plan.targets.length ? "Keep it, or tell me what to change." : ""]
+  return parts.filter(Boolean).join(NL)
+}
+
 export const assistantChat = async (
   userId: string,
   message: string,
@@ -840,6 +900,17 @@ export const assistantChat = async (
   }
 
   if (isCrisis(text)) return { role: "FRIEND", reply: CRISIS_REPLY, actions: [], usedAi: false }
+
+  // Common phrases are understood by code first: free, fast, always the same.
+  const quick = await quickChat(userId, text)
+  if (quick) return quick
+
+  // "Make me a plan for…": the goal planner proposes weekly targets; nothing
+  // is created until the person keeps it.
+  if (PLAN_REQUEST.test(text)) {
+    const proposal = await proposeGoalPlanService(userId, text)
+    return { role: "COACH", reply: goalPlanReply(proposal), actions: [{ type: "GOAL_PLAN", proposal, goalText: text }], usedAi: proposal.aiAvailable }
+  }
 
   const ctx = await loadContext(userId, text)
   const plan = await runWithAiFallback<Plan | null>(

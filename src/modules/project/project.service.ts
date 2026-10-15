@@ -50,6 +50,10 @@ export const createProjectService = async (
     why: input.why ?? null,
     priority: input.priority ?? "MEDIUM",
     weeklyTargetMinutes: input.weeklyTargetMinutes ?? null,
+    weeklyTargetCount: input.weeklyTargetCount ?? null,
+    countUnit: input.countUnit ?? null,
+    sessionMinutes: input.sessionMinutes ?? null,
+    timeBlock: input.timeBlock ?? null,
     ...(input.metric && { metric: { create: input.metric } }),
     ...(input.milestones?.length && {
       milestones: { create: input.milestones.map((m, order) => ({ title: m.title, order, target: m.target ?? null })) },

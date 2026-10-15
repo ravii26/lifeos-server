@@ -14,6 +14,11 @@ export const createProjectSchema = z.object({
   priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).optional(),
   milestones: z.array(z.object({ title: z.string().min(1).max(200), target: z.number().int().positive().optional() })).max(12).optional(),
   weeklyTargetMinutes: z.number().int().positive().max(10080).optional(),
+  // Weekly target in things ("10 applications"), one sitting's length, its part of the day.
+  weeklyTargetCount: z.number().int().positive().max(1000).optional(),
+  countUnit: z.string().min(1).max(40).optional(),
+  sessionMinutes: z.number().int().positive().max(600).optional(),
+  timeBlock: z.enum(["MORNING", "COMMUTE", "OFFICE", "GYM", "EVENING", "NIGHT"]).optional(),
   metric: z
     .object({ name: z.string().min(1).max(80), unit: z.string().max(20), startValue: z.number(), targetValue: z.number() })
     .optional(),
@@ -26,6 +31,11 @@ export const updateProjectSchema = z.object({
   goalId: z.string().nullable().optional(),
   status: projectStatus.optional(),
   deadline: z.coerce.date().nullable().optional(),
+  weeklyTargetMinutes: z.number().int().positive().max(10080).nullable().optional(),
+  weeklyTargetCount: z.number().int().positive().max(1000).nullable().optional(),
+  countUnit: z.string().min(1).max(40).nullable().optional(),
+  sessionMinutes: z.number().int().positive().max(600).nullable().optional(),
+  timeBlock: z.enum(["MORNING", "COMMUTE", "OFFICE", "GYM", "EVENING", "NIGHT"]).nullable().optional(),
 })
 
 export const listProjectsSchema = z.object({

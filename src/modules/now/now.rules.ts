@@ -5,6 +5,7 @@
    (ADR 0004: rules decide).
    ===================================================================== */
 import { effectiveTier, whyFor, type Tier } from "../guide/guide.rules.js"
+import { deadlineFocus, scoreItem, whyFromReasons, type Advice, type DeadlineFocus } from "./brain.rules.js"
 
 export { effectiveTier }
 
@@ -122,7 +123,7 @@ export interface HabitSize {
 }
 
 export interface NowCandidate {
-  sourceType: "TASK" | "HABIT"
+  sourceType: "TASK" | "HABIT" | "PROJECT" // PROJECT = a session towards a weekly target
   sourceId: string
   title: string
   block: Block | null // null = anytime (but never during office hours)
@@ -137,12 +138,20 @@ export interface NowCandidate {
   areaName: string | null
   goalTitle: string | null
   goalWhy: string | null
+  // The brain (brain.rules.ts): what makes it matter now.
+  deadlineKey?: string | null
+  areaIdleDays?: number | null
+  skippedToday?: boolean
+  target?: { behind: number; target: number; unit: "min" | "count"; countUnit: string | null }
+  count?: number | null // a counted session: "apply to 2 jobs"
 }
 
 export interface NowOption {
-  sourceType: "TASK" | "HABIT"
+  sourceType: "TASK" | "HABIT" | "PROJECT"
   sourceId: string
   title: string
+  count?: number | null
+  fullMinutes?: number // how long it really takes, when a smaller version is shown
   minutes: number // how long this takes now (the smaller version when applicable)
   smaller: boolean
   minimum: string
@@ -161,6 +170,7 @@ export interface NowInput {
   minutes: number | null // "I have 20 minutes"
   gapDays: number // days since the person last did anything
   forceSmaller?: boolean // "just the smallest step" (a low day), without calling it a busy week
+  freeToday?: number // free minutes left today, for the tight-deadline takeover
   candidates: NowCandidate[]
 }
 
@@ -174,6 +184,9 @@ export interface NowResult {
   welcomeBack: boolean
   message: string
   options: NowOption[]
+  // A to-do that needs the rest of today; the rest waits (named in the message).
+  focus?: (DeadlineFocus & { waiting: string[] }) | null
+  advice?: Advice | null
 }
 
 const TIER_WEIGHT: Record<Tier, number> = { MAIN: 100, SECONDARY: 60, MAINTAIN: 25, LATER: 0 }
@@ -187,16 +200,23 @@ export const WELCOME_BACK_AFTER_DAYS = 14
 export const fitsBlock = (item: Block | null, current: Block): boolean =>
   current === "OFFICE" ? item === "OFFICE" : item === null || item === current
 
-const rankScore = (c: NowCandidate, todayKey: string, minutes: number, size: number): number => {
-  let s = TIER_WEIGHT[c.tier] + (c.priority ? PRIORITY_WEIGHT[c.priority] : 0)
-  if (c.dueKey) s += c.dueKey < todayKey ? 25 : c.dueKey === todayKey ? 15 : 0
-  if (c.goalTitle) s += 10
+// What the brain needs to score one candidate in this part of the day.
+const scoreInputFor = (c: NowCandidate, current: Block, available: number, minutes: number) => ({
+  tier: c.tier,
+  priority: c.priority,
+  dueKey: c.dueKey,
+  deadlineKey: c.deadlineKey ?? null,
+  goalTitle: c.goalTitle,
+  areaName: c.areaName,
+  areaIdleDays: c.areaIdleDays ?? null,
   // A habit anchored to this part of the day is exactly what belongs here.
-  if (c.anchor && c.block) s += 12
-  // "I have 20 minutes": prefer what fills them without overflowing.
-  s += Math.max(0, 10 - Math.abs(minutes - size) / 3)
-  return s
-}
+  anchorText: c.anchor && c.block === current ? anchorWhy(c.anchor) : null,
+  blockMatch: c.block !== null && c.block === current,
+  minutes,
+  available,
+  skippedToday: c.skippedToday === true,
+  target: c.target,
+})
 
 // Rule 4: office hours rank by deadline, then priority, then project order.
 const officeOrder = (a: NowCandidate, b: NowCandidate): number => {
@@ -242,26 +262,56 @@ export const rightNow = (input: NowInput): NowResult => {
     .map((c) => ({ c, size: sizeFor(c, available, minimumOnly) }))
     .filter((x): x is { c: NowCandidate; size: { minutes: number; smaller: boolean } } => x.size !== null)
 
+  // Every candidate is scored once, with its reasons (brain.rules.ts).
+  const scored = sized.map((x) => ({ ...x, s: scoreItem(scoreInputFor(x.c, block.block, available, x.size.minutes), input.todayKey) }))
   const ranked =
     block.block === "OFFICE"
-      ? sized.sort((a, b) => officeOrder(a.c, b.c))
-      : sized.sort(
-          (a, b) =>
-            rankScore(b.c, input.todayKey, available, b.size.minutes) - rankScore(a.c, input.todayKey, available, a.size.minutes) ||
-            a.c.title.localeCompare(b.c.title),
-        )
+      ? scored.sort((a, b) => officeOrder(a.c, b.c))
+      : scored.sort((a, b) => b.s.score - a.s.score || a.c.title.localeCompare(b.c.title))
 
-  const options: NowOption[] = ranked.slice(0, freshStart ? 1 : 3).map(({ c, size }) => ({
+  // A to-do due today or tomorrow that needs most of the free time left
+  // takes the rest of the day.
+  // Checked on everything that fits this part of the day, even what is too big
+  // for one sitting: a big report due tomorrow is exactly the case.
+  const focus =
+    block.block === "OFFICE" || minimumOnly
+      ? null
+      : deadlineFocus(
+          fitting.filter((c) => !c.skippedToday).map((c) => ({ sourceId: c.sourceId, sourceType: c.sourceType, title: c.title, minutes: c.sizeMinutes ?? DEFAULT_SIZE, dueKey: c.dueKey })),
+          input.freeToday ?? available,
+          input.todayKey,
+        )
+  const focusCandidate = focus ? fitting.find((c) => c.sourceId === focus.sourceId)! : null
+  const shown = focusCandidate
+    ? [{ c: focusCandidate, size: { minutes: Math.min(focusCandidate.sizeMinutes ?? DEFAULT_SIZE, available), smaller: false }, s: scoreItem(scoreInputFor(focusCandidate, block.block, available, available), input.todayKey) }]
+    : ranked.slice(0, freshStart ? 1 : 3)
+
+  const options: NowOption[] = shown.map(({ c, size, s }) => ({
     sourceType: c.sourceType,
     sourceId: c.sourceId,
     title: c.title,
+    count: c.count ?? null,
     minutes: size.minutes,
+    fullMinutes: c.sizeMinutes ?? DEFAULT_SIZE,
     smaller: size.smaller,
     minimum: c.minimum?.trim() || "Just start. 2 minutes on it counts.",
-    why: block.block === "OFFICE" ? officeWhy(c, input.todayKey) : c.anchor ? anchorWhy(c.anchor) : whyFor({ ...c, sourceType: c.sourceType, minimumVersion: c.minimum, areaId: null, goalId: null }),
+    why:
+      block.block === "OFFICE"
+        ? officeWhy(c, input.todayKey)
+        : whyFromReasons(s.reasons, c.anchor ? anchorWhy(c.anchor) : whyFor({ ...c, sourceType: c.sourceType === "PROJECT" ? "TASK" : c.sourceType, minimumVersion: c.minimum, areaId: null, goalId: null })),
   }))
 
-  const state = { ...base, mode: input.mode, block: block.block, availableMinutes: available, smaller: minimumOnly, freshStart, welcomeBack }
+  const waiting = focus ? ranked.filter((r) => r.c.sourceId !== focus.sourceId).slice(0, 3).map((r) => r.c.title) : []
+  const state = {
+    ...base,
+    mode: input.mode,
+    block: block.block,
+    availableMinutes: available,
+    smaller: minimumOnly,
+    freshStart,
+    welcomeBack,
+    focus: focus ? { ...focus, waiting } : null,
+  }
 
   if (!options.length) {
     return {
@@ -284,7 +334,78 @@ export const rightNow = (input: NowInput): NowResult => {
         ? "Busy week: the smallest version counts. "
         : ""
   const how = top.smaller ? `just ${top.minimum.replace(/\.$/, "").toLowerCase()} (${top.minutes} min)` : `${top.title} (${top.minutes} min)`
+  if (focus) {
+    const when = focus.dueKey === input.todayKey ? "today" : "tomorrow"
+    const rest = waiting.length ? ` ${waiting.join(", ")} can wait until it's done.` : ""
+    return { ...state, kind: "PICK", message: `${focus.title} is due ${when} and needs most of the time you have left, so the rest of today is for it.${rest}`, options }
+  }
   return { ...state, kind: "PICK", message: `${lead}${block.block === "OFFICE" ? "First up" : "Right now"}: ${how}. ${top.why}`.replace(/\s+/g, " ").trim(), options }
+}
+
+// ---- the day, planned (plan 16 §1, Layer 2) ----------------------------
+
+export interface SuggestedItem {
+  sourceType: "TASK" | "HABIT" | "PROJECT"
+  sourceId: string
+  title: string
+  minutes: number
+  count: number | null
+  why: string
+}
+
+export interface SuggestedBlock {
+  block: Block
+  start: string
+  end: string
+  freeMinutes: number
+  items: SuggestedItem[]
+}
+
+const MAX_PER_BLOCK = 3
+const MIN_SLOT = 10
+
+// Fills each free part of the rest of today with what fits best there, each
+// thing once, best first. Office hours are left to office work; sick mode
+// plans nothing. The same scoring as Now, so the plan and Now agree.
+export const suggestDay = (input: Omit<NowInput, "minutes">): SuggestedBlock[] => {
+  if (input.mode === "SICK") return []
+  const minimumOnly = input.mode !== "NORMAL" || input.gapDays >= SMALLER_AFTER_DAYS || input.forceSmaller === true
+  const used = new Set<string>()
+  const out: SuggestedBlock[] = []
+  for (const b of input.blocks) {
+    const s = toMin(b.start)
+    const e = toMin(b.end)
+    if (e <= input.nowMin || b.block === "OFFICE") continue
+    const free = s >= input.nowMin ? b.freeMinutes : Math.round((b.freeMinutes * (e - input.nowMin)) / (e - s))
+    if (free < MIN_SLOT) continue
+    const ranked = input.candidates
+      .filter((c) => !used.has(c.sourceId) && c.tier !== "LATER" && !c.skippedToday && fitsBlock(c.block, b.block))
+      .map((c) => {
+        const size = sizeFor(c, free, minimumOnly)
+        return size ? { c, size, s: scoreItem(scoreInputFor(c, b.block, free, size.minutes), input.todayKey) } : null
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .sort((x, y) => y.s.score - x.s.score || x.c.title.localeCompare(y.c.title))
+    let left = free
+    const items: SuggestedItem[] = []
+    for (const r of ranked) {
+      if (items.length >= MAX_PER_BLOCK || left < MIN_SLOT) break
+      const size = sizeFor(r.c, left, minimumOnly)
+      if (!size) continue
+      used.add(r.c.sourceId)
+      left -= size.minutes
+      items.push({
+        sourceType: r.c.sourceType,
+        sourceId: r.c.sourceId,
+        title: r.c.title,
+        minutes: size.minutes,
+        count: r.c.count ?? null,
+        why: whyFromReasons(r.s.reasons, r.c.anchor ? anchorWhy(r.c.anchor) : "It fits here."),
+      })
+    }
+    if (items.length) out.push({ block: b.block, start: b.start, end: b.end, freeMinutes: free, items })
+  }
+  return out
 }
 
 const anchorWhy = (anchor: string): string => {

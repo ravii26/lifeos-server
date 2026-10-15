@@ -16,6 +16,7 @@ import {
   utcDayKey,
 } from "../../shared/utils/time.util.js"
 import {
+  blockAt,
   capacityGuard,
   defaultDay,
   DEFAULT_SIZE,
@@ -23,6 +24,8 @@ import {
   normalizeDay,
   remainingFreeToday,
   rightNow,
+  suggestDay,
+  type SuggestedBlock,
   MODES,
   type Block,
   type CapacityResult,
@@ -33,6 +36,8 @@ import {
   type NowResult,
 } from "./now.rules.js"
 import type { Tier } from "../guide/guide.rules.js"
+import { adviseNow, targetPace, targetSession } from "./brain.rules.js"
+import { areaIdleDays, savesToday, skipsOf, weeklyTargets } from "./brain.service.js"
 
 const WEEKDAY_CODES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
 const PRIORITY_RANK = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as const
@@ -108,11 +113,14 @@ const lastActiveGapDays = async (userId: string, c: Clock): Promise<number> => {
 }
 
 const loadCandidates = async (userId: string, c: Clock): Promise<NowCandidate[]> => {
-  const [areas, tasks, habits] = await Promise.all([
+  const [areas, tasks, habits, targets, skips, idle] = await Promise.all([
     prisma.area.findMany({ where: { userId, isActive: true }, select: { id: true, name: true, tier: true, laterUntil: true } }),
     prisma.task.findMany({
       where: { userId, status: { in: ["TODO", "IN_PROGRESS"] }, archivedAt: null, remindAt: null },
-      include: { project: { select: { kind: true, status: true } }, goal: { select: { title: true, why: true, status: true, areaId: true } } },
+      include: {
+        project: { select: { kind: true, status: true, deadline: true, goal: { select: { title: true, deadline: true } } } },
+        goal: { select: { title: true, why: true, status: true, areaId: true, deadline: true } },
+      },
       orderBy: { createdAt: "asc" },
       take: 200,
     }),
@@ -120,6 +128,9 @@ const loadCandidates = async (userId: string, c: Clock): Promise<NowCandidate[]>
       where: { userId, isActive: true },
       include: { logs: { where: { date: dateFromKey(c.todayKey), completed: true }, select: { id: true } } },
     }),
+    weeklyTargets(userId, c),
+    skipsOf(userId, c),
+    areaIdleDays(userId, c),
   ])
   const area = new Map(areas.map((a) => [a.id, { name: a.name, tier: effectiveTier(a.tier as Tier, a.laterUntil, c.now) }]))
 
@@ -141,8 +152,14 @@ const loadCandidates = async (userId: string, c: Clock): Promise<NowCandidate[]>
         dueKey: t.dueDate ? utcDayKey(t.dueDate) : null,
         order: i,
         areaName: a?.name ?? null,
-        goalTitle: t.goal?.title ?? null,
+        goalTitle: t.goal?.title ?? t.project?.goal?.title ?? null,
         goalWhy: t.goal?.why ?? null,
+        deadlineKey: (() => {
+          const d = t.project?.deadline ?? t.goal?.deadline ?? t.project?.goal?.deadline ?? null
+          return d ? utcDayKey(d) : null
+        })(),
+        areaIdleDays: areaId ? (idle.get(areaId) ?? null) : null,
+        skippedToday: skips.today.has(t.id),
       }
     })
 
@@ -164,9 +181,37 @@ const loadCandidates = async (userId: string, c: Clock): Promise<NowCandidate[]>
       areaName: area.get(h.areaId)?.name ?? null,
       goalTitle: null,
       goalWhy: null,
+      areaIdleDays: idle.get(h.areaId) ?? null,
+      skippedToday: skips.today.has(h.id),
     }))
 
-  return [...fromTasks, ...fromHabits]
+  // A session towards each weekly target that still needs time today.
+  const fromTargets: NowCandidate[] = []
+  for (const t of targets) {
+    const session = targetSession(t)
+    if (!session) continue
+    const pace = targetPace(t)
+    fromTargets.push({
+      sourceType: "PROJECT",
+      sourceId: t.projectId,
+      title: session.title,
+      block: t.block,
+      sizeMinutes: session.minutes,
+      minimum: "Two minutes on it counts.",
+      tier: t.tier,
+      dueKey: null,
+      order: 2000 + fromTargets.length,
+      areaName: t.areaName,
+      goalTitle: t.goalTitle,
+      goalWhy: null,
+      deadlineKey: t.deadlineKey,
+      skippedToday: skips.today.has(t.projectId),
+      target: { behind: pace.behind, target: t.target, unit: t.unit, countUnit: t.countUnit },
+      count: session.count,
+    })
+  }
+
+  return [...fromTasks, ...fromHabits, ...fromTargets]
 }
 
 // Prep steps ("soak the oats") surface from the prep time on, the evening
@@ -221,13 +266,22 @@ const moveOverdueToThisWeek = async (userId: string, c: Clock): Promise<number> 
 
 export const getNowService = async (userId: string, opts: { minutes?: number | null; at?: string; smallest?: boolean } = {}): Promise<NowDto> => {
   const c = await getClock(userId, opts.at)
-  const [{ mode }, blocks, gapDays, candidates, prep] = await Promise.all([
+  const [{ mode }, blocks, gapDays, candidates, prep, busyUntil] = await Promise.all([
     getMode(userId, c.now),
     getDay(userId, c.weekday),
     lastActiveGapDays(userId, c),
     loadCandidates(userId, c),
     prepDue(userId, c),
+    prisma.userSettings.findUnique({ where: { userId }, select: { busyUntil: true } }).then((s) => s?.busyUntil ?? null),
   ])
+  // "In a meeting till 4": nothing is asked of you until then.
+  if (busyUntil && busyUntil.getTime() > c.now.getTime()) {
+    const until = new Intl.DateTimeFormat("en-IN", { timeZone: c.tz, hour: "numeric", minute: "2-digit", hour12: true }).format(busyUntil)
+    return {
+      kind: "REST", mode, block: blockAt(blocks, c.nowMin).block, availableMinutes: 0, smaller: false, freshStart: false, welcomeBack: false,
+      message: `You're busy until ${until}. I'll have the next thing ready then.`, options: [], moved: 0, prep: [], focus: null, advice: null,
+    }
+  }
   const moved = gapDays >= 14 ? await moveOverdueToThisWeek(userId, c) : 0
   const minutes = opts.minutes && opts.minutes > 0 ? Math.min(opts.minutes, 600) : null
   const result = rightNow({
@@ -240,11 +294,51 @@ export const getNowService = async (userId: string, opts: { minutes?: number | n
     minutes,
     gapDays,
     forceSmaller: opts.smallest === true,
+    freeToday: remainingFreeToday(blocks, c.nowMin),
     // After a move the old overdue dates are gone, so rebuild what was loaded.
     candidates: moved ? await loadCandidates(userId, c) : candidates,
   })
+  // Layer 4: the honest "not now" / "better way", at most one.
+  if (mode !== "SICK" && !result.focus) {
+    const top = result.options[0]
+    const [skips, saves] = await Promise.all([skipsOf(userId, c), savesToday(userId, c)])
+    result.advice = adviseNow({
+      nowMin: c.nowMin,
+      blocks,
+      block: result.block,
+      top: top ? { sourceType: top.sourceType, sourceId: top.sourceId, title: top.title, minutes: top.minutes, fullMinutes: top.fullMinutes ?? top.minutes, smaller: top.smaller } : null,
+      skips14d: top ? (skips.last14.get(top.sourceId) ?? 0) : 0,
+      savesToday: saves.made,
+      savesActedToday: saves.acted,
+    })
+  }
   if (moved) result.message = result.message.replace("Welcome back. Nothing is lost.", `Welcome back. Nothing is lost, and I moved ${moved} old item${moved === 1 ? "" : "s"} to this week.`)
   return { ...result, moved, prep: mode === "SICK" ? [] : prep }
+}
+
+// What the brain would place in each free part of the rest of today, for
+// the Plan screen. Habits and to-dos already dated today are on the plan
+// anyway, so suggestions are weekly-target sessions and undated to-dos.
+export const getDaySuggestionsService = async (userId: string, at?: string): Promise<SuggestedBlock[]> => {
+  const c = await getClock(userId, at)
+  const [{ mode }, blocks, gapDays, candidates, busy] = await Promise.all([
+    getMode(userId, c.now),
+    getDay(userId, c.weekday),
+    lastActiveGapDays(userId, c),
+    loadCandidates(userId, c),
+    prisma.userSettings.findUnique({ where: { userId }, select: { busyUntil: true } }).then((s) => s?.busyUntil ?? null),
+  ])
+  const from = busy && busy.getTime() > c.now.getTime() ? Math.round((busy.getTime() - localDayStartMs(c.todayKey, c.tz)) / 60_000) : c.nowMin
+  return suggestDay({
+    nowMin: from,
+    todayKey: c.todayKey,
+    weekday: c.weekday,
+    dayOfMonth: c.dayOfMonth,
+    blocks,
+    mode,
+    gapDays,
+    candidates: candidates.filter((x) => x.sourceType === "PROJECT" || (x.sourceType === "TASK" && x.dueKey !== c.todayKey)),
+  })
 }
 
 // ---- mode ------------------------------------------------------------
