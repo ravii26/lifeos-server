@@ -21,6 +21,7 @@ export interface WeeklyTarget {
   doneThisWeek: number
   doneToday: number
   daysElapsed: number // whole days of this week before today (Mon = 0 … Sun = 6)
+  weekDays?: number // days this week counts for: 7, or fewer when the target was set mid-week
   sessionMinutes: number | null
   block: Block | null
   tier: Tier
@@ -38,8 +39,9 @@ export interface TargetPace {
 }
 
 export const targetPace = (t: WeeklyTarget): TargetPace => {
-  const daysLeft = Math.max(1, 7 - t.daysElapsed)
-  const expectedByToday = (t.target * t.daysElapsed) / 7
+  const week = t.weekDays ?? 7
+  const daysLeft = Math.max(1, week - t.daysElapsed)
+  const expectedByToday = (t.target * t.daysElapsed) / week
   const remaining = Math.max(0, t.target - t.doneThisWeek)
   const doneBeforeToday = t.doneThisWeek - t.doneToday
   return {
@@ -131,7 +133,7 @@ export const scoreItem = (c: ScoreInput, todayKey: string): { score: number; rea
   }
   if (c.target && c.target.behind > 0 && c.target.target > 0) {
     const share = Math.min(1, c.target.behind / c.target.target)
-    reasons.push({ weight: Math.round(10 + 30 * share), text: `You're ${formatAmount(c.target.behind, c.target.unit, c.target.countUnit)} behind this week` })
+    reasons.push({ weight: Math.round(10 + 30 * share), text: `Keeps you on pace for ${formatAmount(c.target.target, c.target.unit, c.target.countUnit)} this week` })
   } else if (c.goalTitle) {
     reasons.push({ weight: 8, text: `It moves ${c.goalTitle}` })
   }

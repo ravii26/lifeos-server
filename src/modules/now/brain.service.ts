@@ -62,15 +62,21 @@ export const weeklyTargets = async (userId: string, c: Clock): Promise<WeeklyTar
       }
     }
     const deadline = p.deadline ?? (p.goal?.status === "ACTIVE" ? p.goal.deadline : null)
+    // Set this week? Only the days since then count, so a plan made on Friday
+    // asks for Friday to Sunday's share, not a whole week squeezed into three days.
+    const fullTarget = unit === "min" ? p.weeklyTargetMinutes! : p.weeklyTargetCount!
+    const setOn = p.createdAt >= weekStart ? Math.min(6, Math.max(0, Math.floor((p.createdAt.getTime() - weekStart.getTime()) / DAY))) : 0
+    const weekDays = 7 - setOn
     return {
       projectId: p.id,
       title: p.title,
       unit,
       countUnit: p.countUnit,
-      target: unit === "min" ? p.weeklyTargetMinutes! : p.weeklyTargetCount!,
+      target: setOn ? Math.max(1, Math.round((fullTarget * weekDays) / 7)) : fullTarget,
       doneThisWeek: week,
       doneToday: today,
-      daysElapsed: monday.daysElapsed,
+      daysElapsed: Math.max(0, monday.daysElapsed - setOn),
+      weekDays,
       sessionMinutes: p.sessionMinutes,
       block: p.timeBlock && BLOCKS.includes(p.timeBlock) ? (p.timeBlock as Block) : null,
       tier: effectiveTier(p.area.tier as Tier, p.area.laterUntil, c.now),

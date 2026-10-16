@@ -981,7 +981,7 @@ export const scenarios: Scenario[] = [
       const now = await nowAt(api, `${wed}T07:30`)
       const top = now.options?.[0]
       if (top?.sourceType !== "PROJECT" || top.sourceId !== dsa.body.data.id) return `top pick was ${top?.sourceType} ${top?.title}`
-      if (!/behind this week/.test(top.why)) return `why was: ${top.why}`
+      if (!/on pace for/.test(top.why)) return `why was: ${top.why}`
       const done = await api("post", "/now/respond", { sourceType: "PROJECT", sourceId: dsa.body.data.id, action: "DONE", minutes: 45 })
       if (done.status !== 200) return `respond returned ${done.status}`
       const stand = await api("get", `/progress/projects/${dsa.body.data.id}`)

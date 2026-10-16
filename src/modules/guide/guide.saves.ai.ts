@@ -232,7 +232,7 @@ export const heuristicProposal = (input: SaveAiInput): SaveProposal => {
     minimum: action.minimum,
     areaId: main?.id ?? null,
     when: "THIS_WEEK",
-    reason: main ? `It fits ${main.name}, your ${main.tier.toLowerCase()} focus.` : "A small step beats another save.",
+    reason: main ? `It fits ${main.name}${main.tier === "MAIN" ? ", your most important area" : ""}.` : "A small step beats another save.",
     source: "heuristic",
   }
 }

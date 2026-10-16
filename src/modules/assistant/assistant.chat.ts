@@ -875,12 +875,18 @@ const quickChat = async (userId: string, text: string): Promise<ChatResult | nul
 const PLAN_REQUEST = /\b(?:make|build|create|give|draw up|prepare)\s+(?:me\s+)?(?:a\s+)?(?:weekly\s+|study\s+|realistic\s+)?plan\b|\bplan\s+(?:my|for)\s+(?!today|tomorrow|the day|my day|this week)|\bhelp me\s+(?:plan|prepare)\b|\bhow (?:should|do) i prepare\b/i
 const NL = "\n"
 
+// "2027-01-16" → "16 Jan 2027": people read dates, not keys.
+const readableDate = (key: string): string => {
+  const d = new Date(`${key}T00:00:00Z`)
+  return Number.isNaN(d.getTime()) ? key : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
+}
+
 const goalPlanReply = (p: GoalPlanProposal): string => {
   if (!p.aiAvailable) return "Planning a goal needs the AI, and it isn't available right now. Try again in a little while; nothing was saved."
   if (!p.plan) return "Tell me a bit more about the goal: what you want, and by when."
-  const lines = p.plan.targets.map((t) => `${t.title}: ${t.unit === "min" ? `${Math.round(t.perWeek / 6) / 10} h` : `${t.perWeek} ${t.countUnit ?? ""}`.trim()} a week${t.note ? ` (${t.note})` : ""}`)
-  const head = p.plan.targets.length ? `Here's a weekly plan for ${p.plan.title}${p.plan.deadline ? `, by ${p.plan.deadline}` : ""}:` : ""
-  const parts = [head, ...lines.map((l) => `- ${l}`), p.fit?.message ?? "", p.caution?.message ?? "", p.plan.question ?? "", p.plan.targets.length ? "Keep it, or tell me what to change." : ""]
+  // The card under the reply lists the targets; the words only introduce it.
+  const head = p.plan.targets.length ? `Here's a weekly plan for ${p.plan.title}${p.plan.deadline ? `, by ${readableDate(p.plan.deadline)}` : ""}.` : ""
+  const parts = [head, p.caution?.message ?? "", p.plan.question ?? "", p.plan.targets.length ? "Keep it, or tell me what to change." : ""]
   return parts.filter(Boolean).join(NL)
 }
 

@@ -26,7 +26,7 @@ Rules:
 - Use general knowledge of how this kind of goal is done well (e.g. interview prep: DSA most days, system design weekly, mock interviews near the end; fitness: 3-4 sessions a week). Short daily sessions beat one long weekly one.
 - sessionMinutes: one sitting, 15 to 90. block: when it fits best given their free time below. Never office hours.
 - The whole plan must fit their free time: about ${Math.round(c.weeklyFreeMinutes / 60)} h a week free (${c.freeByBlock}), minus their other targets (${c.otherTargets.join("; ") || "none"}). Leave room to rest.
-- deadline: only if they said one or a time span ("in 2 months" from today ${c.todayKey}, ${c.weekday}). If a deadline matters and they gave none, set "question" to one short question asking when, and still propose targets.
+- deadline: only if they said one or a time span ("in 2 months" from today ${c.todayKey}, ${c.weekday}). If they gave a date or span, never ask when. If a deadline matters and they gave none, set "question" to one short question about this goal only asking when, and still propose targets.
 - milestones: 0 to 5 checkpoints in order, only if the goal has natural stages.
 - note: one short line on how to spread it ("≈ 50 min most mornings").
 - Use their words for titles; keep titles short ("DSA", "Job applications"). Never invent facts about them.

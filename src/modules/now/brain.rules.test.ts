@@ -87,7 +87,14 @@ describe("scoring with reasons", () => {
       { ...base, goalTitle: "Interview prep", deadlineKey: "2026-11-26", target: { behind: 120, target: 360, unit: "min", countUnit: null } },
       today,
     )
-    expect(whyFromReasons(s.reasons, "")).toBe("You're 2 h behind this week, and interview prep is in 6 weeks.")
+    expect(whyFromReasons(s.reasons, "")).toBe("Keeps you on pace for 6 h this week, and interview prep is in 6 weeks.")
+  })
+
+  it("a target set on Friday asks only for Friday to Sunday", () => {
+    const p = targetPace(target({ target: 60, weekDays: 3, daysElapsed: 0, doneThisWeek: 0 }))
+    expect(p.behind).toBe(0)
+    expect(p.daysLeft).toBe(3)
+    expect(Math.round(p.todayShare)).toBe(20)
   })
 
   it("a Main item behind pace beats a Secondary one that's on pace", () => {
@@ -200,7 +207,7 @@ describe("rightNow with the brain", () => {
       ]),
     )
     expect(r.options[0]?.sourceId).toBe("dsa")
-    expect(r.options[0]?.why).toMatch(/2 h behind this week/)
+    expect(r.options[0]?.why).toMatch(/on pace for 6 h this week/)
   })
 
   it("a report due tomorrow that needs most of the day takes over and names what waits", () => {
@@ -227,7 +234,7 @@ describe("rightNow with the brain", () => {
     expect(day.map((b) => b.block)).toEqual(["MORNING", "EVENING"])
     expect(day[0]!.items.map((i) => i.sourceId)).toEqual(["dsa", "read"])
     expect(day[1]!.items.map((i) => i.sourceId)).toEqual(["gym"])
-    expect(day[0]!.items[0]!.why).toMatch(/behind this week/)
+    expect(day[0]!.items[0]!.why).toMatch(/on pace for/)
   })
 
   it("after 'Not now' the next best comes first", () => {
