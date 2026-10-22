@@ -32,7 +32,8 @@ const newContext = async (): Promise<{ ctx: ScenarioContext; cleanup: () => Prom
   }
   const history: { role: "user" | "assistant"; text: string }[] = []
   const say: ScenarioContext["say"] = async (message) => {
-    const res = await api("post", "/assistant/chat", { message, history })
+    // Like the app: the server reads the last 10 turns and rejects more than 20.
+    const res = await api("post", "/assistant/chat", { message, history: history.slice(-10) })
     if (res.status !== 200) throw new Error(`chat returned ${res.status}`)
     history.push({ role: "user", text: message }, { role: "assistant", text: res.body.data.reply })
     return res.body.data

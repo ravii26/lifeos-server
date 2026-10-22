@@ -19,6 +19,8 @@ import {
 import { getPlanService, respondNowService, getStaleService, resolveStaleService } from "./plan.service.js"
 import { applyAdviceService, respondProjectService, setBusyService } from "./brain.actions.js"
 import { MODES, dayFromBasics } from "./now.rules.js"
+import { getAgendaService, moveLeftToTomorrowService, setProactivityService } from "./agenda.service.js"
+import { PROACTIVITY } from "./agenda.rules.js"
 import { maybeRefreshHabitStages } from "../progress/progress.service.js"
 
 const router = Router()
@@ -148,6 +150,25 @@ router.get("/stale", async (req: Request, res: Response) => {
 router.post("/stale/resolve", async (req: Request, res: Response) => {
   const b = parse(z.object({ keepIds: z.array(z.string()).max(50).default([]), letGoIds: z.array(z.string()).max(50).default([]) }), req.body)
   sendSuccess(res, "Answered", await resolveStaleService(req.user!.id, b))
+})
+
+// GET /now/agenda — what Ally says on its own today and tomorrow (briefing,
+// slot nudges, wrap-up, Sunday review). The phone schedules these.
+router.get("/agenda", async (req: Request, res: Response) => {
+  const q = parse(z.object({ at }), req.query)
+  sendSuccess(res, "Agenda", await getAgendaService(req.user!.id, q.at))
+})
+
+// PUT /now/proactivity — Normal / Quieter / Silent.
+router.put("/proactivity", async (req: Request, res: Response) => {
+  const b = parse(z.object({ level: z.enum(PROACTIVITY as [string, ...string[]]) }), req.body)
+  sendSuccess(res, "Proactivity", await setProactivityService(req.user!.id, b.level as (typeof PROACTIVITY)[number]))
+})
+
+// POST /now/wrapup/move — the wrap-up's "Move to tomorrow" (undoable).
+router.post("/wrapup/move", async (req: Request, res: Response) => {
+  const q = parse(z.object({ at }), req.query)
+  sendSuccess(res, "Moved", await moveLeftToTomorrowService(req.user!.id, q.at))
 })
 
 export default router

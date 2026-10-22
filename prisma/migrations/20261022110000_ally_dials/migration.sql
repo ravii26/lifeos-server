@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "UserSettings" ADD COLUMN     "directness" TEXT NOT NULL DEFAULT 'BALANCED',
+ADD COLUMN     "focus" TEXT NOT NULL DEFAULT 'ALL';
+

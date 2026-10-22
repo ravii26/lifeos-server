@@ -26,6 +26,7 @@ import {
 import { setTonightToTaskService } from "./guide.service.js"
 import type { DecideSaveDto } from "./guide.schema.js"
 import { withAiFeature } from "../../lib/ai-usage.js"
+import { cleanMoods, ownMoods } from "./comfort.rules.js"
 
 // "NONE" = nothing to read (not a video link), "PENDING" = Ally is watching it,
 // "READY" = the summary is in, "UNAVAILABLE" = it could not be watched.
@@ -282,6 +283,40 @@ export const setSavePurposeService = async (userId: string, id: string, purpose:
     await saveStored(id, userId, { ...stored, proposal: merged, purposeBy: "user" })
     if (capture.status === "PENDING") await shelve(userId, id, merged, capture.detectedUrl, capture.rawText)
   }
+  return toDto((await findCaptureById(id, userId))!)
+}
+
+// ---- moods (ADR 0029) ----------------------------------------------------------------
+
+// The fixed words offered first in the picker; the rest of the list stays recognised in chat.
+const SUGGESTED_MOODS = ["tired", "low", "stressed", "unmotivated", "stuck", "anxious"]
+
+// What the picker shows: a few common moods, and the ones this person made up (most used first).
+export const listMoodsService = async (userId: string) => {
+  const shelf = await prisma.vaultItem.findMany({ where: { userId }, select: { triggerTags: true } })
+  return { suggested: SUGGESTED_MOODS, mine: ownMoods(shelf).map((m) => m.mood) }
+}
+
+// "Bring this back when I'm tired / bored / before an exam": the person picks, or types their own.
+// A learning save becomes a feeling save (one AI call, as the purpose correction does).
+export const setSaveMoodsService = async (userId: string, id: string, rawMoods: unknown): Promise<SaveDto> => {
+  const moods = cleanMoods(rawMoods)
+  if (!moods.length) throw new ValidationError('Give it a short name, like "bored" or "before an exam"')
+  let capture = await findCaptureById(id, userId)
+  if (!capture) throw new NotFoundError("Save not found")
+  if (!storedOf(capture.suggestedOutputs)) throw new NotFoundError("Save not found")
+  if (capture.status === "DISMISSED") throw new ValidationError("This save was let go")
+  if (capture.status === "CONVERTED" && !isShelved(capture)) throw new ValidationError("This save already became an action")
+
+  if (!isShelved(capture)) {
+    await setSavePurposeService(userId, id, "FEELING")
+    capture = (await findCaptureById(id, userId))!
+  }
+  const stored = storedOf(capture.suggestedOutputs)!
+  await updateCapture(id, userId, { feelings: moods })
+  await saveStored(id, userId, { ...stored, proposal: { ...stored.proposal, feelings: moods }, purposeBy: "user" })
+  const out = capture.createdOutputs as { type?: string; id?: string } | null
+  if (out?.type === "VAULT" && out.id) await prisma.vaultItem.updateMany({ where: { id: out.id, userId }, data: { triggerTags: moods } })
   return toDto((await findCaptureById(id, userId))!)
 }
 

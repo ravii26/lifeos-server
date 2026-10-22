@@ -214,13 +214,17 @@ export interface AdviceInput {
   skips14d: number // times the top item was put off in the last 14 days
   savesToday: number
   savesActedToday: number
+  // How firmly to say "not now" (ADR 0028). Missing = BALANCED, the original behaviour.
+  directness?: "GENTLE" | "BALANCED" | "DIRECT"
 }
 
 // One piece of advice at most, the most useful first.
 export const adviseNow = (a: AdviceInput): Advice | null => {
+  const style = a.directness ?? "BALANCED"
   const night = a.blocks.find((b) => b.block === "NIGHT")
   const lateFrom = night ? toMin(night.start) : 22 * 60 + 30
-  if (a.top && a.nowMin >= lateFrom && a.top.fullMinutes > 15) {
+  // Gentle never says "not now": it only offers options elsewhere. Direct says it sooner.
+  if (style !== "GENTLE" && a.top && a.nowMin >= lateFrom && a.top.fullMinutes > 15) {
     return {
       kind: "LATE_NIGHT",
       message: `It's late. ${a.top.title} will go better tomorrow; tonight, sleep is the better move. If you want, just the smallest version.`,
@@ -233,10 +237,15 @@ export const adviseNow = (a: AdviceInput): Advice | null => {
       ],
     }
   }
-  if (a.top && a.skips14d >= SLIPPING_AFTER) {
+  if (a.top && a.skips14d >= (style === "DIRECT" ? 2 : SLIPPING_AFTER)) {
     return {
       kind: "KEEPS_SLIPPING",
-      message: `${a.top.title} keeps slipping (put off ${a.skips14d} times in two weeks). Make it smaller, move it to the weekend, or let it go?`,
+      message:
+        style === "GENTLE"
+          ? `Would a smaller version of ${a.top.title} help? It's been put off a few times, which is normal.`
+          : style === "DIRECT"
+            ? `${a.top.title} has been put off ${a.skips14d} times in two weeks. It's too big or not a priority. Make it smaller, move it, or drop it.`
+            : `${a.top.title} keeps slipping (put off ${a.skips14d} times in two weeks). Make it smaller, move it to the weekend, or let it go?`,
       sourceType: a.top.sourceType,
       sourceId: a.top.sourceId,
       actions: [
@@ -246,7 +255,7 @@ export const adviseNow = (a: AdviceInput): Advice | null => {
       ],
     }
   }
-  if (a.savesToday >= 5 && a.savesActedToday === 0) {
+  if (style !== "GENTLE" && a.savesToday >= (style === "DIRECT" ? 3 : 5) && a.savesActedToday === 0) {
     return {
       kind: "SAVES_PILING",
       message: `${a.savesToday} saves today and none turned into a step yet. Pick one to do this week; the rest can wait.`,

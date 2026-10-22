@@ -37,6 +37,7 @@ import {
 } from "./now.rules.js"
 import type { Tier } from "../guide/guide.rules.js"
 import { adviseNow, targetPace, targetSession } from "./brain.rules.js"
+import { asDirectness, asFocus, wantsAdvice } from "../settings/personalization.rules.js"
 import { areaIdleDays, savesToday, skipsOf, weeklyTargets } from "./brain.service.js"
 
 const WEEKDAY_CODES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
@@ -77,7 +78,7 @@ export const getClock = async (userId: string, at?: string): Promise<Clock> => {
   return { tz, now, todayKey, nowMin, weekday: d.getUTCDay(), dayOfMonth: d.getUTCDate() }
 }
 
-const getMode = async (userId: string, now: Date): Promise<{ mode: Mode; until: Date | null }> => {
+export const getMode = async (userId: string, now: Date): Promise<{ mode: Mode; until: Date | null }> => {
   const s = await prisma.userSettings.findUnique({ where: { userId }, select: { mode: true, modeUntil: true } })
   const mode = MODES.includes(s?.mode as Mode) ? (s!.mode as Mode) : "NORMAL"
   // A mode with an end date quietly ends itself.
@@ -85,7 +86,7 @@ const getMode = async (userId: string, now: Date): Promise<{ mode: Mode; until: 
   return { mode, until: s?.modeUntil ?? null }
 }
 
-const getDay = async (userId: string, weekday: number): Promise<DayBlock[]> => {
+export const getDay = async (userId: string, weekday: number): Promise<DayBlock[]> => {
   const row = await prisma.daySchedule.findUnique({ where: { userId_weekday: { userId, weekday } } })
   return normalizeDay(row?.blocks) ?? defaultDay(weekday)
 }
@@ -103,7 +104,7 @@ const parseSizes = (v: unknown): HabitSize[] =>
 const asBlock = (v: string | null): Block | null =>
   v && ["MORNING", "COMMUTE", "OFFICE", "GYM", "EVENING", "NIGHT"].includes(v) ? (v as Block) : null
 
-const lastActiveGapDays = async (userId: string, c: Clock): Promise<number> => {
+export const lastActiveGapDays = async (userId: string, c: Clock): Promise<number> => {
   const last = await prisma.activityEvent.findFirst({
     where: { userId, type: { in: [...COUNTS_AS_ACTIVE] }, source: { not: "SYSTEM" }, at: { lte: c.now } },
     orderBy: { at: "desc" },
@@ -112,7 +113,7 @@ const lastActiveGapDays = async (userId: string, c: Clock): Promise<number> => {
   return last ? Math.max(0, daysBetweenKeys(dayKeyInTz(last.at, c.tz), c.todayKey)) : 0
 }
 
-const loadCandidates = async (userId: string, c: Clock): Promise<NowCandidate[]> => {
+export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandidate[]> => {
   const [areas, tasks, habits, targets, skips, idle] = await Promise.all([
     prisma.area.findMany({ where: { userId, isActive: true }, select: { id: true, name: true, tier: true, laterUntil: true } }),
     prisma.task.findMany({
@@ -299,10 +300,13 @@ export const getNowService = async (userId: string, opts: { minutes?: number | n
     candidates: moved ? await loadCandidates(userId, c) : candidates,
   })
   // Layer 4: the honest "not now" / "better way", at most one.
-  if (mode !== "SICK" && !result.focus) {
+  // Someone who only wants reminders or someone to talk to gets no "better way" lectures (ADR 0028).
+  const prefs = await prisma.userSettings.findUnique({ where: { userId }, select: { focus: true, directness: true } })
+  if (mode !== "SICK" && !result.focus && wantsAdvice(asFocus(prefs?.focus))) {
     const top = result.options[0]
     const [skips, saves] = await Promise.all([skipsOf(userId, c), savesToday(userId, c)])
     result.advice = adviseNow({
+      directness: asDirectness(prefs?.directness),
       nowMin: c.nowMin,
       blocks,
       block: result.block,

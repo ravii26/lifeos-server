@@ -39,6 +39,8 @@ export const decideSaveSchema = z.object({
 })
 
 export const savePurposeSchema = z.object({ purpose: z.enum(["LEARN", "FEELING"]) })
+// 1 to 3 short names for when this save should come back; the server cleans them.
+export const saveMoodsSchema = z.object({ moods: z.array(z.string().max(60)).min(1).max(5) })
 
 export type DecideSaveDto = z.infer<typeof decideSaveSchema>
 export type RespondDto = z.infer<typeof respondSchema>

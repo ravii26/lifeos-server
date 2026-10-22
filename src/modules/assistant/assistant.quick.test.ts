@@ -53,3 +53,16 @@ describe("matchTarget", () => {
     expect(matchTarget("stuff", "count", targets)).toBeNull()
   })
 })
+
+describe("starter reminders are understood by code", () => {
+  it("today / tomorrow / every day, with am or pm", () => {
+    expect(quickIntent("Remind me to call mom tomorrow at 9 am", 600)).toEqual({ kind: "REMIND", text: "call mom", day: "TOMORROW", time: "09:00" })
+    expect(quickIntent("Remind me to take vitamins every day at 9 am", 600)).toEqual({ kind: "REMIND", text: "take vitamins", day: "DAILY", time: "09:00" })
+    expect(quickIntent("Remind me to pay rent today at 1:30 pm", 600)).toEqual({ kind: "REMIND", text: "pay rent", day: "TODAY", time: "13:30" })
+    expect(quickIntent("remind me to sleep today at 12 am", 600)).toEqual({ kind: "REMIND", text: "sleep", day: "TODAY", time: "00:00" })
+  })
+  it("anything vaguer is left to the AI", () => {
+    expect(quickIntent("Remind me to call mom tomorrow at 9", 600)).toBeNull()
+    expect(quickIntent("Remind me to call mom friday 6pm", 600)).toBeNull()
+  })
+})

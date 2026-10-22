@@ -10,6 +10,9 @@
 export type QuickIntent =
   | { kind: "LOG"; minutes?: number; count?: number; what: string }
   | { kind: "BUSY"; until: string | null } // HH:mm today, null = clear
+  // "Remind me to call mom tomorrow at 9 am" / "… every day at 9 am": the
+  // exact phrases the app's starters send, so they never depend on the AI.
+  | { kind: "REMIND"; text: string; day: "TODAY" | "TOMORROW" | "DAILY"; time: string }
 
 const MAX_WORDS = 9
 
@@ -24,10 +27,25 @@ const FREE_NOW = /^(?:ok(?:ay)?[, ]+)?(?:i'?m|i am)\s+(?:free|done|back)(?:\s+no
 
 const WORDS = { a: 1, an: 1, one: 1, two: 2, three: 3 } as Record<string, number>
 
+// Only with am/pm: "at 9" alone is left to the AI, which knows the context.
+const REMIND = /^remind me to (.{2,150}?) (today|tomorrow|every ?day|daily) at (\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)$/i
+
 const pad = (n: number) => String(n).padStart(2, "0")
 
 export const quickIntent = (text: string, nowMin: number): QuickIntent | null => {
   const t = text.trim().replace(/[.!]+$/, "")
+  const r = t.match(REMIND)
+  if (r) {
+    let h = Number(r[3])
+    const m = Number(r[4] ?? 0)
+    const pm = r[5]!.toLowerCase() === "pm"
+    if (h >= 1 && h <= 12 && m <= 59) {
+      if (pm && h < 12) h += 12
+      if (!pm && h === 12) h = 0
+      const day = /^tod/i.test(r[2]!) ? "TODAY" : /^tom/i.test(r[2]!) ? "TOMORROW" : "DAILY"
+      return { kind: "REMIND", text: r[1]!.trim(), day, time: `${pad(h)}:${pad(m)}` }
+    }
+  }
   if (!t || t.split(/\s+/).length > 14) return null
 
   if (FREE_NOW.test(t)) return { kind: "BUSY", until: null }

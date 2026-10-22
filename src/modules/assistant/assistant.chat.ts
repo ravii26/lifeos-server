@@ -13,13 +13,15 @@ import { logHabitService, createHabitService } from "../habit/habit.service.js"
 import { createProjectService } from "../project/project.service.js"
 import { createAllyNoteService, updateAllyNoteService } from "../allynote/allynote.service.js"
 import { searchAllService } from "../search/search.service.js"
-import { projectAsTask } from "./assistant.guards.js"
+import { NOTHING_CHANGED, projectAsTask, unbackedClaim, unbackedStateClaim } from "./assistant.guards.js"
 import { correctActionDates } from "./assistant.dates.js"
-import { feelingIn, normalizeFeeling, matchComfort, comfortBlock } from "../guide/comfort.rules.js"
+import { cleanMood, customMoodIn, feelingIn, normalizeFeeling, matchComfort, comfortBlock, ownMoods } from "../guide/comfort.rules.js"
 import { searchMessage, pickNotesForPrompt } from "../search/search.rules.js"
 import { localToUtc, repeatToRule, isAmbiguousCompletion, upcomingOccurrences } from "./assistant.capture.js"
 import {
   getClock,
+  getDay,
+  getMode,
   getNowService,
   setModeService,
   setScheduleService,
@@ -30,6 +32,12 @@ import { weeklyTargets } from "../now/brain.service.js"
 import { setBusyService } from "../now/brain.actions.js"
 import { proposeGoalPlanService, type GoalPlanProposal } from "../goalplan/goalplan.service.js"
 import { matchTarget, quickIntent } from "./assistant.quick.js"
+import { followUpChat } from "./assistant.followup.service.js"
+import { manageChat } from "./assistant.manage.service.js"
+import { editChat } from "./assistant.manage.edit.service.js"
+import { showChat } from "./assistant.manage.show.service.js"
+import { screenChat } from "./assistant.screen.service.js"
+import { lastRef, type ChatRef } from "./assistant.followup.js"
 import { MODES, BLOCKS, type Mode } from "../now/now.rules.js"
 import {
   getStandService,
@@ -43,6 +51,7 @@ import {
 import { getTonightService } from "../guide/guide.service.js"
 import { extractUrl } from "../guide/guide.saves.ai.js"
 import { upsertSettings } from "../settings/settings.repository.js"
+import { asDirectness, asFocus, preferenceIntent, preferenceReply, styleForPrompt } from "../settings/personalization.rules.js"
 import { recordActivity, type UndoPayload } from "../activity/activity.service.js"
 import { loadPatternFacts, detectPatterns } from "./assistant.patterns.js"
 import { recallMemories, saveMemories, forgetMemories, type MemoryWrite } from "./assistant.memory.js"
@@ -50,7 +59,8 @@ import { assistantAsk } from "./assistant.service.js"
 import { todayKeyInTz, weekdayInTz, dateFromKey, dayKeyInTz } from "../../shared/utils/time.util.js"
 import logger from "../../lib/logger.js"
 
-export type ChatTurn = { role: "user" | "assistant"; text: string }
+// refs: what an assistant turn made or touched, so "move it" knows what "it" is.
+export type ChatTurn = { role: "user" | "assistant"; text: string; refs?: ChatRef[] }
 
 // activityId lets the app offer Undo for the action (see /activity/:id/undo).
 export type ChatAction = (
@@ -74,7 +84,8 @@ export type ChatAction = (
   | { type: "MODE_SET"; mode: string; until?: string }
   | { type: "SCHEDULE_SET"; days: string[] }
   // Ambiguous request: nothing was changed, the person picks (tap sends the exact title).
-  | { type: "ASK"; question: string; options: { id: string; title: string }[] }
+  | { type: "ASK"; question: string; options: { id: string; title: string; command?: boolean }[] }
+  | { type: "LIST"; kind: string; title: string; total: number; options: { id: string; title: string; detail: string; kind?: string }[] }
   | { type: "OPEN_SAVE"; text: string }
   // Nudges are opt-in: only the person turns them on or off. NIGHTLY is
   // stored on the server; MORNING lives on the phone.
@@ -83,8 +94,16 @@ export type ChatAction = (
   | { type: "FORGOT"; id: string; text: string }
   // "Meeting till 4": nothing suggested until then (until = null: free again).
   | { type: "BUSY_SET"; until: string | null }
+  | { type: "PREFERENCE_SET"; directness?: string; focus?: string; proactivity?: string; title: string; activityId?: string }
   // A goal turned into weekly targets: shown for the person to keep, change or park.
   | { type: "GOAL_PLAN"; proposal: GoalPlanProposal; goalText: string }
+  // A follow-up changed something Ally made ("move it to tomorrow", "make it 30 min",
+  // "no, gym is at 9"). remindAt / reminderTime come back so the phone reschedules.
+  | { type: "ITEM_REMOVED"; itemType: "TASK" | "HABIT" | "PROJECT" | "NOTE"; id: string; title: string; detail: string; activityId?: string }
+  | { type: "LOW_ENERGY"; on: boolean; kind: "ON" | "OFF"; title: string }
+  | { type: "ITEM_UPDATED"; itemType: "TASK" | "HABIT" | "PROJECT" | "NOTE" | "AREA" | "MEMORY"; activityId?: string; id: string; title: string; detail: string; remindAt?: string; windowEnd?: string; repeatRule?: string; reminderTime?: string }
+  // "Undo that" said in chat.
+  | { type: "UNDONE"; itemType: string | null; id: string | null; title: string; activityId?: string }
 ) & { activityId?: string }
 
 export interface ChatResult {
@@ -117,24 +136,33 @@ const loadContext = async (userId: string, message: string) => {
       take: 40,
       select: { id: true, title: true, logs: { where: { date: dateFromKey(todayKey), completed: true }, select: { id: true } } },
     }),
-    prisma.reminder.findMany({
-      where: { userId, status: "PENDING", remindAt: { gte: new Date() } },
-      orderBy: { remindAt: "asc" },
-      take: 10,
-      select: { text: true, remindAt: true },
-    }),
+    prisma.task
+      .findMany({
+        where: { userId, status: { in: ["TODO", "IN_PROGRESS"] }, archivedAt: null, remindAt: { gte: new Date() } },
+        orderBy: { remindAt: "asc" },
+        take: 10,
+        select: { title: true, remindAt: true },
+      })
+      .then((rows) => rows.map((r) => ({ text: r.title, remindAt: r.remindAt! }))),
     prisma.identity.findUnique({ where: { userId }, select: { thisYearGoal: true } }),
     getTonightService(userId).catch(() => null),
-    prisma.userSettings.findUnique({ where: { userId }, select: { nightlyTime: true } }),
+    prisma.userSettings.findUnique({ where: { userId }, select: { nightlyTime: true, focus: true, directness: true } }),
     recallMemories(userId, message),
     loadPatternFacts(userId).catch(() => null),
     prisma.project.findMany({ where: { userId, status: { in: ["ACTIVE", "PAUSED"] } }, take: 20, select: { id: true, title: true, kind: true, status: true } }),
     prisma.allyNote.findMany({ where: { userId }, orderBy: { updatedAt: "desc" }, take: 200 }),
   ])
+  // Their day and mode in one line, so every answer knows when they're free (plan 16 §2).
+  const weekday = dateFromKey(todayKey).getUTCDay()
+  const [blocks, { mode }] = await Promise.all([getDay(userId, weekday), getMode(userId, new Date())])
+  const yourDay = `${blocks.map((b) => `${b.block} ${b.start}-${b.end}`).join(", ")}; mode ${mode}`
+  // Moods they made up for their saves ("bored", "before an exam"), so saying one brings those saves back (ADR 0029).
+  const myMoods = ownMoods(await prisma.vaultItem.findMany({ where: { userId }, select: { triggerTags: true } }).catch(() => [])).map((m) => m.mood)
   return {
     timeZone,
     todayKey,
     name: user?.name ?? "",
+    yourDay,
     areas,
     tasks,
     projects,
@@ -145,6 +173,10 @@ const loadContext = async (userId: string, message: string) => {
     identity,
     tonight,
     nightlyNudge: settings?.nightlyTime ?? null,
+    // How they want Ally to be (ADR 0028): what to lead with, how direct.
+    focus: asFocus(settings?.focus),
+    directness: asDirectness(settings?.directness),
+    myMoods,
     memories,
     patterns: patternFacts ? detectPatterns(patternFacts) : [],
   }
@@ -159,6 +191,8 @@ const contextJson = (ctx: Ctx) =>
   JSON.stringify({
     now: `${ctx.todayKey} ${nowLocal(ctx.timeZone)} (${weekdayInTz(ctx.timeZone)})`,
     name: ctx.name,
+    // Today's parts of the day (OFFICE = at work, no suggestions) and mode.
+    yourDay: ctx.yourDay,
     whatYouRemember: ctx.memories.map((m) => ({
       id: m.id,
       kind: m.kind,
@@ -190,6 +224,7 @@ const contextJson = (ctx: Ctx) =>
     openTasks: ctx.tasks.map((t) => ({ id: t.id, title: t.title, due: t.dueDate?.toISOString().slice(0, 10) ?? null })),
     habitsNotDoneToday: ctx.habits.filter((h) => h.logs.length === 0).map((h) => ({ id: h.id, title: h.title })),
     patternsNoticed: ctx.patterns,
+    myMoods: ctx.myMoods,
     nightlyNudge: ctx.nightlyNudge ? `on at ${ctx.nightlyNudge}` : "off",
     upcomingReminders: ctx.reminders.map((r) => ({ text: r.text, at: r.remindAt.toISOString() })),
   })
@@ -199,7 +234,7 @@ const contextJson = (ctx: Ctx) =>
 const SYSTEM_PROMPT = `You are Ally: one companion who knows this person's life (context below). In every reply you take exactly ONE role, chosen from what they need right now:
 - FRIEND: they vent, share their day, or feel low. Listen first, reflect what you heard, no fixing unless they ask. If they seem lonely or carry something heavy, gently encourage talking to someone real in their life (use people from memory by name when you can). You are never a replacement for family or friends.
 - ASSISTANT: tasks, reminders, plans, "what should I do now". Act, confirm in a few words.
-- MENTOR: software engineering career (DSA, system design, AI/ML, interviews, getting a high-paying role). Give the next concrete step for their level, not a curriculum. Prefer doing (solve, build, explain out loud) over watching more content.
+- MENTOR: learning a skill or moving ahead in work or studies (whatever their goals, memories and projects say they are working on; never assume a field). Give the next concrete step for their level, not a curriculum. Prefer doing (practise, build, explain out loud) over watching more content.
 - COACH: fitness, diet, consistency. Small, specific, repeatable; the minimum version counts. No medical or diet prescriptions beyond general guidance.
 - GUIDE: big life, career, or money decisions. Name the real trade-off, tie it to their stated goals, and give a clear lean. For money: general frameworks only, you are not a licensed financial adviser, never pick specific stocks/funds.
 
@@ -216,23 +251,23 @@ Patterns (patternsNoticed in context are computed from their real data):
 - Don't lecture. Never mention a pattern when they are venting or low.
 
 You can take actions. Only use ids that appear in the context. Actions:
-- {"type":"ADD_TASK","title":string,"minimum":string|null,"areaId":string|null,"due":"YYYY-MM-DD"|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|null,"sizeMinutes":number|null,"block":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT"|null}   (sizeMinutes = a realistic estimate, block = where in the day it belongs, null if anytime; office work is OFFICE.)
+- {"type":"ADD_TASK","title":string,"minimum":string|null,"areaId":string|null,"due":"YYYY-MM-DD"|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|null,"sizeMinutes":number|null,"block":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT"|null}   (sizeMinutes = a realistic estimate, block = where in the day it belongs, null if anytime; OFFICE means their main fixed commitment of the day, whatever it is: a job, shift, school or college classes.)
 - {"type":"COMPLETE_TASK","taskId":string}
 - {"type":"LOG_HABIT","habitId":string}
 - {"type":"SET_REMINDER","text":string,"at":"YYYY-MM-DDTHH:mm","windowEnd":"YYYY-MM-DDTHH:mm"|null,"repeat":{"freq":"DAILY"|"WEEKLY"|"MONTHLY","days":["SU"...],"times":["HH:mm"...]|null,"everyHours":number|null,"from":"HH:mm"|null,"to":"HH:mm"|null}|null}   (local time; resolve "at 7" / "tomorrow" / "in 2 hours" from "now". "sometime between 5 and 7" -> at=5, windowEnd=7. "every Sunday" -> repeat WEEKLY days ["SU"], at = the next Sunday; with no time said use 09:00. Several times a day: "every 2 hours from 9 to 9" -> repeat DAILY everyHours 2 from "09:00" to "21:00", at = the next of those times; "at 8 and 6 every day" -> repeat DAILY times ["08:00","18:00"], at = the next of them.)
-- {"type":"WHERE_I_STAND","projectId":string|null}   ("where do I stand on my job switch / how is my weight going / how am I doing on X". projectId from activeProjects, null = all. The app computes the answer.)
-- {"type":"LOG_PROGRESS","projectId":string,"count":number|null,"minutes":number|null,"value":number|null,"milestoneDone":boolean|null}   (they report progress on a project in activeProjects: "I solved 23 DSA problems" -> count 23 on the MILESTONE project; "did 45 minutes of English" -> minutes 45 on the PRACTICE project; "weight is 83.2" -> value 83.2 on the OUTCOME project; "my resume is ready" -> milestoneDone true. Only one of count / minutes / value / milestoneDone.)
+- {"type":"WHERE_I_STAND","projectId":string|null}   ("where do I stand on my exam prep / how is my weight going / how am I doing on X". projectId from activeProjects, null = all. The app computes the answer.)
+- {"type":"LOG_PROGRESS","projectId":string,"count":number|null,"minutes":number|null,"value":number|null,"milestoneDone":boolean|null}   (they report progress on a project in activeProjects: "I solved 23 practice problems" -> count 23 on the MILESTONE project; "did 45 minutes of guitar" -> minutes 45 on the PRACTICE project; "weight is 83.2" -> value 83.2 on the OUTCOME project; "my resume is ready" -> milestoneDone true. Only one of count / minutes / value / milestoneDone.)
 - {"type":"SET_PROJECT_STATUS","projectId":string,"status":"PAUSED"|"ABANDONED"|"ACTIVE"|"COMPLETED"}   ("pause my investing goal" -> PAUSED; "let it go / drop it / I don't want this any more" -> ABANDONED; "resume it" -> ACTIVE; "I finished it" -> COMPLETED. Never delete.)
 - {"type":"WEEK_CARD"}   ("how was my week", "weekly review". Only when they ask.)
-- {"type":"COMFORT","feeling":"lazy"|"low"|"sad"|"anxious"|"stressed"|"unmotivated"|"stuck"|"tired"|"lonely"|"angry"}   (they say how they feel. Reply as a FRIEND: listen first, warm, no tasks, no advice dump. The app adds anything they saved for exactly that feeling plus the smallest next step. If you have nothing for them, your own words are the support.)
+- {"type":"COMFORT","feeling":"lazy"|"low"|"sad"|"anxious"|"stressed"|"unmotivated"|"stuck"|"tired"|"lonely"|"angry"| one of myMoods exactly}   (they say how they feel. Reply as a FRIEND: listen first, warm, no tasks, no advice dump. The app adds anything they saved for exactly that feeling plus the smallest next step. If you have nothing for them, your own words are the support.)
 - {"type":"USE_NOTES","noteIds":[string]}   (your reply used what they taught you in yourNotes: emit this with the ids you used. The app adds "From your X note".)
 - {"type":"UPDATE_NOTE","noteId":string,"add":[string]|null,"remove":[string]|null}   ("add pancakes to my breakfasts", "remove poha". noteId from yourNotes.)
 - {"type":"SEARCH","query":string}   ("what did I save about caching", "find my notes on X". The app searches notes, saves, to-dos and goals and writes the answer.)
 - {"type":"WHAT_NOW","minutes":number|null}   (they ask what to do now / what to work on / "I have 20 minutes". The app answers from their real day, you only emit this. minutes = the time they said, else null.)
 - {"type":"SET_MODE","mode":"NORMAL"|"BUSY"|"SICK"|"TRAVEL"|"HOLIDAY","until":"YYYY-MM-DD"|null}   ("I'm sick" -> SICK; "busy week" -> BUSY with until = this Sunday; "I'm better / back to normal" -> NORMAL; "I'm travelling / on holiday until Friday" -> TRAVEL / HOLIDAY.)
-- {"type":"SET_SCHEDULE","days":["MON"..],"blocks":[{"block":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT","start":"HH:mm","end":"HH:mm"}]}   (they describe their day: "I work 10 to 8:30 on weekdays, gym right after". Give the blocks they described; the app fills the rest. Also remember it.)
+- {"type":"SET_SCHEDULE","days":["MON"..],"blocks":[{"block":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT","start":"HH:mm","end":"HH:mm"}]}   (they describe their day: "I work 10 to 8:30 on weekdays, gym right after", "college 8 to 2, tuition 5 to 7", "night shift 9pm to 6am". Their main fixed commitment (job, shift, classes) is the OFFICE block. Give the blocks they described; the app fills the rest. Also remember it.)
 - {"type":"ADD_HABIT","title":string,"minimum":string|null,"prepare":string|null,"prepTime":"HH:mm"|null,"timeBlock":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT"|null,"days":["MON"...]|null,"anchor":string|null,"sizes":[{"minutes":number,"label":string}]|null,"reminderTime":"HH:mm"|null,"areaId":string|null}   (something they want to do repeatedly. anchor = what it follows ("after my morning coffee"); set timeBlock to the part of the day that anchor falls in. sizes = their smaller and bigger versions, smallest first, e.g. [{"minutes":2,"label":"read 2 pages"},{"minutes":10,"label":"read 10 pages"}]; always include a 2-minute size when they give any. A habit that needs setup the night before ("prep the night before") is TWO ADD_HABITs: the habit, and a "Prep ..." habit with timeBlock EVENING and reminderTime at the prep time, 21:30 if not said.)
-- {"type":"ADD_PROJECT","title":string,"kind":"OUTCOME"|"MILESTONE"|"PRACTICE"|"WORK","why":string|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL","deadline":"YYYY-MM-DD"|null,"areaId":string|null,"milestones":[string|{"title":string,"target":number|null}]|null,"metric":{"name":string,"unit":string,"start":number,"target":number}|null,"weeklyTargetMinutes":number|null,"weeklyTargetCount":number|null,"countUnit":string|null,"sessionMinutes":number|null,"tasks":[{"title":string,"due":"YYYY-MM-DD"|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|null}]}   (Use it for a goal or effort that takes weeks and has several steps: a job switch, losing weight, learning English, a client deliverable with parts. ALSO always use it when they say the word "project" or name projects ("Project A: API due Thursday. Project B: UI next week" is TWO ADD_PROJECTs, titled by what each is, "API" and "UI", not "Project A"). A single errand they did not call a project, even an important one with a deadline ("update my resume this week", "renew my passport"), is an ADD_TASK. WORK = a deliverable with a deadline; MILESTONE = a goal with stages like a job switch; OUTCOME = a number to move; PRACTICE = weekly practice time. Always include 1-4 concrete first to-dos in "tasks" (for WORK the first to-do is the deliverable itself, with the project's deadline and priority). Put "why" in their words if they said it. OUTCOME needs "metric" (weight 85 -> 70 kg: name Weight, unit kg, start 85, target 70). PRACTICE needs "weeklyTargetMinutes", or "weeklyTargetCount" + "countUnit" when it is counted in things ("10 applications a week": weeklyTargetCount 10, countUnit "applications"); "sessionMinutes" if they said how long one sitting is. MILESTONE stages that are counted carry a target, e.g. {"title":"50 DSA problems","target":50}; uncounted ones ("Resume ready") have target null. Stages they say are already done are still listed, then logged with LOG_PROGRESS milestoneDone.)
+- {"type":"ADD_PROJECT","title":string,"kind":"OUTCOME"|"MILESTONE"|"PRACTICE"|"WORK","why":string|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL","deadline":"YYYY-MM-DD"|null,"areaId":string|null,"milestones":[string|{"title":string,"target":number|null}]|null,"metric":{"name":string,"unit":string,"start":number,"target":number}|null,"weeklyTargetMinutes":number|null,"weeklyTargetCount":number|null,"countUnit":string|null,"sessionMinutes":number|null,"tasks":[{"title":string,"due":"YYYY-MM-DD"|null,"priority":"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|null}]}   (Use it for a goal or effort that takes weeks and has several steps: a job switch, losing weight, learning English, a client deliverable with parts. ALSO always use it when they say the word "project" or name projects ("Project A: API due Thursday. Project B: UI next week" is TWO ADD_PROJECTs, titled by what each is, "API" and "UI", not "Project A"). A single errand they did not call a project, even an important one with a deadline ("update my resume this week", "renew my passport"), is an ADD_TASK. WORK = a deliverable with a deadline; MILESTONE = a goal with stages like a job switch; OUTCOME = a number to move; PRACTICE = weekly practice time. Always include 1-4 concrete first to-dos in "tasks" (for WORK the first to-do is the deliverable itself, with the project's deadline and priority). Put "why" in their words if they said it. OUTCOME needs "metric" (weight 85 -> 70 kg: name Weight, unit kg, start 85, target 70). PRACTICE needs "weeklyTargetMinutes", or "weeklyTargetCount" + "countUnit" when it is counted in things ("10 applications a week": weeklyTargetCount 10, countUnit "applications"); "sessionMinutes" if they said how long one sitting is. MILESTONE stages that are counted carry a target, e.g. {"title":"50 practice problems","target":50}; uncounted ones ("Resume ready") have target null. Stages they say are already done are still listed, then logged with LOG_PROGRESS milestoneDone.)
 - {"type":"ADD_NOTE","collection":string,"template":"LIST"|"ROUTINE"|"PLAYBOOK"|"INFO","title":string,"items":[string],"text":string|null}   (something they TEACH you to keep: their breakfast options, gym warm-up steps, "when X do Y", client details. LIST/ROUTINE use items; PLAYBOOK/INFO use text. collection is a short name like "Breakfast" or "Gym".)
 - {"type":"SET_NUDGE","kind":"NIGHTLY"|"MORNING","time":"HH:mm"|null}   (null turns it off)
 
@@ -352,8 +387,14 @@ const parsePlan = (raw: string): Plan => {
   }
 }
 
+// The fixed prompt, plus one line for how this person wants Ally to be (empty for the defaults).
+const systemText = (ctx: Ctx) => {
+  const style = styleForPrompt(ctx.focus, ctx.directness)
+  return style ? `${SYSTEM_PROMPT}\n\nHow this person wants you to be: ${style}` : SYSTEM_PROMPT
+}
+
 const toMessages = (ctx: Ctx, message: string, history: ChatTurn[]) => [
-  { role: "system" as const, content: `${SYSTEM_PROMPT}\n\nContext: ${contextJson(ctx)}` },
+  { role: "system" as const, content: `${systemText(ctx)}\n\nContext: ${contextJson(ctx)}` },
   ...history.slice(-10).map((h) => ({ role: h.role, content: h.text.slice(0, 1500) })),
   { role: "user" as const, content: message },
 ]
@@ -379,7 +420,7 @@ const planWithGemini = async (ctx: Ctx, message: string, history: ChatTurn[]): P
     .map((h) => `${h.role === "user" ? "User" : "Assistant"}: ${h.text.slice(0, 1500)}`)
     .join("\n")
   const result = await model.generateContent([
-    { text: `${SYSTEM_PROMPT}\n\nContext: ${contextJson(ctx)}` },
+    { text: `${systemText(ctx)}\n\nContext: ${contextJson(ctx)}` },
     { text: `${convo}\nUser: ${message}` },
   ])
   return parsePlan(result.response.text())
@@ -636,7 +677,9 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
           activityId: task.activityId,
         })
       } else if (a.type === "COMFORT") {
-        const feeling = normalizeFeeling(String(a.feeling ?? ""))
+        // A fixed word, or one of the moods they made up for their saves (never a stranger's label).
+        const named = cleanMood(String(a.feeling ?? ""))
+        const feeling = normalizeFeeling(String(a.feeling ?? "")) ?? (named && ctx.myMoods.includes(named) ? named : null)
         if (!feeling) continue
         await recordActivity(userId, { type: "MOOD", itemType: "DAY", mood: feeling, source: "CHAT" })
         const shelf = await prisma.vaultItem.findMany({ where: { userId }, select: { id: true, title: true, url: true, triggerTags: true, usedCount: true, helpfulCount: true } })
@@ -844,6 +887,20 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
 const clockNowMin = (c: { nowMin: number }) => c.nowMin
 
 const quickChat = async (userId: string, text: string): Promise<ChatResult | null> => {
+  // "be more direct", "just reminders": set by code, undoable, no AI.
+  const pref = preferenceIntent(text)
+  if (pref) {
+    const prev = await prisma.userSettings.findUnique({ where: { userId }, select: { focus: true, directness: true, proactivity: true } })
+    const row = await upsertSettings(userId, pref)
+    const event = await recordActivity(userId, {
+      type: "UPDATED",
+      itemType: "SETTING",
+      title: pref.proactivity ? `Messages: ${pref.proactivity.toLowerCase()}` : pref.directness ? `Ally is ${pref.directness.toLowerCase()}` : `Ally focus: ${pref.focus!.toLowerCase()}`,
+      source: "CHAT",
+      undo: { kind: "RESTORE_FIELDS", model: "settings", id: row.id, prev: pref.proactivity ? { proactivity: prev?.proactivity ?? "NORMAL" } : pref.directness ? { directness: prev?.directness ?? "BALANCED" } : { focus: prev?.focus ?? "ALL" } },
+    })
+    return { role: "ASSISTANT", reply: preferenceReply(pref), actions: [{ type: "PREFERENCE_SET", ...pref, title: event?.title ?? "Settings updated", activityId: event?.id }], usedAi: false }
+  }
   const c = await getClock(userId)
   const intent = quickIntent(text, clockNowMin(c))
   if (!intent) return null
@@ -858,6 +915,23 @@ const quickChat = async (userId: string, text: string): Promise<ChatResult | nul
       usedAi: false,
     }
   }
+  if (intent.kind === "REMIND") {
+    const [hh, mm] = intent.time.split(":").map(Number)
+    // Already past today: the AI asks what they meant instead of a silent drop.
+    if (intent.day === "TODAY" && hh! * 60 + mm! <= c.nowMin) return null
+    const dayKey = intent.day === "TOMORROW" ? dayKeyInTz(new Date(c.now.getTime() + 86_400_000), c.tz) : c.todayKey
+    const ctx = await loadContext(userId, text)
+    const { done } = await execute(
+      userId,
+      ctx,
+      [{ type: "SET_REMINDER", text: intent.text, at: `${dayKey}T${intent.time}`, repeat: intent.day === "DAILY" ? { freq: "DAILY" } : null }],
+      text,
+    )
+    if (!done.some((d) => d.type === "REMINDER_SET")) return null
+    const label = new Intl.DateTimeFormat("en-IN", { timeZone: "UTC", hour: "numeric", minute: "2-digit", hour12: true }).format(new Date(Date.UTC(2000, 0, 1, hh!, mm!)))
+    const when = intent.day === "DAILY" ? `every day at ${label}` : `${intent.day === "TODAY" ? "today" : "tomorrow"} at ${label}`
+    return { role: "ASSISTANT", reply: `Okay. I'll remind you to ${intent.text} ${when}.`, actions: done, usedAi: false }
+  }
   const unit = intent.minutes !== undefined ? "min" : "count"
   const targets = (await weeklyTargets(userId, c)).map((t) => ({ id: t.projectId, title: t.title, countUnit: t.countUnit, unit: t.unit }))
   const match = matchTarget(intent.what, unit, targets)
@@ -869,6 +943,18 @@ const quickChat = async (userId: string, text: string): Promise<ChatResult | nul
     actions: [{ type: "PROGRESS_LOGGED", id: r.stand.id, title: r.stand.title, what: r.what, message: r.stand.message, activityId: r.activityId }],
     usedAi: false,
   }
+}
+
+// Layer 4, "planning instead of doing": three or more plans asked for this
+// week and at most one session done. Said once, kindly, above the new plan.
+const planningNotDoing = async (userId: string): Promise<string | null> => {
+  const since = new Date(Date.now() - 7 * 86_400_000)
+  const [plans, sessions] = await Promise.all([
+    prisma.aiCall.count({ where: { userId, feature: "Goal plan", createdAt: { gte: since } } }),
+    prisma.activityEvent.count({ where: { userId, itemType: "PROJECT", type: { in: ["DONE", "MINIMUM", "LOGGED"] }, undoneAt: null, at: { gte: since } } }),
+  ]).catch(() => [0, 99])
+  if (plans < 3 || sessions > 1) return null
+  return `Honest note: that's ${plans} plans this week and ${sessions === 0 ? "no sessions" : "one session"} done. Planning feels like progress, but starting is what counts. Keep one plan and do its first 15 minutes today?`
 }
 
 // Asking for a plan for a goal (not just adding one): the goal planner answers.
@@ -914,11 +1000,34 @@ export const assistantChat = async (
   const quick = await quickChat(userId, text)
   if (quick) return quick
 
+  // Follow-ups ("move it to tomorrow", "make that 30 min", "no, gym is at 9"),
+  // questions from real data ("what's my day?", "am I on track?") and changes
+  // to a plan just proposed, all by code.
+  const follow = await followUpChat(userId, text, history).catch((err) => {
+    logger.warn("Follow-up failed:", err)
+    return null
+  })
+  if (follow === "PLAN_CHANGE") {
+    const goalText = `${lastRef(history, ["GOAL_PLAN"])!.goalText}${NL}Change: ${text}`
+    const proposal = await proposeGoalPlanService(userId, goalText)
+    return { role: "COACH", reply: goalPlanReply(proposal), actions: [{ type: "GOAL_PLAN", proposal, goalText }], usedAi: proposal.aiAvailable }
+  }
+  if (follow) return follow
+
+  // "Delete my gym habit", "pause the guitar goal", "rename X to Y", "bring back X": by code,
+  // reversible, and it asks "which one?" when a name fits several things (ADR 0030).
+  const managed = await (showChat(userId, text).then((r) => r ?? manageChat(userId, text)).then((r) => r ?? editChat(userId, text)).then((r) => r ?? screenChat(userId, text))).catch((err) => {
+    logger.warn("Manage failed:", err)
+    return null
+  })
+  if (managed) return managed
+
   // "Make me a plan for…": the goal planner proposes weekly targets; nothing
   // is created until the person keeps it.
   if (PLAN_REQUEST.test(text)) {
-    const proposal = await proposeGoalPlanService(userId, text)
-    return { role: "COACH", reply: goalPlanReply(proposal), actions: [{ type: "GOAL_PLAN", proposal, goalText: text }], usedAi: proposal.aiAvailable }
+    const [proposal, planning] = await Promise.all([proposeGoalPlanService(userId, text), planningNotDoing(userId)])
+    const reply = planning ? [planning, goalPlanReply(proposal)].join(NL + NL) : goalPlanReply(proposal)
+    return { role: "COACH", reply, actions: [{ type: "GOAL_PLAN", proposal, goalText: text }], usedAi: proposal.aiAvailable }
   }
 
   const ctx = await loadContext(userId, text)
@@ -946,7 +1055,7 @@ export const assistantChat = async (
   }
 
   // How someone feels is recognised in code, so comfort never depends on the model noticing.
-  const felt = feelingIn(text)
+  const felt = feelingIn(text) ?? customMoodIn(text, ctx.myMoods)
   if (felt && !plan.actions.some((a) => a.type === "COMFORT")) plan.actions = [...plan.actions, { type: "COMFORT", feeling: felt }]
   // One errand is a to-do, not a project, whatever the model proposed.
   plan.actions = plan.actions.map((a) => projectAsTask(a, text) ?? a)
@@ -1002,11 +1111,15 @@ export const assistantChat = async (
     }
   }
   const have = new Set(ctx.habits.map((h) => norm(h.title)))
-  const suggestions = plan.suggest.filter((s) => !have.has(norm(s.title)))
+  // Someone who only wants reminders is not offered habits.
+  const suggestions = ctx.focus === "REMEMBER" ? [] : plan.suggest.filter((s) => !have.has(norm(s.title)))
+  const finalActions = [...(asked ? [asked] : []), ...actions, ...memoryActions]
+  // Never "Done." or "Skipped for today." when nothing was done (plan 20, M4).
+  const honest = (unbackedClaim(reply, finalActions.length) || unbackedStateClaim(reply, finalActions.length)) ? NOTHING_CHANGED : reply
   return {
     role: plan.role,
-    reply: capacity ? `${reply}\n\n${capacity.message}` : reply,
-    actions: [...(asked ? [asked] : []), ...actions, ...memoryActions],
+    reply: capacity ? `${honest}\n\n${capacity.message}` : honest,
+    actions: finalActions,
     ...(capacity && { capacity }),
     ...(suggestions.length && { suggestions }),
     usedAi: true,

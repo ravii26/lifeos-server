@@ -25,6 +25,9 @@ export interface ChatReplyShape {
     windowEnd?: string
     repeatRule?: string
     title?: string
+    text?: string
+    itemType?: string
+    detail?: string
     priority?: string
     deadline?: string
     tasks?: number
@@ -36,7 +39,8 @@ export interface ChatReplyShape {
     template?: string
     notes?: { id: string; title: string; collection: string }[]
     results?: { kind: string; id: string; title: string; snippet: string }[]
-    options?: { id: string; title: string }[]
+    options?: { id: string; title: string; command?: boolean; detail?: string; kind?: string }[]
+    total?: number
     proposal?: any
     until?: string | null
   }[]
@@ -88,6 +92,16 @@ const nowAt = (api: ScenarioContext["api"], at: string, minutes?: number) =>
 const careerId = async (api: ScenarioContext["api"]) => ((await api("get", "/areas")).body.data as any[])[0].id as string
 const ago = (days: number) => new Date(Date.now() - days * 86_400_000)
 const taskList = async (api: ScenarioContext["api"]) => ((await api("get", "/tasks")).body.data ?? []) as any[]
+
+// Words from the founder's own life. Someone else must never get them back unless they said them first.
+const FOUNDER_WORDS = /\b(DSA|leetcode|system design|interviews?|gym|reels?)\b/gi
+const founderBias = async (api: ScenarioContext["api"], replies: ChatReplyShape[], said: string): Promise<string | null> => {
+  const [tasks, habits, projects] = await Promise.all(["/tasks", "/habits", "/projects"].map((p) => api("get", p).then((r) => r.body.data ?? [])))
+  const blob = JSON.stringify([replies, tasks.map((t: any) => t.title), habits.map((h: any) => h.title), projects.map((p: any) => p.title)])
+  const heard = said.toLowerCase()
+  const leaked = [...blob.matchAll(FOUNDER_WORDS)].map((m) => m[0].toLowerCase()).filter((w) => !heard.includes(w))
+  return leaked.length ? `suggested things from someone else's life: ${[...new Set(leaked)].join(", ")}` : null
+}
 
 export const scenarios: Scenario[] = [
   {
@@ -1082,6 +1096,532 @@ export const scenarios: Scenario[] = [
       if (now.kind !== "REST" || !/busy until/i.test(now.message)) return `Now still suggests: ${now.message}`
       const free = await say("I'm free now")
       return free.actions.some((x) => x.type === "BUSY_SET" && x.until === null) ? null : "couldn't clear busy"
+    },
+  },
+  // ---- Phase C: what Ally says on its own, and talking like a person (ADR 0027) ----------
+  {
+    id: "C1",
+    name: "A whole week: briefing at wake, evening nudge, wrap-up before sleep, Sunday review; sick day silent",
+    status: "ready",
+    async run({ api }) {
+      await api("put", "/now/basics", { wake: "07:00", sleep: "00:00", officeDays: [1, 2, 3, 4, 5], office: { start: "10:00", end: "20:30" } })
+      const area = await careerId(api)
+      const made = await api("post", "/projects", { title: "DSA", areaId: area, kind: "PRACTICE", weeklyTargetMinutes: 360, sessionMinutes: 45, timeBlock: "MORNING" })
+      if (made.status !== 201) return `project not created (${made.status})`
+      await api("post", "/habits", { title: "Gym", areaId: area, timeBlock: "EVENING", targetMinutes: 45 })
+      // Next Monday to Sunday, each looked at from 6 am.
+      const monday = (() => {
+        for (let i = 1; i <= 7; i++) if (weekdayIst(`${dayKey(i)}T12:00:00+05:30`) === "Monday") return i
+        return 1
+      })()
+      for (let d = 0; d < 7; d++) {
+        const key = dayKey(monday + d)
+        const r = await api("get", `/now/agenda?at=${key}T06:00`)
+        if (r.status !== 200) return `agenda ${key}: HTTP ${r.status}`
+        const items = (r.body.data.items as any[]).filter((i) => i.dayKey === key)
+        const kinds = items.map((i) => i.kind)
+        const weekend = d >= 5
+        if (kinds[0] !== "BRIEFING") return `${key}: first is ${kinds[0]}`
+        if (!kinds.includes("WRAP_UP")) return `${key}: no wrap-up (${kinds.join(",")})`
+        if (!weekend && !/Office 10 am–8:30 pm/.test(items[0].body)) return `${key}: briefing was "${items[0].body}"`
+        if (!weekend && !/DSA/.test(items[0].body)) return `${key}: briefing misses the DSA session: "${items[0].body}"`
+        if (weekend !== (items[0].title === "Your weekend day")) return `${key}: title "${items[0].title}"`
+        if ((d === 6) !== kinds.includes("WEEKLY_REVIEW")) return `${key}: Sunday review ${kinds.includes("WEEKLY_REVIEW") ? "on a weekday" : "missing"}`
+        // Nothing in the night (before 7 am or after midnight IST).
+        for (const i of items) {
+          if (i.atMin < 7 * 60 || i.atMin >= 24 * 60) return `${key}: ${i.kind} at minute ${i.atMin} is in the night`
+        }
+      }
+      await api("put", "/now/mode", { mode: "SICK" })
+      const sick = await api("get", `/now/agenda?at=${dayKey(monday)}T06:00`)
+      await api("put", "/now/mode", { mode: "NORMAL" })
+      return sick.body.data.items.length === 0 ? null : `sick mode still sends ${sick.body.data.items.length} things`
+    },
+  },
+  {
+    id: "C2",
+    name: "'What's my day?', 'what did I do yesterday?', 'am I on track?' are answered from real data, without AI",
+    status: "ready",
+    async run({ api, say }) {
+      const area = await careerId(api)
+      await api("post", "/projects", { title: "DSA", areaId: area, kind: "PRACTICE", weeklyTargetMinutes: 360, sessionMinutes: 45 })
+      for (const [q, want] of [
+        ["what's my day?", /rest of today|Nothing else planned|sick mode/],
+        ["what did I do yesterday?", /Yesterday you did|Nothing logged yesterday/],
+        ["am I on track?", /DSA: .* of [\d.]+ h this week/],
+      ] as const) {
+        const r = await say(q)
+        if (r.usedAi) return `"${q}" went to the AI`
+        if (!want.test(r.reply)) return `"${q}" → ${r.reply.slice(0, 160)}`
+      }
+      return null
+    },
+  },
+  // ---- Personas (plan 16 §0: Ally must fit people who are not the founder) ----------------
+  // Each is a different life. Pass = a sensible first day with nothing from anyone else's life.
+  {
+    id: "U1",
+    name: "Persona: college student with exams gets a revision plan around classes",
+    status: "ready",
+    async run({ api, say }) {
+      const said = "I'm a B.Com student and my exams start in 6 weeks. Make me a plan to revise accounting, economics and business law."
+      // Classes Mon to Sat, 8 to 2.
+      const basics = await api("put", "/now/basics", { wake: "06:30", sleep: "23:00", officeDays: [1, 2, 3, 4, 5, 6], office: { start: "08:00", end: "14:00" } })
+      if (basics.status !== 200) return `class hours not accepted (${basics.status})`
+      const r = await say(said)
+      const plan = r.actions.find((x) => x.type === "GOAL_PLAN")?.proposal?.plan
+      if (!plan) return `no plan proposed: ${r.reply.slice(0, 120)}`
+      const titles = (plan.targets ?? []).map((t: any) => t.title).join(" | ")
+      if (!/account|econom|law|revis|mock|paper|practice/i.test(titles)) return `plan is not about their exams: ${titles}`
+      if ((plan.targets ?? []).some((t: any) => t.block === "OFFICE")) return "a revision session was put inside class hours"
+      const wed = nextWednesday()
+      const inClass = await nowAt(api, `${wed}T10:00`)
+      if (inClass.block !== "OFFICE") return `10:00 on a class day is ${inClass.block}, expected the fixed block`
+      return founderBias(api, [r], said)
+    },
+  },
+  {
+    id: "U2",
+    name: "Persona: night-shift worker's day is understood (works through the night, sleeps by day)",
+    // Known gap, found by this persona: the day model (now.rules.ts normalizeDay) drops any block
+    // that crosses midnight, so a 21:00 to 06:00 shift is lost and quiet hours follow the wrong
+    // sleep. Flip to "ready" when overnight days are supported (docs/STATUS.md, open risks).
+    status: { pendingUntil: 9 },
+    async run({ api, say }) {
+      const said = "I work night shifts, 9 pm to 6 am, Monday to Friday. I sleep from about 7 am to 2 pm. Remind me to take my vitamin D every day when I wake up."
+      const r = await say(said)
+      if (/sorry|can't|cannot|unable/i.test(r.reply) && !r.actions.length) return `refused or lost: ${r.reply.slice(0, 120)}`
+      const rem = ofType(r, "REMINDER_SET")[0]
+      if (!rem?.remindAt) return `no vitamin reminder (reply: ${r.reply.slice(0, 100)})`
+      const h = hourIst(rem.remindAt)
+      if (h < 13 || h > 16) return `reminder at ${h}:00, they wake around 14:00`
+      const wed = nextWednesday()
+      const night = await nowAt(api, `${wed}T23:30`)
+      if (night.block !== "OFFICE") return `23:30 is mid-shift but Now says ${night.block}`
+      return founderBias(api, [r], said)
+    },
+  },
+  {
+    id: "U3",
+    name: "Persona: stay-at-home parent with a toddler: no office, small windows, weekly call",
+    status: "ready",
+    async run({ api, say }) {
+      const said = "I'm at home with my 2 year old. Nap time, 1 to 3 pm, is my only free time. I want to start a small home bakery and walk every day. Every Sunday remind me to call my mother."
+      const basics = await api("put", "/now/basics", { wake: "06:30", sleep: "22:30", officeDays: [], office: null })
+      if (basics.status !== 200) return `a day with no job or classes not accepted (${basics.status})`
+      const r = await say(said)
+      const call = ofType(r, "REMINDER_SET").find((x) => /call|mother|mom/i.test(x.text ?? x.title ?? ""))
+      if (!call) return `no call-mother reminder: ${r.reply.slice(0, 120)}`
+      if (!/FREQ=WEEKLY/.test(call.repeatRule ?? "") || !/BYDAY=SU/.test(call.repeatRule ?? "")) return `repeat rule ${call.repeatRule}`
+      const made = ofType(r, "PROJECT_ADDED").length + ofType(r, "HABIT_ADDED").length + r.actions.filter((x) => x.type === "GOAL_PLAN").length
+      if (!made) return `neither the bakery nor the walk was picked up: ${r.reply.slice(0, 120)}`
+      const midday = await nowAt(api, `${nextWednesday()}T11:00`)
+      if (midday.block === "OFFICE") return "invented working hours for someone who has none"
+      return founderBias(api, [r], said)
+    },
+  },
+  {
+    id: "U4",
+    name: "Persona: freelancer with client deadlines gets two dated jobs, not a life plan",
+    status: "ready",
+    async run({ api, say }) {
+      const said = "I'm a freelance designer. Client logo is due Friday and the website mockup is due next Tuesday. I work best in the mornings."
+      const r = await say(said)
+      // Either shape is fine for someone who never said "project": a to-do or a project, each with its date.
+      const jobs = [
+        ...(await taskList(api)).map((t) => ({ title: t.title as string, due: (t.dueDate ?? null) as string | null })),
+        ...((await api("get", "/projects")).body.data ?? []).map((p: any) => ({ title: p.title as string, due: (p.deadline ?? null) as string | null })),
+      ]
+      const logo = jobs.find((j) => /logo/i.test(j.title))
+      const mock = jobs.find((j) => /mockup|website/i.test(j.title))
+      if (!logo || !mock) return `jobs not saved: ${jobs.map((j) => j.title).join(" | ") || "none"} (reply: ${r.reply.slice(0, 100)})`
+      if (!logo.due || !mock.due) return "a client job has no date"
+      if (weekdayIst(`${logo.due.slice(0, 10)}T12:00:00+05:30`) !== "Friday") return `logo due ${logo.due} is not a Friday`
+      if (weekdayIst(`${mock.due.slice(0, 10)}T12:00:00+05:30`) !== "Tuesday") return `mockup due ${mock.due} is not a Tuesday`
+      if (questions(r.reply) > 1) return "asked more than one question"
+      return founderBias(api, [r], said)
+    },
+  },
+  {
+    id: "U6",
+    name: "Dials: 'be more direct' and 'I only want reminders' are set by code, stored, and undoable",
+    status: "ready",
+    async run({ api, say }) {
+      const d = await say("be more direct with me")
+      if (d.usedAi || !d.actions.some((x) => x.type === "PREFERENCE_SET")) return `direct not set by code (usedAi ${d.usedAi}): ${d.reply}`
+      const f = await say("I only want reminders")
+      if (f.usedAi || !f.actions.some((x) => x.type === "PREFERENCE_SET")) return `focus not set by code (usedAi ${f.usedAi}): ${f.reply}`
+      const s = (await api("get", "/settings")).body.data
+      if (s.directness !== "DIRECT" || s.focus !== "REMEMBER") return `stored ${s.directness} / ${s.focus}`
+      const undone = await api("post", `/activity/${f.actions.find((x) => x.type === "PREFERENCE_SET")!.activityId}/undo`)
+      if (undone.status !== 200) return `undo returned ${undone.status}`
+      const after = (await api("get", "/settings")).body.data
+      if (after.focus !== "ALL" || after.directness !== "DIRECT") return `after undo ${after.directness} / ${after.focus}, expected DIRECT / ALL`
+      // A real request is not mistaken for a setting.
+      const r = await say("remind me to call the plumber tomorrow at 11")
+      return r.actions.some((x) => x.type === "REMINDER_SET") ? null : `a reminder request was swallowed: ${r.reply.slice(0, 80)}`
+    },
+  },
+  {
+    id: "U7",
+    name: "Custom moods: a save kept for 'before an exam' or 'bored' (not in the fixed list) comes back when they say so",
+    status: "ready",
+    async run({ api, say }) {
+      const calm = await api("post", "/guide/saves", { text: "https://www.instagram.com/reel/Cexam01/ 5 minute breathing routine to calm your nerves before a big test or interview" })
+      const fun = await api("post", "/guide/saves", { text: "https://www.instagram.com/reel/Cfun002/ the funniest cat compilation you will see this week" })
+      if (calm.status !== 201 || fun.status !== 201) return `save returned ${calm.status}/${fun.status}`
+      // Their own words, not the fixed list; one even typed as a sentence.
+      const a = await api("post", `/guide/saves/${calm.body.data.id}/moods`, { moods: ["before an exam"] })
+      const b = await api("post", `/guide/saves/${fun.body.data.id}/moods`, { moods: ["When I'm bored"] })
+      if (a.status !== 200 || b.status !== 200) return `moods returned ${a.status}/${b.status}: ${a.body?.message ?? ""} ${b.body?.message ?? ""}`
+      if (!b.body.data.shelved || b.body.data.proposal.feelings[0] !== "bored") return `second save kept as ${JSON.stringify(b.body.data.proposal.feelings)}, shelved ${b.body.data.shelved}`
+      const list = (await api("get", "/guide/saves/moods")).body.data
+      if (!list.mine.includes("before an exam") || !list.mine.includes("bored")) return `own moods not listed: ${JSON.stringify(list)}`
+      if (!list.suggested.includes("tired")) return "common moods missing"
+      // Saying it brings the right one back, found by code.
+      const r1 = await say("I'm bored")
+      const s1 = r1.actions.find((x) => x.type === "COMFORT_SHOWN")
+      if (!s1 || !/cat/i.test(s1.item?.title ?? "")) return `"I'm bored" brought back ${s1?.item?.title ?? "nothing"}`
+      const r2 = await say("show me something for before an exam")
+      const s2 = r2.actions.find((x) => x.type === "COMFORT_SHOWN")
+      if (!s2 || /cat/i.test(s2.item?.title ?? "")) return `"before an exam" brought back ${s2?.item?.title ?? "nothing"}`
+      // Ordinary talk that mentions a mood word does not fire it.
+      const r3 = await say("remind me to buy the bored game for my nephew tomorrow at 6")
+      if (r3.actions.some((x) => x.type === "COMFORT_SHOWN")) return "a reminder was taken for a mood"
+      // A fixed word still works as before, and a stranger's label is not invented.
+      const r4 = await say("I'm feeling lonely")
+      return r4.actions.some((x) => x.type === "COMFORT_SHOWN" && x.feeling === "bored") ? "lonely brought back a bored save" : null
+    },
+  },
+  {
+    id: "M1",
+    name: "Chat manages things: remove (archive), which-one, over-3 asks, pause, rename, bring back, all with Undo",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      const area = await careerId(api)
+      const habit = async (title: string) => (await api("post", "/habits", { title, areaId: area })).body.data.id as string
+      const gym = await habit("Gym session")
+      const water = await habit("Drink water")
+      await habit("Read 10 pages")
+      await api("post", "/tasks", { title: "Pack gym bag", areaId: area })
+      const passport = (await api("post", "/tasks", { title: "Renew passport", areaId: area })).body.data.id as string
+      const guitar = (await api("post", "/projects", { title: "Learn guitar", areaId: area, kind: "PRACTICE", weeklyTargetMinutes: 120 })).body.data.id as string
+      await db.allyNote.create({ data: { userId, collection: "Breakfast", template: "LIST", title: "Breakfast options", items: ["poha", "oats"] } })
+      const active = async (id: string) => (await db.habit.findUnique({ where: { id } }))?.isActive
+      const noAi = (r: ChatReplyShape, what: string) => (r.usedAi ? `${what}: used the AI` : null)
+
+      // 1. Remove by name = archive, by code, with Undo.
+      const d = await say("delete my water habit")
+      if (noAi(d, "remove")) return noAi(d, "remove")
+      const rm = d.actions.find((x) => x.type === "ITEM_REMOVED")
+      if (!rm?.activityId) return `water habit not removed with an undo: ${d.reply}`
+      if (await active(water)) return "water habit is still active"
+      if ((await api("post", `/activity/${rm.activityId}/undo`)).status !== 200) return "undo failed"
+      if (!(await active(water))) return "undo did not bring the water habit back"
+
+      // 2. A name that fits two things asks which one; the chosen option works as typed.
+      const q = await say("remove gym")
+      const ask = q.actions.find((x) => x.type === "ASK")
+      if (!ask || (ask.options?.length ?? 0) !== 2) return `expected a which-one question with 2 choices: ${JSON.stringify(q.actions.map((x) => x.type))} ${q.reply}`
+      if (!(await active(gym))) return "something was removed before they chose"
+      const choice = ask.options!.find((o) => /habit/i.test(o.title))!
+      const picked = await say(choice.title)
+      if (!picked.actions.some((x) => x.type === "ITEM_REMOVED") || (await active(gym))) return `choosing "${choice.title}" did not remove the habit: ${picked.reply}`
+
+      // 3. Bring it back by saying so.
+      const back = await say("bring back my gym habit")
+      if (!back.actions.some((x) => x.type === "UNDONE") || !(await active(gym))) return `gym habit not brought back: ${back.reply}`
+
+      // 4. Rename, and its undo.
+      const rn = await say("rename passport to renew my passport")
+      const ru = rn.actions.find((x) => x.type === "ITEM_UPDATED")
+      if (!ru?.activityId || (await db.task.findUnique({ where: { id: passport } }))?.title !== "renew my passport") return `rename failed: ${rn.reply}`
+      await api("post", `/activity/${ru.activityId}/undo`)
+      if ((await db.task.findUnique({ where: { id: passport } }))?.title !== "Renew passport") return "rename undo did not restore the title"
+
+      // 5. Pause and resume a goal.
+      await say("pause the guitar goal")
+      if ((await db.project.findUnique({ where: { id: guitar } }))?.status !== "PAUSED") return "goal not paused"
+      await say("resume guitar")
+      if ((await db.project.findUnique({ where: { id: guitar } }))?.status !== "ACTIVE") return "goal not resumed"
+
+      // 6. A note is removed and comes back.
+      await say("delete the breakfast note")
+      if (await db.allyNote.count({ where: { userId } })) return "note not removed"
+      await say("bring back the breakfast note")
+      if ((await db.allyNote.count({ where: { userId, title: "Breakfast options" } })) !== 1) return "note not brought back"
+
+      // 7. More than 3 asks first and removes nothing; the yes does the whole job.
+      await habit("Meditate")
+      await habit("Stretch")
+      const total = await db.habit.count({ where: { userId, isActive: true } })
+      const big = await say("delete all my habits")
+      const confirm = big.actions.find((x) => x.type === "ASK")?.options?.find((o) => /^yes/i.test(o.title))
+      if (!confirm || (await db.habit.count({ where: { userId, isActive: true } })) !== total) return `bulk delete did not wait for a yes: ${big.reply}`
+      await say(confirm.title)
+      if (await db.habit.count({ where: { userId, isActive: true } })) return "the yes did not remove every habit"
+      const keep = await say("No, keep them")
+      if (keep.actions.some((x) => x.type === "ITEM_REMOVED")) return "'no' removed something"
+
+      // 8. Things that must never happen.
+      const acct = await say("delete my account")
+      if (acct.actions.length || !/Account and data/i.test(acct.reply) || !(await db.user.findUnique({ where: { id: userId } }))) return `"delete my account" was not refused properly: ${acct.reply}`
+      const miss = await say("delete my ballet habit")
+      if (miss.actions.some((x) => x.type === "ITEM_REMOVED") || !/can't find/i.test(miss.reply)) return `unknown name: ${miss.reply}`
+      return null
+    },
+  },
+  {
+    id: "M2",
+    name: "Chat edits by name: time, size, priority, day, deadline, habit days; areas; Quieter / Silent. Each undoable",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      const area = await careerId(api)
+      const gym = (await api("post", "/habits", { title: "Gym session", areaId: area })).body.data.id as string
+      const passport = (await api("post", "/tasks", { title: "Renew passport", areaId: area })).body.data.id as string
+      const guitar = (await api("post", "/projects", { title: "Learn guitar", areaId: area, kind: "PRACTICE", weeklyTargetMinutes: 120 })).body.data.id as string
+      const noAi = (r: ChatReplyShape, what: string) => (r.usedAi ? `${what}: used the AI` : null)
+      const undo = async (r: ChatReplyShape) => (await api("post", `/activity/${r.actions.find((x) => x.activityId)?.activityId}/undo`)).status
+      const habit = () => db.habit.findUnique({ where: { id: gym } })
+      const task = () => db.task.findUnique({ where: { id: passport } })
+      const project = () => db.project.findUnique({ where: { id: guitar } })
+
+      // Time of a habit, and its undo.
+      let r = await say("set the gym habit to 7 am")
+      if (noAi(r, "habit time")) return noAi(r, "habit time")
+      if ((await habit())?.reminderTime !== "07:00") return `habit time is ${(await habit())?.reminderTime}: ${r.reply}`
+      if ((await undo(r)) !== 200 || (await habit())?.reminderTime) return "habit time undo did not clear it"
+
+      // Size, priority, and moving a to-do to a day.
+      r = await say("make passport 45 min")
+      if ((await task())?.sizeMinutes !== 45) return `size is ${(await task())?.sizeMinutes}: ${r.reply}`
+      r = await say("make passport high priority")
+      if ((await task())?.priority !== "HIGH") return `priority is ${(await task())?.priority}: ${r.reply}`
+      if ((await undo(r)) !== 200 || (await task())?.priority !== "MEDIUM") return "priority undo failed"
+      r = await say("move passport to friday")
+      if (!(await task())?.dueDate || (await task())!.dueDate!.getUTCDay() !== 5) return `due ${(await task())?.dueDate}: ${r.reply}`
+
+      // A goal's deadline and session length.
+      r = await say("set the guitar deadline to 30 nov")
+      const dl = (await project())?.deadline
+      if (!dl || dl.getUTCMonth() !== 10 || dl.getUTCDate() !== 30) return `deadline ${dl}: ${r.reply}`
+      r = await say("make guitar sessions 25 min")
+      if ((await project())?.sessionMinutes !== 25) return `session ${(await project())?.sessionMinutes}: ${r.reply}`
+
+      // Days of a habit.
+      r = await say("set the gym habit to mon wed fri")
+      const h = await habit()
+      if (h?.frequency !== "CUSTOM" || [...(h?.specificDays ?? [])].sort().join() !== "FRI,MON,WED") return `days ${h?.frequency} ${h?.specificDays}: ${r.reply}`
+      if ((await undo(r)) !== 200 || (await habit())?.frequency !== "DAILY") return "days undo failed"
+
+      // A name that fits two things asks; the chosen option works as typed.
+      await api("post", "/tasks", { title: "Pack gym bag", areaId: area })
+      r = await say("set gym to 6 pm")
+      const q = r.actions.find((x) => x.type === "ASK")
+      if (!q || (q.options?.length ?? 0) !== 2) return `expected a which-one question: ${r.reply}`
+      const pick = q.options!.find((o) => /habit/i.test(o.title))!
+      await say(pick.title)
+      if ((await habit())?.reminderTime !== "18:00") return `chosen option did not set the habit: ${(await habit())?.reminderTime}`
+
+      // Areas: add, rename, change tier; making a second area Main asks first and demotes the old one.
+      r = await say("add an area called Music")
+      if (noAi(r, "add area")) return noAi(r, "add area")
+      const music = await db.area.findFirst({ where: { userId, name: "Music" } })
+      if (!music || music.tier !== "MAINTAIN") return `area not added: ${r.reply}`
+      await say("rename area music to Guitar and music")
+      if ((await db.area.findUnique({ where: { id: music.id } }))?.name !== "Guitar and music") return "area not renamed"
+      await say("make music secondary")
+      if ((await db.area.findUnique({ where: { id: music.id } }))?.tier !== "SECONDARY") return "area tier not set"
+      r = await say("make music my main area")
+      const confirm = r.actions.find((x) => x.type === "ASK")?.options?.find((o) => /^yes/i.test(o.title))
+      if (!confirm || (await db.area.findUnique({ where: { id: area } }))?.tier !== "MAIN") return `making a second Main did not ask first: ${r.reply}`
+      r = await say(confirm.title)
+      if ((await db.area.findUnique({ where: { id: music.id } }))?.tier !== "MAIN" || (await db.area.findUnique({ where: { id: area } }))?.tier !== "SECONDARY") return "the yes did not swap Main"
+      if ((await undo(r)) !== 200 || (await db.area.findUnique({ where: { id: area } }))?.tier !== "MAIN" || (await db.area.findUnique({ where: { id: music.id } }))?.tier !== "SECONDARY") return "area swap undo failed"
+
+      // How much Ally messages by itself.
+      const level = async () => (await db.userSettings.findUnique({ where: { userId } }))?.proactivity
+      r = await say("be quieter")
+      if (noAi(r, "quieter") || (await level()) !== "QUIETER") return `quieter: ${await level()}`
+      r = await say("go silent")
+      if ((await level()) !== "SILENT") return `silent: ${await level()}`
+      if ((await undo(r)) !== 200 || (await level()) !== "QUIETER") return `silent undo left ${await level()}`
+      await say("message me normally")
+      if ((await level()) !== "NORMAL") return `normal: ${await level()}`
+
+      // Not about the app: nothing changes.
+      r = await say("set my mind to 5 pm")
+      if (r.actions.some((x) => x.type === "ITEM_UPDATED")) return "an unrelated sentence changed something"
+      return null
+    },
+  },
+  {
+    id: "M3",
+    name: "Chat shows lists: habits, to-dos, reminders, goals, areas, notes, and what was removed; empty ones say what to do",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      const area = await careerId(api)
+      const list = (r: ChatReplyShape) => r.actions.find((x) => x.type === "LIST")
+      const noAi = (r: ChatReplyShape, what: string) => (r.usedAi ? `${what}: used the AI` : null)
+
+      // Empty places say what to do next.
+      let r = await say("show my notes")
+      if (noAi(r, "empty list") || list(r) || !/Tell me something to keep/i.test(r.reply)) return `empty notes: ${r.reply}`
+
+      const gym = (await api("post", "/habits", { title: "Gym session", areaId: area })).body.data.id as string
+      await api("post", "/habits", { title: "Drink water", areaId: area })
+      await api("post", "/tasks", { title: "Pack gym bag", areaId: area })
+      await api("post", "/tasks", { title: "Renew passport", areaId: area, priority: "HIGH" })
+      await db.task.create({ data: { userId, title: "Call mom", remindAt: new Date(Date.now() + 86_400_000), repeatRule: "FREQ=WEEKLY;BYDAY=SU", areaId: area } })
+      await api("post", "/projects", { title: "Learn guitar", areaId: area, kind: "PRACTICE", weeklyTargetMinutes: 120 })
+      await db.allyNote.create({ data: { userId, collection: "Breakfast", template: "LIST", title: "Breakfast options", items: ["poha", "oats"] } })
+
+      r = await say("show my habits")
+      let l = list(r)
+      if (noAi(r, "habits") || !l || l.kind !== "HABIT" || l.options!.length !== 2 || !l.options!.every((o) => /every day/.test(o.detail ?? ""))) return `habits list: ${JSON.stringify(l)} ${r.reply}`
+      r = await say("what reminders do I have?")
+      l = list(r)
+      if (!l || (l.options as unknown[]).length !== 1 || !/repeats weekly/.test(l.options![0]!.detail ?? "")) return `reminders list: ${JSON.stringify(l)}`
+      r = await say("list my to-dos")
+      l = list(r)
+      if (!l || l.options!.length !== 2 || l.options!.some((o) => /Call mom/.test(o.title))) return `to-dos should hold 2 and not the reminder: ${JSON.stringify(l?.options?.map((o) => o.title))}`
+      if (!l.options!.some((o) => /high priority/.test(o.detail ?? ""))) return "priority not shown"
+      r = await say("what are my goals")
+      if (list(r)?.options?.[0]?.title !== "Learn guitar") return `goals list: ${JSON.stringify(list(r))}`
+      r = await say("show my areas")
+      if (!list(r)?.options?.some((o) => o.title === "Career" && o.detail === "Main")) return `areas list: ${JSON.stringify(list(r))}`
+      r = await say("show my notes")
+      if (!/Breakfast/.test(list(r)?.options?.[0]?.detail ?? "")) return `notes list: ${JSON.stringify(list(r))}`
+
+      // Removed things are listed, and the row's command brings it back.
+      await say("delete my gym habit")
+      r = await say("what did I remove?")
+      l = list(r)
+      const row = l?.options?.find((o) => o.title === "Gym session")
+      if (!l || l.kind !== "REMOVED" || !row || row.kind !== "HABIT") return `removed list: ${JSON.stringify(l)}`
+      r = await say("Bring back habit: Gym session")
+      if (!r.actions.some((x) => x.type === "UNDONE") || !(await db.habit.findUnique({ where: { id: gym } }))?.isActive) return `bring back from the list failed: ${r.reply}`
+
+      // The which-one question's options are commands, so the phone sends them as written.
+      r = await say("remove gym")
+      const ask = r.actions.find((x) => x.type === "ASK")
+      if (!ask || !ask.options!.length || !ask.options!.every((o) => o.command === true)) return `ask options are not marked as commands: ${JSON.stringify(ask?.options)}`
+
+      // A long list shows the first 15 and says so.
+      for (let i = 1; i <= 16; i++) await api("post", "/tasks", { title: `Chore number ${i}`, areaId: area })
+      r = await say("show my to-dos")
+      l = list(r)
+      if (!l || (l.options as unknown[]).length !== 15 || (l.total ?? 0) < 18 || !/first 15/.test(r.reply)) return `long list: ${l?.options?.length} of ${l?.total}: ${r.reply}`
+
+      // Sentences that merely mention a list are left to the AI's search.
+      r = await say("show me notes about breakfast")
+      if (list(r)) return "a search was taken for a list"
+      return null
+    },
+  },
+  {
+    id: "M4",
+    name: "Parity: the Now card, too-much-today, prep, low energy, memory privacy and account buttons each have a working chat phrase",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      // A free day with no office, so Now always has something to show whatever the clock says.
+      await api("put", "/now/basics", { wake: "00:30", sleep: "23:59", officeDays: [], office: null })
+      const area = await careerId(api)
+      const gym = (await api("post", "/habits", { title: "Gym session", areaId: area })).body.data.id as string
+      await api("post", "/habits", { title: "Oats breakfast", areaId: area, prepareAhead: "soak the oats", prepTime: "21:30" })
+      const passport = (await api("post", "/tasks", { title: "Renew passport", areaId: area, priority: "HIGH", dueDate: dayKey(0) })).body.data.id as string
+      await db.memory.create({ data: { userId, content: "Likes ginger tea in the evening", kind: "PREFERENCE", importance: 2, source: "SAID", sensitive: false } })
+
+      const failures: string[] = []
+      const row = async (name: string, fn: () => Promise<string | null>) => {
+        try {
+          const why = await fn()
+          if (why) failures.push(`${name}: ${why}`)
+        } catch (e) {
+          failures.push(`${name}: ${e instanceof Error ? e.message : String(e)}`)
+        }
+      }
+      const events = (type: string, itemType: string, itemId?: string) => db.activityEvent.count({ where: { userId, type: type as "SKIPPED", itemType: itemType as "TASK", undoneAt: null, ...(itemId && { itemId }) } })
+
+      await row("Now: Not now", async () => {
+        const r = await say("not now")
+        const a = r.actions.find((x) => x.type === "ITEM_UPDATED")
+        if (r.usedAi || !a || !a.activityId) return `no skip receipt: ${r.reply}`
+        return (await events("SKIPPED", a.itemType ?? "TASK", a.id)) ? null : "the skip was not recorded"
+      })
+      await row("Now: Make it smaller", async () => {
+        const r = await say("make it smaller")
+        return r.usedAi || !r.actions.some((x) => x.type === "NOW_PICK") ? `no card: ${r.reply}` : null
+      })
+      await row("Plan/Now: skip a named habit", async () => {
+        const r = await say("skip gym today")
+        if (r.usedAi) return "used the AI"
+        return (await events("SKIPPED", "HABIT", gym)) ? null : `not recorded: ${r.reply}`
+      })
+      await row("Now: Smaller (count the minimum)", async () => {
+        const r = await say("I only did 10 minutes of gym")
+        if (r.usedAi) return "used the AI"
+        return (await events("MINIMUM", "HABIT", gym)) ? null : `not recorded: ${r.reply}`
+      })
+      await row("Now: Done (a to-do, by name)", async () => {
+        await say("done with Renew passport")
+        return (await db.task.findUnique({ where: { id: passport } }))?.status === "COMPLETED" ? null : "to-do not completed"
+      })
+      await row("Too much today: move the extra to later", async () => {
+        for (let i = 1; i <= 5; i++) await api("post", "/tasks", { title: `Big job ${i}`, areaId: area, sizeMinutes: 300, dueDate: dayKey(0) })
+        const r = await say("move the extra stuff to later")
+        const moved = r.actions.find((x) => x.type === "ITEM_UPDATED" && /later/.test(x.detail ?? ""))
+        if (r.usedAi || !moved?.activityId) return `nothing moved: ${r.reply}`
+        const left = await db.task.count({ where: { userId, title: { startsWith: "Big job" }, dueDate: { not: null } } })
+        return left < 5 ? null : "every job kept today's date"
+      })
+      await row("Tonight's prep: done", async () => {
+        const r = await say("I prepped the oats")
+        const a = r.actions.find((x) => x.type === "ITEM_UPDATED" && /prep done/.test(x.detail ?? ""))
+        return r.usedAi || !a ? `prep not marked: ${r.reply}` : (await db.activityEvent.count({ where: { userId, reason: "PREP" } })) ? null : "prep not recorded"
+      })
+      await row("Now: Low energy today", async () => {
+        const r = await say("low energy today")
+        const a = r.actions.find((x) => x.type === "LOW_ENERGY")
+        return r.usedAi || a?.kind !== "ON" ? `no low-energy action: ${r.reply}` : null
+      })
+      await row("Memories: make private, and undo", async () => {
+        const r = await say("make my ginger tea memory private")
+        const a = r.actions.find((x) => x.type === "ITEM_UPDATED" && x.itemType === "MEMORY")
+        if (r.usedAi || !a?.activityId) return `not marked: ${r.reply}`
+        if (!(await db.memory.findFirst({ where: { userId, content: { contains: "ginger" } } }))?.sensitive) return "memory is not private"
+        if ((await api("post", `/activity/${a.activityId}/undo`)).status !== 200) return "undo failed"
+        return (await db.memory.findFirst({ where: { userId, content: { contains: "ginger" } } }))?.sensitive ? "undo left it private" : null
+      })
+      await row("You: Sign out / export are pointed to, never done", async () => {
+        const out = await say("sign me out")
+        const exp = await say("export my data")
+        if (out.actions.length || exp.actions.length) return `took an action: ${out.actions.map((x) => x.type)} ${exp.actions.map((x) => x.type)}`
+        if (!/Sign out/.test(out.reply) || !/Account and data/.test(exp.reply)) return `no pointer: ${out.reply} / ${exp.reply}`
+        return (await db.userSettings.findUnique({ where: { userId } }))?.nightlyTime ? "a nudge setting was changed" : null
+      })
+      return failures.length ? `${failures.length} of 10 parity rows failed: ${failures.join(" | ")}` : null
+    },
+  },
+  {
+    id: "U5",
+    name: "Persona: reminders only. Three reminders kept, no goals, projects or habits pushed on them",
+    status: "ready",
+    async run({ api, say }) {
+      const said = "remind me to pay the electricity bill on the 5th, take my BP tablet every morning at 8, and call the plumber tomorrow at 11"
+      const r = await say(said)
+      const rems = ofType(r, "REMINDER_SET")
+      if (rems.length !== 3) return `${rems.length} reminders, expected 3 (reply: ${r.reply.slice(0, 100)})`
+      const bp = rems.find((x) => /bp|tablet/i.test(x.text ?? x.title ?? ""))
+      if (!bp || !/FREQ=DAILY/.test(bp.repeatRule ?? "")) return `tablet reminder repeat is ${bp?.repeatRule}`
+      if (hourIst(bp.remindAt!) !== 8) return `tablet at ${hourIst(bp.remindAt!)}:00, expected 8:00`
+      if (r.actions.some((x) => ["PROJECT_ADDED", "GOAL_PLAN", "HABIT_ADDED"].includes(x.type))) return "made a goal, project or habit out of plain reminders"
+      if (questions(r.reply) > 1) return "asked more than one question"
+      if ((await api("get", "/projects")).body.data?.length) return "a project exists for a reminders-only person"
+      // With no goals at all, Now must not invent any.
+      const now = await nowAt(api, `${nextWednesday()}T11:00`)
+      if (now.options?.some((o: any) => o.sourceType === "PROJECT")) return "Now suggested a goal they never set"
+      return founderBias(api, [r], said)
     },
   },
 ]

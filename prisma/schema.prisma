@@ -860,6 +860,17 @@ model UserSettings {
   // "In a meeting till 4": nothing is suggested until then.
   busyUntil DateTime?
 
+  // How much Ally starts on its own (plan 16 §3, ADR 0027): NORMAL (briefing,
+  // slot nudges, follow-ups, wrap-up, Sunday review) | QUIETER (briefing,
+  // wrap-up, Sunday review) | SILENT (only reminders the person set).
+  proactivity String @default("NORMAL")
+
+  // How this person wants Ally to be (ADR 0028). focus: ALL | REMEMBER | GOALS |
+  // SAVES | SUPPORT (what to lead with). directness: GENTLE | BALANCED | DIRECT
+  // (how firmly Ally says "not now" and how blunt its words are).
+  focus      String @default("ALL")
+  directness String @default("BALANCED")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

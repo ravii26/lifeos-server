@@ -24,7 +24,25 @@ export const assistantAskController = async (req: Request, res: Response) => {
 const chatSchema = z.object({
   message: z.string().min(1).max(4000),
   history: z
-    .array(z.object({ role: z.enum(["user", "assistant"]), text: z.string().max(4000) }))
+    .array(
+      z.object({
+        role: z.enum(["user", "assistant"]),
+        text: z.string().max(4000),
+        // What the turn made or touched ("move it" → the last of these).
+        refs: z
+          .array(
+            z.object({
+              type: z.enum(["TASK", "HABIT", "PROJECT", "NOTE", "GOAL_PLAN"]),
+              id: z.string().max(64).optional(),
+              title: z.string().max(300).optional(),
+              activityId: z.string().max(64).optional(),
+              goalText: z.string().max(4000).optional(),
+            }),
+          )
+          .max(12)
+          .optional(),
+      }),
+    )
     .max(20)
     .optional(),
 })
