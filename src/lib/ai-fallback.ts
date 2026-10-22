@@ -32,6 +32,43 @@ export const providerOrder = (
 
 const LABEL: Record<AiProviderName, string> = { aicredits: "AICredits", gemini: "Gemini", groq: "Groq" }
 
+// ---- temporary errors are retried, dead providers are skipped for a while ------------------
+// A free Gemini tier answers "503 busy" for a second or two now and then. Giving up at once
+// meant planning failed whenever the other two providers were also unusable, so a temporary
+// error is retried on the same provider. A bad key (401), no balance (402) or a refusal (403)
+// will not fix itself in seconds, so that provider is skipped for a few minutes instead of
+// being tried, and failing, on every message.
+
+const DEAD = /\b(?:401|402|403)\b|insufficient balance|invalid api key|expired_api_key|permission denied/i
+const TRANSIENT = /\b(?:429|500|502|503|504)\b|overloaded|high demand|service unavailable|fetch failed|ECONNRESET|ETIMEDOUT|socket hang up|timed? ?out/i
+
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+export const isDeadError = (err: unknown): boolean => DEAD.test(messageOf(err))
+export const isTransientError = (err: unknown): boolean => TRANSIENT.test(messageOf(err)) && !DEAD.test(messageOf(err))
+
+export const RETRY_DELAYS_MS = [1200, 3000]
+export const DEAD_FOR_MS = 5 * 60_000
+
+export async function callWithRetry<T>(
+  fn: () => Promise<T>,
+  delays: number[] = RETRY_DELAYS_MS,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn()
+    } catch (err) {
+      if (i >= delays.length || !isTransientError(err)) throw err
+      await sleep(delays[i]!)
+    }
+  }
+}
+
+const deadUntil = new Map<AiProviderName, number>()
+// For tests.
+export const resetDeadProviders = () => deadUntil.clear()
+
 // Every request made inside is logged under `label` (lib/ai-usage.ts).
 export function runWithAiFallback<T>(
   label: string,
@@ -52,13 +89,17 @@ async function tryProviders<T>(
     groq: !!providers.groq && !!env.GROQ_API_KEY,
   })
 
-  for (const name of order) {
+  // Skip providers that just failed for good, unless that would leave none (then try them all).
+  const live = order.filter((n) => (deadUntil.get(n) ?? 0) <= Date.now())
+
+  for (const name of live.length ? live : order) {
     try {
-      if (name === "gemini") return await providers.gemini!()
+      if (name === "gemini") return await callWithRetry(() => providers.gemini!())
       // Both OpenAI-compatible providers run the same function; the context
       // decides which one the request really goes to.
-      return await compatProvider.run(name === "aicredits" ? "aicredits" : "groq", () => providers.groq!())
+      return await callWithRetry(() => compatProvider.run(name === "aicredits" ? "aicredits" : "groq", () => providers.groq!()))
     } catch (err) {
+      if (isDeadError(err)) deadUntil.set(name, Date.now() + DEAD_FOR_MS)
       logger.warn(`${label}: falling back from ${LABEL[name]}...`, err)
     }
   }
