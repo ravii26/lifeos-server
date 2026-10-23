@@ -23,6 +23,8 @@ export const assistantAskController = async (req: Request, res: Response) => {
 
 const chatSchema = z.object({
   message: z.string().min(1).max(4000),
+  // Talk mode: the reply will be read aloud, so it is written to be heard.
+  spoken: z.boolean().optional(),
   history: z
     .array(
       z.object({
@@ -51,7 +53,7 @@ const chatSchema = z.object({
 export const assistantChatController = async (req: Request, res: Response) => {
   const parsed = chatSchema.safeParse(req.body)
   if (!parsed.success) throw new ValidationError("message is required")
-  const result = await assistantChat(req.user!.id, parsed.data.message, parsed.data.history)
+  const result = await assistantChat(req.user!.id, parsed.data.message, parsed.data.history, { spoken: parsed.data.spoken === true })
   sendSuccess(res, "Assistant reply", result)
 }
 

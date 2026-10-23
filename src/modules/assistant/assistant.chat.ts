@@ -177,6 +177,7 @@ const loadContext = async (userId: string, message: string) => {
     focus: asFocus(settings?.focus),
     directness: asDirectness(settings?.directness),
     myMoods,
+    spoken: false, // set per message by assistantChat (Talk mode)
     memories,
     patterns: patternFacts ? detectPatterns(patternFacts) : [],
   }
@@ -388,9 +389,14 @@ const parsePlan = (raw: string): Plan => {
 }
 
 // The fixed prompt, plus one line for how this person wants Ally to be (empty for the defaults).
+// Talk mode: the reply is read out by a voice, so it must sound right when heard.
+const SPOKEN_LINE =
+  'This reply will be READ ALOUD by a voice. Make "reply" one or two short, natural spoken sentences (under 40 words). No lists, bullet points, markdown, emoji, symbols or URLs. Write times and numbers the way you would say them ("half past seven in the evening"). Actions work as usual.'
+
 const systemText = (ctx: Ctx) => {
   const style = styleForPrompt(ctx.focus, ctx.directness)
-  return style ? `${SYSTEM_PROMPT}\n\nHow this person wants you to be: ${style}` : SYSTEM_PROMPT
+  const base = style ? `${SYSTEM_PROMPT}\n\nHow this person wants you to be: ${style}` : SYSTEM_PROMPT
+  return ctx.spoken ? `${base}\n\n${SPOKEN_LINE}` : base
 }
 
 const toMessages = (ctx: Ctx, message: string, history: ChatTurn[]) => [
@@ -980,6 +986,7 @@ export const assistantChat = async (
   userId: string,
   message: string,
   history: ChatTurn[] = [],
+  opts: { spoken?: boolean } = {},
 ): Promise<ChatResult> => {
   const text = message.trim()
 
@@ -1031,6 +1038,7 @@ export const assistantChat = async (
   }
 
   const ctx = await loadContext(userId, text)
+  ctx.spoken = opts.spoken === true
   const plan = await runWithAiFallback<Plan | null>(
     "Assistant chat",
     {
