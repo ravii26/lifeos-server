@@ -44,6 +44,7 @@ model User {
   nightlyCommitments  NightlyCommitment[]
   reminders           Reminder[]
   memories            Memory[]
+  logEntries          LogEntry[]
   activityEvents      ActivityEvent[]
   daySchedules        DaySchedule[]
   allyNotes           AllyNote[]
@@ -1150,6 +1151,27 @@ model Memory {
   updatedAt DateTime @updatedAt
 
   @@index([userId, createdAt])
+}
+
+// One number in the Log (doc 18 item 4): money spent, hours slept, weight.
+// Sums, averages and trends are worked out by code. `series` is a fixed set
+// (money | sleep | weight) checked in code; `label` keeps the person's own
+// words ("lunch"), grouped into categories only when a question is asked.
+model LogEntry {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  series String
+  value  Float
+  unit   String
+  label  String?
+  // The person's local day this belongs to.
+  date   DateTime @db.Date
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, series, date])
 }
 
 enum MemorySource {

@@ -1712,4 +1712,61 @@ export const scenarios: Scenario[] = [
       return founderBias(api, [r], said)
     },
   },
+  {
+    id: "L1",
+    name: "Counts and Log: +1 water, spending, sleep, weight, questions by code, Undo, no AI",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      const area = await careerId(api)
+      const hid = (await api("post", "/habits", { title: "Drink 8 glasses of water", areaId: area, habitType: "COUNT", targetCount: 8 })).body.data.id as string
+      const count = async () => (await db.habitLog.findFirst({ where: { habitId: hid }, orderBy: { date: "desc" } }))?.count ?? 0
+      const noAi = (r: ChatReplyShape, what: string) => (r.usedAi ? `${what}: used the AI (${r.reply.slice(0, 80)})` : null)
+      const undo = async (r: ChatReplyShape) => (await api("post", `/activity/${r.actions[0]!.activityId}/undo`)).status
+
+      // Counts add to today's number on the matching count habit.
+      const a = await say("+1 water")
+      if (noAi(a, "+1")) return noAi(a, "+1")
+      if (!ofType(a, "COUNT_ADDED").length || (await count()) !== 1 || !/1 of 8/.test(a.reply)) return `+1 water: ${a.reply}`
+      const b = await say("drank 3 glasses of water")
+      if (noAi(b, "drank 3")) return noAi(b, "drank 3")
+      if ((await count()) !== 4 || !/4 of 8/.test(b.reply)) return `drank 3: count ${await count()}: ${b.reply}`
+      if ((await undo(b)) !== 200 || (await count()) !== 1) return `count undo left ${await count()}`
+
+      // Spending: written, totalled by month, grouped by what it was for.
+      const l = await say("spent 250 on lunch")
+      if (noAi(l, "spend")) return noAi(l, "spend")
+      if (!ofType(l, "LOG_ADDED").length || !/₹250 for lunch/.test(l.reply)) return `spend: ${l.reply}`
+      const u = await say("paid 120 for uber")
+      if (!/₹370 this month/.test(u.reply)) return `month total: ${u.reply}`
+      const q = await say("how much did I spend this month?")
+      if (noAi(q, "spend question")) return noAi(q, "spend question")
+      if (!/₹370/.test(q.reply) || !/food/.test(q.reply) || !/transport/.test(q.reply)) return `spend answer: ${q.reply}`
+      const food = await say("how much did I spend on food this month")
+      if (!/₹250/.test(food.reply)) return `food answer: ${food.reply}`
+      if ((await undo(u)) !== 200) return "spend undo failed"
+      if ((await db.logEntry.count({ where: { userId, series: "money" } })) !== 1) return "undo did not remove the entry"
+
+      // Time is not money: this goes to the weekly-target / AI path, never to the Log.
+      const t = await say("spent 2 hours on DSA")
+      if (ofType(t, "LOG_ADDED").length) return "hours were logged as money"
+
+      // Sleep and weight: the latest of the day wins, answered plainly.
+      await say("slept 5 hours")
+      const sl = await say("slept 7 hours")
+      if (!ofType(sl, "LOG_ADDED").length) return `sleep: ${sl.reply}`
+      const sa = await say("how did I sleep this week?")
+      if (noAi(sa, "sleep question")) return noAi(sa, "sleep question")
+      if (!/7 h/.test(sa.reply) || /\b5\b/.test(sa.reply)) return `sleep answer should use the latest (7): ${sa.reply}`
+      const w = await say("weight 74.5")
+      if (!ofType(w, "LOG_ADDED").length) return `weight: ${w.reply}`
+      const wa = await say("what's my weight?")
+      if (!/74\.5 kg/.test(wa.reply)) return `weight answer: ${wa.reply}`
+      if (/streak|fail|lazy|behind|should/i.test([sa.reply, wa.reply, q.reply].join(" "))) return "judging wording in an answer"
+
+      // A count with no matching habit is not guessed: the AI or an ask decides.
+      const none = await say("+1 meditation")
+      if (ofType(none, "COUNT_ADDED").length) return "counted something with no count habit"
+      return null
+    },
+  },
 ]

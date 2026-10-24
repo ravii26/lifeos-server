@@ -32,6 +32,7 @@ import { weeklyTargets } from "../now/brain.service.js"
 import { setBusyService } from "../now/brain.actions.js"
 import { proposeGoalPlanService, type GoalPlanProposal } from "../goalplan/goalplan.service.js"
 import { matchTarget, quickIntent } from "./assistant.quick.js"
+import { logChat } from "./assistant.log.js"
 import { followUpChat } from "./assistant.followup.service.js"
 import { manageChat } from "./assistant.manage.service.js"
 import { editChat } from "./assistant.manage.edit.service.js"
@@ -100,6 +101,9 @@ export type ChatAction = (
   // A follow-up changed something Ally made ("move it to tomorrow", "make it 30 min",
   // "no, gym is at 9"). remindAt / reminderTime come back so the phone reschedules.
   | { type: "ITEM_REMOVED"; itemType: "TASK" | "HABIT" | "PROJECT" | "NOTE"; id: string; title: string; detail: string; activityId?: string }
+  // A number written to the Log (money, sleep, weight) or added to a count habit ("+1 water").
+  | { type: "LOG_ADDED"; series: "money" | "sleep" | "weight"; value: number; unit: string; label: string | null; title: string; activityId?: string }
+  | { type: "COUNT_ADDED"; habitId: string; title: string; count: number; target: number | null; detail: string; activityId?: string }
   | { type: "LOW_ENERGY"; on: boolean; kind: "ON" | "OFF"; title: string }
   | { type: "ITEM_UPDATED"; itemType: "TASK" | "HABIT" | "PROJECT" | "NOTE" | "AREA" | "MEMORY"; activityId?: string; id: string; title: string; detail: string; remindAt?: string; windowEnd?: string; repeatRule?: string; reminderTime?: string }
   // "Undo that" said in chat.
@@ -909,7 +913,8 @@ const quickChat = async (userId: string, text: string): Promise<ChatResult | nul
   }
   const c = await getClock(userId)
   const intent = quickIntent(text, clockNowMin(c))
-  if (!intent) return null
+  // Not a weekly-target phrase: counts and the Log ("+1 water", "spent 250 on lunch") are next.
+  if (!intent) return logChat(userId, text)
   if (intent.kind === "BUSY") {
     const r = await setBusyService(userId, intent.until, "CHAT").catch(() => null)
     if (!r) return null
@@ -941,7 +946,7 @@ const quickChat = async (userId: string, text: string): Promise<ChatResult | nul
   const unit = intent.minutes !== undefined ? "min" : "count"
   const targets = (await weeklyTargets(userId, c)).map((t) => ({ id: t.projectId, title: t.title, countUnit: t.countUnit, unit: t.unit }))
   const match = matchTarget(intent.what, unit, targets)
-  if (!match) return null // not clearly one of their weekly targets: the AI decides
+  if (!match) return logChat(userId, text) // not a weekly target: maybe a count habit ("did 2 glasses of water"), else the AI decides
   const r = await logProgressService(userId, { projectId: match.id, minutes: intent.minutes, count: intent.count }, "CHAT")
   return {
     role: "ASSISTANT",
