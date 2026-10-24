@@ -1825,4 +1825,72 @@ export const scenarios: Scenario[] = [
       return null
     },
   },
+  {
+    id: "L3",
+    name: "Time tracking: start / stop by chat, counts toward a weekly goal once, forgotten timers asked about, where time went, Undo, no AI",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      const noAi = (r: ChatReplyShape, what: string) => (r.usedAi ? `${what}: used the AI (${r.reply.slice(0, 80)})` : null)
+      const area = await careerId(api)
+      const dsa = await api("post", "/projects", { title: "DSA practice", areaId: area, kind: "PRACTICE", weeklyTargetMinutes: 360, sessionMinutes: 45, timeBlock: "MORNING" })
+      if (dsa.status !== 201) return `project not created (${dsa.status})`
+      const pid = dsa.body.data.id as string
+      const runningEntry = () => db.timeEntry.findFirst({ where: { userId, endedAt: null } })
+      const back = async (minutes: number) => db.timeEntry.updateMany({ where: { userId, endedAt: null }, data: { startedAt: new Date(Date.now() - minutes * 60_000) } })
+      const projectMinutes = async () => (await db.activityEvent.findMany({ where: { userId, type: "LOGGED", itemType: "PROJECT", itemId: pid, undoneAt: null } })).reduce((s, e) => s + (e.minutes ?? 0), 0)
+
+      // Start on a goal, 45 minutes pass, stop: the minutes count toward the week once.
+      const s1 = await say("start timer for DSA")
+      if (noAi(s1, "start")) return noAi(s1, "start")
+      const e1 = await runningEntry()
+      if (!ofType(s1, "TIMER_STARTED").length || e1?.itemType !== "PROJECT" || e1.itemId !== pid) return `start on a goal: ${JSON.stringify(e1)} / ${s1.reply}`
+      await back(45)
+      const st = await say("how long has it been?")
+      if (!/45 min so far/.test(st.reply)) return `status: ${st.reply}`
+      const p1 = await say("stop timer")
+      if (noAi(p1, "stop")) return noAi(p1, "stop")
+      const stopped = ofType(p1, "TIMER_STOPPED")[0] as any
+      if (!stopped || stopped.minutes < 44 || stopped.minutes > 46 || !/Stopped dsa practice: 4[456] min/.test(p1.reply)) return `stop: ${p1.reply}`
+      if ((await projectMinutes()) !== stopped.minutes) return `goal got ${await projectMinutes()} min, expected ${stopped.minutes} (counted once)`
+      if (await runningEntry()) return "a timer is still running after stop"
+
+      // A name that matches nothing is just a label; a new start closes the old one.
+      await say("start timer for reading")
+      const g = await say("start gym timer")
+      if (!/Stopped reading/.test(g.reply)) return `starting a second timer: ${g.reply}`
+      await back(20)
+      const p2 = await say("stop timer")
+      if (!/Stopped gym: 2[01] min/.test(p2.reply)) return `gym: ${p2.reply}`
+      if ((await db.timeEntry.count({ where: { userId, endedAt: null } })) !== 0) return "two timers running"
+
+      // A forgotten timer is asked about, never guessed; a number from the person closes it.
+      await say("start timer for writing")
+      await back(5 * 60)
+      const f = await say("stop timer")
+      if (!/forgotten|looks like/.test(f.reply) || !(await runningEntry())) return `forgotten timer: ${f.reply}`
+      const fixed = await say("stop timer, it was 30 min")
+      if (!/Stopped writing: 30 min/.test(fixed.reply) || (await runningEntry())) return `fixed: ${fixed.reply}`
+
+      // Where the time went, plain and without judging the rest.
+      const w = await say("where did my time go today?")
+      if (noAi(w, "where")) return noAi(w, "where")
+      if (!/Dsa practice 4[456] min/.test(w.reply) || !/Gym 2[01] min/.test(w.reply) || !/Writing 30 min/.test(w.reply) || !/timed in all/.test(w.reply)) return `where: ${w.reply}`
+      if (/wast|lazy|idle|behind|should|only|fail/i.test(w.reply)) return `judging wording: ${w.reply}`
+
+      // Undo of a stop removes the entry and the minutes it added to the goal.
+      if ((await api("post", `/activity/${stopped.activityId}/undo`)).status !== 200) return "undo failed"
+      if ((await projectMinutes()) !== 0) return `undo left ${await projectMinutes()} min on the goal`
+      if (await db.timeEntry.findFirst({ where: { userId, label: "dsa practice" } })) return "undo left the time entry"
+
+      // Discard saves nothing and can be undone.
+      await say("start timer for email")
+      const d = await say("discard timer")
+      if (!/Nothing was saved/.test(d.reply) || (await runningEntry())) return `discard: ${d.reply}`
+      if ((await api("post", `/activity/${d.actions[0]!.activityId}/undo`)).status !== 200 || !(await runningEntry())) return "undo of discard did not bring the timer back"
+      const none = await say("discard timer")
+      const stopNone = await say("stop timer")
+      if (!/No timer is running/.test(stopNone.reply)) return `stop with none: ${stopNone.reply}`
+      return none.usedAi ? "discard used the AI" : null
+    },
+  },
 ]

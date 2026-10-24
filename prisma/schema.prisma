@@ -45,6 +45,7 @@ model User {
   reminders           Reminder[]
   memories            Memory[]
   logEntries          LogEntry[]
+  timeEntries         TimeEntry[]
   activityEvents      ActivityEvent[]
   daySchedules        DaySchedule[]
   allyNotes           AllyNote[]
@@ -1175,6 +1176,30 @@ model LogEntry {
   createdAt DateTime @default(now())
 
   @@index([userId, series, date])
+}
+
+// One stretch of timed time (doc 18 item 6). A row with no endedAt is the running
+// timer; at most one per person, kept in code. `label` is what the person called
+// it; itemType / itemId say which goal, habit or to-do it was linked to, if any.
+model TimeEntry {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  label    String
+  itemType String? // PROJECT | HABIT | TASK
+  itemId   String?
+
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  minutes   Int?
+  // The person's local day it started.
+  date      DateTime  @db.Date
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, date])
+  @@index([userId, endedAt])
 }
 
 enum MemorySource {

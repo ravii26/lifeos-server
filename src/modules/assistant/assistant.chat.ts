@@ -104,6 +104,9 @@ export type ChatAction = (
   // A number written to the Log (money, sleep, weight) or added to a count habit ("+1 water").
   | { type: "LOG_ADDED"; series: "money" | "sleep" | "weight"; value: number; unit: string; label: string | null; title: string; activityId?: string }
   // A limit set ("max 1 h Instagram", "no sugar") or time added to one.
+  // A timer started or stopped ("start timer for DSA", "stop timer"); minutes is 0 when discarded.
+  | { type: "TIMER_STARTED"; id: string; title: string; activityId?: string }
+  | { type: "TIMER_STOPPED"; id: string; title: string; minutes: number; activityId?: string }
   | { type: "LIMIT_SET"; id: string; title: string; detail: string; activityId?: string }
   | { type: "LIMIT_USED"; id: string; title: string; detail: string; activityId?: string }
   | { type: "COUNT_ADDED"; habitId: string; title: string; count: number; target: number | null; detail: string; activityId?: string }

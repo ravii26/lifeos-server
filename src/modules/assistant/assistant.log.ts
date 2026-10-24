@@ -25,6 +25,8 @@ import {
 } from "../log/log.rules.js"
 import { limitIntent } from "../log/limits.rules.js"
 import { limitChat, statusLine } from "./assistant.limits.js"
+import { timeIntent } from "../log/time.rules.js"
+import { timeChat } from "./assistant.time.js"
 import type { ChatResult } from "./assistant.chat.js"
 
 const DAY_MS = 86_400_000
@@ -111,6 +113,8 @@ const weightProject = (userId: string) =>
   })
 
 export const logChat = async (userId: string, text: string): Promise<ChatResult | null> => {
+  const timed = timeIntent(text)
+  if (timed) return timeChat(userId, timed)
   const limit = limitIntent(text)
   if (limit) {
     const r = await limitChat(userId, await getUserTimezone(userId), limit)

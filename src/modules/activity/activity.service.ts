@@ -36,6 +36,8 @@ export type UndoPayload =
   | { kind: "RESTORE_ALLY_NOTE"; note: { collection: string; template: string; title: string; items: string[]; text: string | null } }
   | { kind: "DELETE_METRIC_ENTRY"; entryId: string }
   | { kind: "DELETE_LOG_ENTRY"; entryId: string }
+  | { kind: "DELETE_TIME_ENTRY"; entryId: string }
+  | { kind: "RESTORE_TIME_ENTRY"; entry: { label: string; itemType: string | null; itemId: string | null; startedAt: string; date: string } }
   | { kind: "RESTORE_MILESTONE"; milestoneId: string }
   | { kind: "RESTORE_PROJECT_STATUS"; projectId: string; prev: string }
   | { kind: "RESTORE_DUE"; items: { taskId: string; prev: string | null }[] }
@@ -158,6 +160,17 @@ const applyUndo = async (userId: string, undo: UndoPayload): Promise<void> => {
     case "RESTORE_ALLY_NOTE":
       await prisma.allyNote.create({ data: { userId, ...undo.note, template: undo.note.template as "LIST" } })
       return
+    case "DELETE_TIME_ENTRY":
+      await prisma.timeEntry.deleteMany({ where: { id: undo.entryId, userId } })
+      return
+    case "RESTORE_TIME_ENTRY": {
+      // A discarded timer comes back running, unless another one has started since.
+      if (await prisma.timeEntry.findFirst({ where: { userId, endedAt: null }, select: { id: true } })) return
+      await prisma.timeEntry.create({
+        data: { userId, label: undo.entry.label, itemType: undo.entry.itemType, itemId: undo.entry.itemId, startedAt: new Date(undo.entry.startedAt), date: new Date(undo.entry.date) },
+      })
+      return
+    }
     case "DELETE_LOG_ENTRY":
       await prisma.logEntry.deleteMany({ where: { id: undo.entryId, userId } })
       return
