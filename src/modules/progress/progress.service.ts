@@ -259,7 +259,7 @@ export const refreshHabitStagesService = async (userId: string, c?: Clock): Prom
   const clock = c ?? (await getClock(userId))
   const since = dateFromKey(addKeyDays(clock.todayKey, -70))
   const habits = await prisma.habit.findMany({
-    where: { userId, isActive: true },
+    where: { userId, isActive: true, isLimit: false },
     include: { logs: { where: { completed: true, date: { gte: since } }, select: { date: true } } },
   })
   const out: HabitStageDto[] = []
@@ -316,7 +316,7 @@ export const weekCardService = async (userId: string, at?: string): Promise<Week
       select: { type: true, itemType: true, itemId: true },
     }),
     prisma.habit.findMany({
-      where: { userId, isActive: true },
+      where: { userId, isActive: true, isLimit: false },
       include: { logs: { where: { completed: true, date: { gte: dateFromKey(addKeyDays(c.todayKey, -6)) } }, select: { date: true } } },
     }),
     listStandsService(userId),

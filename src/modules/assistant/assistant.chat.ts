@@ -103,6 +103,9 @@ export type ChatAction = (
   | { type: "ITEM_REMOVED"; itemType: "TASK" | "HABIT" | "PROJECT" | "NOTE"; id: string; title: string; detail: string; activityId?: string }
   // A number written to the Log (money, sleep, weight) or added to a count habit ("+1 water").
   | { type: "LOG_ADDED"; series: "money" | "sleep" | "weight"; value: number; unit: string; label: string | null; title: string; activityId?: string }
+  // A limit set ("max 1 h Instagram", "no sugar") or time added to one.
+  | { type: "LIMIT_SET"; id: string; title: string; detail: string; activityId?: string }
+  | { type: "LIMIT_USED"; id: string; title: string; detail: string; activityId?: string }
   | { type: "COUNT_ADDED"; habitId: string; title: string; count: number; target: number | null; detail: string; activityId?: string }
   | { type: "LOW_ENERGY"; on: boolean; kind: "ON" | "OFF"; title: string }
   | { type: "ITEM_UPDATED"; itemType: "TASK" | "HABIT" | "PROJECT" | "NOTE" | "AREA" | "MEMORY"; activityId?: string; id: string; title: string; detail: string; remindAt?: string; windowEnd?: string; repeatRule?: string; reminderTime?: string }
@@ -136,7 +139,7 @@ const loadContext = async (userId: string, message: string) => {
       select: { id: true, title: true, dueDate: true, areaId: true },
     }),
     prisma.habit.findMany({
-      where: { userId, isActive: true },
+      where: { userId, isActive: true, isLimit: false },
       take: 40,
       select: { id: true, title: true, logs: { where: { date: dateFromKey(todayKey), completed: true }, select: { id: true } } },
     }),

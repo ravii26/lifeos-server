@@ -60,6 +60,10 @@ describe("finding it by name", () => {
   ]
   it("one clear match", () => {
     expect(findItems("water", items)).toEqual({ type: "ONE", item: items[2] })
+    // "limit" only says what kind of habit it is (ADR 0037); it is ignored when nothing else matches.
+    const ig = { kind: "HABIT", id: "ig", title: "Instagram" } as Item
+    expect(findItems("instagram limit", [...items, ig])).toEqual({ type: "ONE", item: ig })
+    expect(findItems("limit", [...items, ig])).toEqual({ type: "NONE" })
     expect(findItems("passport", items)).toEqual({ type: "ONE", item: items[4] })
     expect(findItems("guitar", items)).toEqual({ type: "ONE", item: items[3] })
   })

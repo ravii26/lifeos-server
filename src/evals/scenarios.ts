@@ -1769,4 +1769,60 @@ export const scenarios: Scenario[] = [
       return null
     },
   },
+  {
+    id: "L2",
+    name: "Limits: set by chat, time and counts added, days kept (never a streak), hidden from Now / habits, Undo, no AI",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      const noAi = (r: ChatReplyShape, what: string) => (r.usedAi ? `${what}: used the AI (${r.reply.slice(0, 80)})` : null)
+      const limit = async (title: string) => db.habit.findFirst({ where: { userId, title, isLimit: true } })
+
+      // Setting limits.
+      const a = await say("limit Instagram to 1 hour")
+      if (noAi(a, "limit")) return noAi(a, "limit")
+      const ig = await limit("Instagram")
+      if (!ofType(a, "LIMIT_SET").length || !ig || ig.habitType !== "TIMER" || ig.targetMinutes !== 60 || ig.reminderTime) return `time limit: ${JSON.stringify(ig)} / ${a.reply}`
+      const b = await say("no sugar")
+      const sugar = await limit("Sugar")
+      if (noAi(b, "no sugar")) return noAi(b, "no sugar")
+      if (!sugar || sugar.habitType !== "COUNT" || sugar.targetCount !== 0) return `never limit: ${JSON.stringify(sugar)} / ${b.reply}`
+      if (/streak|fail|lazy|behind|should/i.test(a.reply + b.reply)) return "judging wording when setting a limit"
+
+      // Using some: under, then past the cap.
+      const u1 = await say("spent 40 min on instagram")
+      if (noAi(u1, "usage")) return noAi(u1, "usage")
+      if (!ofType(u1, "LIMIT_USED").length || !/40 min of 1 h today, 20 min left/.test(u1.reply)) return `under the cap: ${u1.reply}`
+      const u2 = await say("scrolled instagram for 30 min")
+      if (!/1 h 10 min today, past your 1 h/.test(u2.reply) || !/Tomorrow starts fresh/.test(u2.reply)) return `past the cap: ${u2.reply}`
+      if (/streak|fail|lazy|shame|behind|should/i.test(u1.reply + u2.reply)) return "judging wording after using a limit"
+
+      // A count limit, and the questions.
+      const c = await say("+1 sugar")
+      if (!ofType(c, "COUNT_ADDED").length || !/Sugar: 1 today/.test(c.reply)) return `count on a never-limit: ${c.reply}`
+      const q = await say("how's my instagram limit?")
+      if (noAi(q, "question")) return noAi(q, "question")
+      if (!/1 h 10 min today/.test(q.reply)) return `instagram question: ${q.reply}`
+      const all = await say("show my limits")
+      if (!/Instagram/.test(all.reply) || !/Sugar/.test(all.reply)) return `all limits: ${all.reply}`
+
+      // Time that does not belong to a limit is left alone.
+      const dsa = await say("spent 2 hours on DSA")
+      if (ofType(dsa, "LIMIT_USED").length) return "time on something else was added to a limit"
+
+      // Limits are rules, not things to do: not in the habits list, not at Now, never counted as done.
+      const habits = ((await api("get", "/habits")).body.data ?? []) as { title: string }[]
+      const names = (Array.isArray(habits) ? habits : (habits as any).items ?? []).map((h: any) => h.title)
+      if (names.includes("Instagram") || names.includes("Sugar")) return `limits are in the habits list: ${names.join(", ")}`
+      const now = await nowAt(api, new Date().toISOString().slice(0, 16))
+      if (JSON.stringify(now?.options ?? []).match(/Instagram|Sugar/)) return `Now offered a limit: ${JSON.stringify(now.options).slice(0, 120)}`
+      if ((await db.habitLog.count({ where: { userId, completed: true } })) !== 0) return "a limit log counted as completed"
+
+      // Undo and removing by chat.
+      if ((await api("post", `/activity/${b.actions[0]!.activityId}/undo`)).status !== 200) return "undo failed"
+      if ((await limit("Sugar"))?.isActive !== false) return "undo did not remove the limit"
+      const rm = await say("remove my instagram limit")
+      if (!ofType(rm, "ITEM_REMOVED").length || (await limit("Instagram"))?.isActive !== false) return `remove by chat: ${rm.reply}`
+      return null
+    },
+  },
 ]

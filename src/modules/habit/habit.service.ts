@@ -93,6 +93,7 @@ export const listHabitsService = async (
   since.setUTCDate(since.getUTCDate() - STATS_WINDOW)
 
   const where = {
+    isLimit: false, // limits are rules, not habits to tick (ADR 0037)
     ...(filters.areaId && { areaId: filters.areaId }),
     ...(filters.isActive && { isActive: filters.isActive === "true" }),
   }

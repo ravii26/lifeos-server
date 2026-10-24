@@ -126,7 +126,7 @@ export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandi
       take: 200,
     }),
     prisma.habit.findMany({
-      where: { userId, isActive: true },
+      where: { userId, isActive: true, isLimit: false },
       include: { logs: { where: { date: dateFromKey(c.todayKey), completed: true }, select: { id: true } } },
     }),
     weeklyTargets(userId, c),

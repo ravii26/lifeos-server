@@ -355,6 +355,9 @@ model Habit {
   // Done the evening before so tomorrow's habit can't fail on setup
   // ("pack the gym bag").
   prepareAhead   String?
+  // A limit ("max 1 h Instagram", "no sugar") is not something to do: targetMinutes /
+  // targetCount hold the cap, and it is never suggested, reminded or counted as adherence.
+  isLimit        Boolean   @default(false)
   habitType      HabitType @default(BOOLEAN)
   targetCount    Int?
   targetMinutes  Int?

@@ -60,7 +60,7 @@ export const getPlanService = async (userId: string, at?: string): Promise<PlanD
       take: 500,
     }),
     prisma.habit.findMany({
-      where: { userId, isActive: true },
+      where: { userId, isActive: true, isLimit: false },
       include: { logs: { where: { completed: true, date: { gte: since } }, select: { date: true } } },
     }),
     listStandsService(userId, { all: true }),

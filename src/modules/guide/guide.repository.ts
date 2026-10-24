@@ -24,7 +24,7 @@ export const findGuideContext = async (userId: string, since: Date) => {
       },
     }),
     prisma.habit.findMany({
-      where: { userId, isActive: true },
+      where: { userId, isActive: true, isLimit: false },
       select: {
         id: true,
         title: true,

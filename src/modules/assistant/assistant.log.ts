@@ -23,6 +23,8 @@ import {
   type LogRow,
   type LogSeries,
 } from "../log/log.rules.js"
+import { limitIntent } from "../log/limits.rules.js"
+import { limitChat, statusLine } from "./assistant.limits.js"
 import type { ChatResult } from "./assistant.chat.js"
 
 const DAY_MS = 86_400_000
@@ -64,14 +66,22 @@ const addEntry = async (userId: string, tz: string, e: Extract<LogIntent, { kind
 }
 
 const addCount = async (userId: string, tz: string, c: Extract<LogIntent, { kind: "COUNT" }>): Promise<ChatResult | null> => {
-  const habits = await prisma.habit.findMany({ where: { userId, isActive: true, habitType: "COUNT" }, select: { id: true, title: true, targetCount: true } })
+  const habits = await prisma.habit.findMany({
+    where: { userId, isActive: true, habitType: "COUNT" },
+    select: { id: true, title: true, habitType: true, targetCount: true, targetMinutes: true, isLimit: true, createdAt: true },
+  })
   const habit = matchCountHabit(c.what, habits)
   if (!habit) return null // not clearly one of their count habits: the AI decides
   const today = localDateOnly(new Date(), tz)
   const prev = await prisma.habitLog.findUnique({ where: { habitId_date: { habitId: habit.id, date: today } }, select: { count: true } })
   const count = (prev?.count ?? 0) + c.n
   const done = habit.targetCount ? count >= habit.targetCount : true
-  const r = await logHabitService(habit.id, userId, { count, completed: done }, { source: "CHAT" })
+  // A limit's logs are never "completed": it is a cap, not something to finish.
+  const r = await logHabitService(habit.id, userId, { count, completed: habit.isLimit ? false : done }, { source: "CHAT" })
+  if (habit.isLimit) {
+    const line = await statusLine(userId, tz, habit)
+    return reply(line, [{ type: "COUNT_ADDED", habitId: habit.id, title: habit.title, count, target: habit.targetCount ?? null, detail: `${count}/${habit.targetCount ?? 0}`, activityId: r.activityId }])
+  }
   const of = habit.targetCount ? ` of ${habit.targetCount}` : ""
   const text = `${habit.title}: ${count}${of}.${habit.targetCount && done && (prev?.count ?? 0) < habit.targetCount ? " That's today's target." : ""}`
   return reply(text, [{ type: "COUNT_ADDED", habitId: habit.id, title: habit.title, count, target: habit.targetCount ?? null, detail: `${count}${of}`, activityId: r.activityId }])
@@ -101,6 +111,11 @@ const weightProject = (userId: string) =>
   })
 
 export const logChat = async (userId: string, text: string): Promise<ChatResult | null> => {
+  const limit = limitIntent(text)
+  if (limit) {
+    const r = await limitChat(userId, await getUserTimezone(userId), limit)
+    if (r) return r
+  }
   const intent = logIntent(text)
   if (!intent) return null
   if ((intent.kind === "ENTRY" || intent.kind === "ASK") && intent.series === "weight") {

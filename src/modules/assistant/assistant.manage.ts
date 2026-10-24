@@ -163,6 +163,9 @@ export const findItems = (name: string, items: Item[]): Match => {
   })
   if (found.length === 1) return { type: "ONE", item: found[0]! }
   if (found.length > 1) return { type: "MANY", items: found.slice(0, 5) }
+  // "remove my instagram limit": the habit is called Instagram, "limit" only says what kind (ADR 0037).
+  const plain = want.filter((w) => w !== "limit" && w !== "limits")
+  if (plain.length && plain.length < want.length) return findItems(plain.join(" "), items)
   return { type: "NONE" }
 }
 
