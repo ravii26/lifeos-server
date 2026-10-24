@@ -1604,6 +1604,94 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    id: "K1",
+    name: "Get to know you: one question at a time, 2 a day, answers set the day and settings, skips rest, no AI",
+    status: "ready",
+    async run({ api, db, userId }) {
+      const next = async () => (await api("get", "/know")).body.data as { question: { id: string; options: string[] } | null; answered: number; total: number }
+      const answer = (id: string, a: string) => api("post", "/know", { id, answer: a })
+      // Pretend a day has passed: the daily cap counts today's questions only.
+      const nextDay = () => db.activityEvent.updateMany({ where: { userId, title: { startsWith: "know:" } }, data: { at: ago(1) } })
+
+      let q = await next()
+      if (q.question?.id !== "goal" || q.total !== 10 || q.answered !== 0) return `first question: ${JSON.stringify(q)}`
+
+      const g = await answer("goal", "switch to a better job")
+      if (g.status !== 200 || !/make me a plan/.test(g.body.data.message)) return `goal answer: ${JSON.stringify(g.body)}`
+      if (!(await db.memory.findFirst({ where: { userId, kind: "GOAL", content: { contains: "better job" } } }))) return "goal not remembered"
+
+      q = await next()
+      if (q.question?.id !== "wake") return `second question ${q.question?.id}`
+      const w = await answer("wake", "6 to 7")
+      if (/days are set/.test(w.body.data.message)) return "set the day from the wake time alone"
+      q = await next()
+      if (q.question !== null) return `a third question today: ${q.question.id}`
+
+      await nextDay()
+      q = await next()
+      if (q.question?.id !== "sleep" || q.answered !== 2) return `next day: ${JSON.stringify(q)}`
+      const s = await answer("sleep", "11 to 12")
+      if (!/up at 6:30 am/.test(s.body.data.message) || !/bed around 11:30 pm/.test(s.body.data.message)) return `day not set: ${s.body.data.message}`
+      if ((await db.daySchedule.count({ where: { userId } })) !== 7) return "the week was not built"
+
+      // A reply that can't be read is asked again, and nothing is recorded.
+      const before = await db.activityEvent.count({ where: { userId, title: "know:hours" } })
+      const bad = await answer("hours", "all day")
+      if (!bad.body.data.retry || (await db.activityEvent.count({ where: { userId, title: "know:hours" } })) !== before) return `bad hours: ${JSON.stringify(bad.body)}`
+
+      await nextDay()
+      const h = await answer("hours", "10 to 6")
+      if (!/work 10 am to 6 pm/.test(h.body.data.message)) return `hours: ${h.body.data.message}`
+      const monday = (await db.daySchedule.findFirst({ where: { userId, weekday: 1 } }))!.blocks as { block: string; start: string; end: string }[]
+      const sunday = (await db.daySchedule.findFirst({ where: { userId, weekday: 0 } }))!.blocks as { block: string }[]
+      if (!monday.some((b) => b.block === "OFFICE" && b.start === "10:00" && b.end === "18:00")) return `weekday has no 10 to 6: ${JSON.stringify(monday)}`
+      if (sunday.some((b) => b.block === "OFFICE")) return "Sunday got office hours"
+
+      // Skipping rests the question; the next one comes instead.
+      await nextDay()
+      await api("post", "/know", { id: "drain", skip: true })
+      await answer("style", "Direct")
+      const st = await db.userSettings.findUnique({ where: { userId } })
+      if (st?.directness !== "DIRECT") return `style not applied: ${st?.directness}`
+      await nextDay()
+      q = await next()
+      if (q.question?.id === "drain") return "a skipped question came straight back"
+      await answer("help", "My goals")
+      if ((await db.userSettings.findUnique({ where: { userId } }))?.focus !== "GOALS") return "help not applied"
+      return null
+    },
+  },
+  {
+    id: "K2",
+    name: "Get to know you: never asks what is already known, and stays quiet when sick",
+    status: "ready",
+    async run({ api, db, userId }) {
+      const next = async () => (await api("get", "/know")).body.data.question as { id: string } | null
+      const nextDay = () => db.activityEvent.updateMany({ where: { userId, title: { startsWith: "know:" } }, data: { at: ago(1) } })
+      // The day was already set another way (the first-run form, or chat).
+      await api("put", "/now/basics", { wake: "07:00", sleep: "23:30", officeDays: [1, 2, 3, 4, 5], office: { start: "10:00", end: "20:30" } })
+      await api("put", "/now/mode", { mode: "SICK" })
+      if ((await next()) !== null) return "asked a question while sick"
+      await api("put", "/now/mode", { mode: "NORMAL" })
+
+      const seen: string[] = []
+      for (let i = 0; i < 12; i++) {
+        const q = await next()
+        if (!q) {
+          await nextDay()
+          if (!(await next())) break
+          continue
+        }
+        seen.push(q.id)
+        await api("post", "/know", { id: q.id, skip: true })
+        // A skipped question rests, so the list moves on.
+      }
+      if (["wake", "sleep", "hours"].some((id) => seen.includes(id))) return `asked what was already known: ${seen.join(", ")}`
+      if (!seen.includes("goal")) return `never got to the goal question: ${seen.join(", ")}`
+      return null
+    },
+  },
+  {
     id: "U5",
     name: "Persona: reminders only. Three reminders kept, no goals, projects or habits pushed on them",
     status: "ready",

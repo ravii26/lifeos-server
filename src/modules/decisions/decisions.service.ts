@@ -52,6 +52,7 @@ export const answerProfilePromptService = async (
   }
   const key = field.split(".")[1] as "thisYearGoal" | "purpose" | "lifeVision" | "bigPicture"
   await upsertIdentityService(userId, { [key]: value })
+  briefingCache.delete(userId)
 }
 
 // A brand-new account has no areas/goals/tasks/habits/identity for the coach
@@ -114,7 +115,21 @@ const coldStartResult = (): DecisionResult => ({
   profilingPrompt: null,
 })
 
-export const getDecisionsService = async (userId: string): Promise<DecisionResult> => {
+// The "What Now" briefing runs an AI call of about 3,000 tokens, and older app versions asked for
+// it every time they started. It is kept per person for a few hours, so opening the app many
+// times costs one call, not one per open. Answering a profile question makes the next one fresh.
+const BRIEFING_CACHE_MS = 6 * 60 * 60 * 1000
+const briefingCache = new Map<string, { at: number; result: DecisionResult }>()
+
+export const getDecisionsService = async (userId: string, opts: { fresh?: boolean } = {}): Promise<DecisionResult> => {
+  const hit = briefingCache.get(userId)
+  if (!opts.fresh && hit && Date.now() - hit.at < BRIEFING_CACHE_MS) return hit.result
+  const result = await computeDecisions(userId)
+  briefingCache.set(userId, { at: Date.now(), result })
+  return result
+}
+
+const computeDecisions = async (userId: string): Promise<DecisionResult> => {
   const context = await findDecisionContext(userId)
 
   if (isColdStart(context)) {

@@ -4,7 +4,7 @@ import { sendSuccess } from "../../shared/utils/response.util.js"
 import { ValidationError } from "../../shared/utils/errors.util.js"
 
 export const getDecisionsController = async (req: Request, res: Response) => {
-  const result = await getDecisionsService(req.user!.id)
+  const result = await getDecisionsService(req.user!.id, { fresh: req.query.fresh === "1" })
   sendSuccess(res, "Decisions generated", result)
 }
 
