@@ -7,6 +7,7 @@ import {
   nextService,
 } from "./guide.service.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
+import { batchSavesService, decideManyService, savesSummaryService, staleSavesService } from "./saves.batch.service.js"
 import { createSaveService, decideSaveService, getSaveService, listMoodsService, listSavesService, setSaveMoodsService, setSavePurposeService } from "./guide.saves.service.js"
 import { HttpStatus } from "../../shared/constants/httpStatus.js"
 import { ValidationError } from "../../shared/utils/errors.util.js"
@@ -39,12 +40,30 @@ export const createSaveController = async (req: Request, res: Response) => {
   const text = (req.body?.text as string | undefined)?.trim() || undefined
   const file = req.file
   if (!text && !file) throw new ValidationError("Share a link, some text, or a screenshot")
-  if (file && !file.mimetype.startsWith("image/")) throw new ValidationError("Screenshots must be images")
+  if (file && !file.mimetype.startsWith("image/") && file.mimetype !== "application/pdf") throw new ValidationError("Share an image or a PDF")
   const save = await createSaveService(req.user!.id, {
     text,
     file: file ? { buffer: file.buffer, mimeType: file.mimetype } : undefined,
   })
   sendSuccess(res, "Save read", save, HttpStatus.CREATED)
+}
+
+// POST /guide/saves/batch — up to 10 shared links at once, triaged together.
+export const batchSavesController = async (req: Request, res: Response) => {
+  sendSuccess(res, "Saved", await batchSavesService(req.user!.id, req.body.items), 201)
+}
+
+// POST /guide/saves/decide-many — put several undecided saves in Watch later, or let them go.
+export const decideManySavesController = async (req: Request, res: Response) => {
+  const count = await decideManyService(req.user!.id, req.body.ids, req.body.choice)
+  sendSuccess(res, "Decided", { count })
+}
+
+// GET /guide/saves/summary?days=7 — saved, acted on, waiting, and the ones undecided for a month.
+export const savesSummaryController = async (req: Request, res: Response) => {
+  const days = Math.min(90, Math.max(1, Number(req.query.days) || 7))
+  const [counts, stale] = await Promise.all([savesSummaryService(req.user!.id, days), staleSavesService(req.user!.id)])
+  sendSuccess(res, "Saves", { days, counts, stale: stale.map((s) => ({ id: s.id, title: s.title, createdAt: s.createdAt })) })
 }
 
 export const decideSaveController = async (req: Request, res: Response) => {

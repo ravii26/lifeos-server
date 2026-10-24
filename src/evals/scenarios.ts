@@ -1894,4 +1894,359 @@ export const scenarios: Scenario[] = [
       return none.usedAi ? "discard used the AI" : null
     },
   },
+  {
+    id: "L4",
+    name: "Lists and shopping: add, out of, got, untick, remove, clear what I got, show, Undo, another list untouched, no AI",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      const noAi = (r: ChatReplyShape, what: string) => (r.usedAi ? `${what}: used the AI (${r.reply.slice(0, 80)})` : null)
+      const shop = () => db.allyNote.findFirst({ where: { userId, collection: "Shopping" } })
+      const undo = async (r: ChatReplyShape) => (await api("post", `/activity/${r.actions[0]!.activityId}/undo`)).status
+      // A list the person already taught: it must be left alone.
+      await db.allyNote.create({ data: { userId, collection: "Breakfast", template: "LIST", title: "Breakfast options", items: ["poha", "oats"] } })
+
+      // The first add starts the shopping list.
+      const a = await say("add milk, eggs and bread to my shopping list")
+      if (noAi(a, "add")) return noAi(a, "add")
+      if (!ofType(a, "NOTE_UPDATED").length || (await shop())?.items.join("|") !== "Milk|Eggs|Bread") return `first add: ${JSON.stringify((await shop())?.items)} / ${a.reply}`
+      const o = await say("we're out of curd")
+      if (noAi(o, "out of")) return noAi(o, "out of")
+      if (!(await shop())?.items.includes("Curd")) return `out of: ${o.reply}`
+      const dup = await say("add milk to shopping")
+      if (!/already on your shopping list/.test(dup.reply) || (await shop())?.items.filter((i) => i === "Milk").length !== 1) return `duplicate: ${dup.reply}`
+
+      // Got: ticked, not deleted. A phrase that is no list item is left to the AI (checked at unit level).
+      const g = await say("got the milk and eggs")
+      if (noAi(g, "got")) return noAi(g, "got")
+      let n = await shop()
+      if (n?.done.slice().sort().join("|") !== "Eggs|Milk" || n.items.length !== 4 || !/2 left/.test(g.reply)) return `got: done ${n?.done} items ${n?.items}: ${g.reply}`
+      const w = await say("show shopping")
+      if (!/Bread, Curd/.test(w.reply) || !/Got: /.test(w.reply)) return `show: ${w.reply}`
+      if ((await undo(g)) !== 200 || (await shop())?.done.length !== 0) return `undo of got left ${(await shop())?.done}`
+
+      // Untick, remove, and clearing only what was ticked.
+      await say("got milk")
+      const u = await say("untick milk")
+      if ((await shop())?.done.length !== 0 || !/Unticked Milk/.test(u.reply)) return `untick: ${u.reply}`
+      await say("got eggs and bread")
+      const c = await say("clear what I got")
+      n = await shop()
+      if (n?.items.join("|") !== "Milk|Curd" || n.done.length !== 0 || !/Cleared 2 ticked/.test(c.reply)) return `clear ticked: items ${n?.items} done ${n?.done}: ${c.reply}`
+      if ((await undo(c)) !== 200 || (await shop())?.items.length !== 4 || (await shop())?.done.length !== 2) return "undo of clear did not bring the ticked items back"
+      const r = await say("remove curd from shopping")
+      if ((await shop())?.items.includes("Curd") || !ofType(r, "NOTE_UPDATED").length) return `remove: ${r.reply}`
+
+      // Movies: a well-known list is started on first use, and watched ticks it.
+      const m = await say("put Interstellar on my movies list")
+      if (!/Started your movies to watch/.test(m.reply)) return `movies: ${m.reply}`
+      const wt = await say("watched Interstellar")
+      const movies = await db.allyNote.findFirst({ where: { userId, collection: "Movies" } })
+      if (!movies?.done.includes("Interstellar")) return `watched: ${wt.reply}`
+
+      // The other list is untouched.
+      const br = await db.allyNote.findFirst({ where: { userId, collection: "Breakfast" } })
+      if (br?.items.join("|") !== "poha|oats") return `breakfast changed: ${br?.items}`
+      const all = await say("clear the shopping list")
+      if ((await shop())?.items.length !== 0 || !/Tap Undo/.test(all.reply)) return `clear all: ${all.reply}`
+      return (await undo(all)) === 200 && (await shop())?.items.length === 3 ? null : "undo of clear all failed"
+    },
+  },
+  {
+    id: "L5",
+    name: "Diet and meals: set by chat, asked by day, shown on Now by the hour, shopping list from the diet, Undo",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      const noAi = (r: ChatReplyShape, what: string) => (r.usedAi ? `${what}: used the AI (${r.reply.slice(0, 80)})` : null)
+      const today = weekdayIst(`${dayKey(0)}T12:00:00+05:30`)
+      const tomorrow = weekdayIst(`${dayKey(1)}T12:00:00+05:30`)
+      const diet = () => db.allyNote.findFirst({ where: { userId, collection: "Diet" } })
+
+      // Set today's diet and tomorrow's dinner by talking.
+      const a = await say(`${today} diet: oats and eggs for breakfast, dal rice for lunch, roti sabzi for dinner`)
+      if (noAi(a, "set")) return noAi(a, "set")
+      const meta = (await diet())?.meta as any
+      const wd = new Date(`${dayKey(0)}T12:00:00Z`).getUTCDay()
+      if (meta?.days?.[String(wd)]?.lunch !== "dal rice" || meta.days[String(wd)].breakfast !== "oats and eggs") return `set: ${JSON.stringify(meta)} / ${a.reply}`
+      const b = await say(`${tomorrow} dinner: paneer wrap`)
+      const e = await say("every day snack: fruit")
+      if (!ofType(b, "NOTE_UPDATED").length || !ofType(e, "NOTE_UPDATED").length) return `more meals: ${b.reply} / ${e.reply}`
+
+      // Asking, by meal and by day.
+      const l = await say("what's for lunch?")
+      if (noAi(l, "lunch")) return noAi(l, "lunch")
+      if (!/Lunch today: dal rice/.test(l.reply)) return `lunch: ${l.reply}`
+      const d = await say("what's for dinner tomorrow")
+      if (!/Dinner tomorrow: paneer wrap/.test(d.reply)) return `dinner tomorrow: ${d.reply}`
+      const all = await say("show my diet")
+      if (!/Every day: snack fruit/.test(all.reply) || !new RegExp(today).test(all.reply)) return `show: ${all.reply}`
+
+      // Now shows the meal for the hour; after 22:00 it is tomorrow's breakfast (or nothing set).
+      const morning = (await api("get", `/now?at=${dayKey(0)}T08:00`)).body.data
+      if (morning?.meal?.meal !== "breakfast" || morning.meal.text !== "oats and eggs") return `Now at 08:00: ${JSON.stringify(morning?.meal)}`
+      const noon = (await api("get", `/now?at=${dayKey(0)}T13:00`)).body.data
+      if (noon?.meal?.text !== "dal rice") return `Now at 13:00: ${JSON.stringify(noon?.meal)}`
+      const evening = (await api("get", `/now?at=${dayKey(0)}T19:30`)).body.data
+      if (evening?.meal?.meal !== "dinner" || evening.meal.text !== "roti sabzi") return `Now at 19:30: ${JSON.stringify(evening?.meal)}`
+
+      // Undo restores the earlier plan.
+      if ((await api("post", `/activity/${e.actions[0]!.activityId}/undo`)).status !== 200 || (await diet() as any)?.meta?.days?.all) return "undo of the every-day snack failed"
+
+      // A question with no diet set belongs to other handlers (checked in the unit tests); here, the shopping list.
+      const s = await say("make a shopping list from my diet")
+      const shop = await db.allyNote.findFirst({ where: { userId, collection: "Shopping" } })
+      if (!shop || shop.items.length < 3 || new Set(shop.items.map((i) => i.toLowerCase())).size !== shop.items.length) return `shopping: ${JSON.stringify(shop?.items)} / ${s.reply}`
+      if (!ofType(s, "NOTE_UPDATED").length || !/oat/i.test(shop.items.join(" "))) return `shopping reply: ${s.reply} / ${shop.items}`
+      return null
+    },
+  },
+  {
+    id: "L6",
+    name: "Routines: set by chat, tick steps, shown on Now at the matching part of the day, reset, Undo, no AI",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      const noAi = (r: ChatReplyShape, what: string) => (r.usedAi ? `${what}: used the AI (${r.reply.slice(0, 80)})` : null)
+      const gym = () => db.allyNote.findFirst({ where: { userId, collection: "Gym" } })
+      const undo = async (r: ChatReplyShape) => (await api("post", `/activity/${r.actions[0]!.activityId}/undo`)).status
+
+      // A day with a morning and a gym part, so Now has something to match.
+      const sched = await api("put", "/now/schedule", { weekdays: [0, 1, 2, 3, 4, 5, 6], blocks: [{ block: "MORNING", start: "07:00", end: "09:00" }, { block: "GYM", start: "18:30", end: "19:30" }, { block: "EVENING", start: "19:30", end: "23:00" }] })
+      if (sched.status !== 200) return `schedule not set (${sched.status}): ${JSON.stringify(sched.body).slice(0, 120)}`
+
+      const a = await say("my gym routine: bench press 3x10, squats 3x8 and rows")
+      if (noAi(a, "set")) return noAi(a, "set")
+      const n = await gym()
+      if (n?.template !== "ROUTINE" || n.items.join("|") !== "Bench press 3x10|Squats 3x8|Rows" || !/3 steps/.test(a.reply)) return `set: ${JSON.stringify(n)} / ${a.reply}`
+
+      // Tick steps by name.
+      const t = await say("done bench press")
+      if (noAi(t, "done")) return noAi(t, "done")
+      if ((await gym())?.done.join("|") !== "Bench press 3x10" || !/2 left on your gym routine/.test(t.reply)) return `tick: ${(await gym())?.done} / ${t.reply}`
+      const w = await say("my gym routine")
+      if (!/Gym routine \(2 to go\): Squats 3x8, Rows\. Got: Bench press 3x10/.test(w.reply)) return `show: ${w.reply}`
+
+      // Now shows it at gym time, with the ticks, and not at other times.
+      const gymTime = await api("get", `/now?at=${dayKey(0)}T19:00`)
+      if (gymTime.body.data?.block !== "GYM") return `19:00 is ${gymTime.body.data?.block}, expected GYM`
+      const morning = await api("get", `/now?at=${dayKey(0)}T08:00`)
+      const routine = gymTime.body.data?.routine
+      if (routine?.steps?.length !== 3 || routine.remaining !== 2 || !routine.steps[0].done) return `Now at gym time: ${JSON.stringify(routine)}`
+      if (morning.body.data?.routine) return `Now in the morning shows the gym routine`
+
+      // Reset, then undo the reset.
+      const r = await say("start my gym routine")
+      if ((await gym())?.done.length !== 0 || !/3 steps to do/.test(r.reply)) return `reset: ${r.reply}`
+      if ((await undo(r)) !== 200 || (await gym())?.done.length !== 1) return "undo of reset failed"
+
+      // A morning routine shows on Now in the morning.
+      await say("my morning routine: water, stretch, journal")
+      const m = await api("get", `/now?at=${dayKey(0)}T08:00`)
+      const mr = m.body.data?.routine
+      if (m.body.data?.block !== "MORNING" || mr?.steps?.length !== 3) return `Now at morning: ${m.body.data?.block} ${JSON.stringify(mr)}`
+      return null
+    },
+  },
+  {
+    id: "L7",
+    name: "People: birthday with a yearly reminder, number kept private, call / WhatsApp links, questions, Undo, no AI",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      const noAi = (r: ChatReplyShape, what: string) => (r.usedAi ? `${what}: used the AI (${r.reply.slice(0, 80)})` : null)
+      const person = (title: string) => db.allyNote.findFirst({ where: { userId, collection: "People", title } })
+      const bdayTask = () => db.task.findFirst({ where: { userId, title: "Mom's birthday", archivedAt: null, status: { in: ["TODO", "IN_PROGRESS"] } } })
+
+      // A birthday: saved on the person, and a reminder that repeats every year at 9 am.
+      const a = await say("Mom's birthday is 12 March")
+      if (noAi(a, "birthday")) return noAi(a, "birthday")
+      const mom = await person("Mom")
+      const t = await bdayTask()
+      if ((mom?.meta as any)?.birthday?.month !== 3 || (mom?.meta as any)?.birthday?.day !== 12) return `birthday not saved: ${JSON.stringify(mom?.meta)} / ${a.reply}`
+      if (!t || t.repeatRule !== "FREQ=YEARLY" || !t.remindAt || t.remindAt.getTime() < Date.now()) return `reminder: ${JSON.stringify(t)}`
+      const local = new Intl.DateTimeFormat("en-GB", { timeZone: IST, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(t.remindAt)
+      if (!/^12\/03, 09:00$/.test(local)) return `reminder time is ${local}, expected 12/03, 09:00`
+      if (!ofType(a, "REMINDER_SET").length) return "no REMINDER_SET for the phone to schedule"
+
+      // Completing it brings it back next year, not never.
+      const before = t.remindAt
+      await api("patch", `/tasks/${t.id}/complete`)
+      const rolled = await db.task.findFirst({ where: { userId, title: "Mom's birthday", archivedAt: null, status: { in: ["TODO", "IN_PROGRESS"] } } })
+      if (!rolled || !rolled.remindAt || rolled.remindAt.getUTCFullYear() !== before.getUTCFullYear() + 1) return `yearly roll: ${rolled?.remindAt?.toISOString()} after ${before.toISOString()}`
+
+      // A number: kept on the person, never printed back in full or put in the AI's notes.
+      const p = await say("Priya's number is 98765 43210")
+      if (noAi(p, "number")) return noAi(p, "number")
+      if ((await person("Priya"))?.meta && ((await person("Priya"))!.meta as any).phone !== "9876543210") return "number not saved"
+      if (/98765|43210/.test(p.reply) || !/ending 3210/.test(p.reply)) return `number echoed: ${p.reply}`
+
+      // Call and WhatsApp are links the phone opens.
+      const c = await say("call Priya")
+      const link = ofType(c, "CONTACT")[0] as any
+      if (link?.url !== "tel:+919876543210" || link.mode !== "CALL" || /9876/.test(c.reply)) return `call: ${JSON.stringify(link)} / ${c.reply}`
+      const w = await say("WhatsApp Priya")
+      if ((ofType(w, "CONTACT")[0] as any)?.url !== "https://wa.me/919876543210") return `whatsapp: ${w.reply}`
+      const nonum = await say("call Mom")
+      if (ofType(nonum, "CONTACT").length || !/don't have Mom's number/.test(nonum.reply)) return `no number: ${nonum.reply}`
+
+      // Questions, and the list of people.
+      const q1 = await say("what's Priya's number")
+      if (!/9876543210/.test(q1.reply)) return `number question: ${q1.reply}`
+      const q2 = await say("when is Mom's birthday")
+      if (!/12 March/.test(q2.reply)) return `birthday question: ${q2.reply}`
+      const all = await say("my people")
+      if (!/Mom \(birthday 12 March\)/.test(all.reply) || !/Priya \(number saved\)/.test(all.reply) || /9876543210/.test(all.reply)) return `people: ${all.reply}`
+
+      // Changing the date moves the same reminder, and Undo puts it back.
+      const ch = await say("Mom's birthday is 14 March")
+      const moved = await bdayTask()
+      if (!moved || (await db.task.count({ where: { userId, title: "Mom's birthday", archivedAt: null, status: { in: ["TODO", "IN_PROGRESS"] } } })) !== 1) return `second reminder made: ${ch.reply}`
+      const act = ch.actions.find((x: any) => x.type === "ITEM_UPDATED") as any
+      if (!act?.activityId || (await api("post", `/activity/${act.activityId}/undo`)).status !== 200) return "undo of the new date failed"
+      const back = await bdayTask()
+      return back?.remindAt && back.remindAt.getTime() === rolled.remindAt.getTime() ? null : `undo left ${back?.remindAt?.toISOString()}`
+    },
+  },
+  {
+    id: "L8",
+    name: "Four save choices: Watch later queue (length, Now suggests it only when there is room), Add to a list, watched, no AI",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      const noAi = (r: ChatReplyShape, what: string) => (r.usedAi ? `${what}: used the AI (${r.reply.slice(0, 80)})` : null)
+      // Saves as the share flow leaves them, without calling the AI.
+      const save = async (title: string, url: string) =>
+        (
+          await db.capture.create({
+            data: {
+              userId,
+              rawText: url,
+              detectedUrl: url,
+              status: "PENDING",
+              purpose: "LEARN",
+              feelings: [],
+              suggestedOutputs: {
+                kind: "SAVE",
+                purposeBy: "user",
+                summary: { state: "NONE", lines: [] },
+                proposal: { contentTitle: title, purpose: "LEARN", feelings: [], action: `Learn: ${title}`, minimum: "", when: "THIS_WEEK", kind: "LEARNING", actions: [{ action: `Learn: ${title}`, minimum: "", as: "TODO", when: "THIS_WEEK" }] },
+              } as never,
+            },
+          })
+        ).id
+      const decide = (id: string, body: object) => api("post", `/guide/saves/${id}/decide`, body)
+      const sched = await api("put", "/now/schedule", { weekdays: [0, 1, 2, 3, 4, 5, 6], blocks: [{ block: "MORNING", start: "07:00", end: "09:00" }, { block: "OFFICE", start: "10:00", end: "18:00" }, { block: "EVENING", start: "19:30", end: "23:00" }] })
+      if (sched.status !== 200) return `schedule not set (${sched.status})`
+
+      // Watch later: queued with its length.
+      const a = await save("Atomic Habits summary", "https://example.com/atomic")
+      const b = await save("System design basics", "https://example.com/sd")
+      const d1 = await decide(a, { choice: "LATER", minutes: 18 })
+      const d2 = await decide(b, { choice: "LATER", minutes: 24 })
+      if (d1.status !== 200 || d1.body.data.choice !== "LATER" || d2.status !== 200) return `decide later: ${d1.status} ${JSON.stringify(d1.body).slice(0, 120)}`
+      const list = (await api("get", "/guide/saves")).body.data as { id: string; later: boolean; minutes: number | null }[]
+      const queued = list.filter((x) => x.later)
+      if (queued.length !== 2 || queued.find((x) => x.id === a)?.minutes !== 18) return `queue: ${JSON.stringify(queued)}`
+
+      // Chat shows it, and Now offers one only in the evening, never at work.
+      const shown = await say("show watch later")
+      if (noAi(shown, "show")) return noAi(shown, "show")
+      if (!/Atomic Habits summary \(18 min\)/.test(shown.reply) || !/System design basics \(24 min\)/.test(shown.reply)) return `show: ${shown.reply}`
+      const evening = (await api("get", `/now?at=${dayKey(0)}T20:00`)).body.data
+      if (evening?.watchLater?.title !== "Atomic Habits summary" || !/You have time\. Watch later: Atomic Habits summary \(18 min\)\?/.test(evening.watchLater.line ?? "")) return `Now in the evening: ${JSON.stringify(evening?.watchLater)}`
+      const work = (await api("get", `/now?at=${dayKey(0)}T11:00`)).body.data
+      if (work?.block !== "OFFICE" || work.watchLater) return `Now at work: ${work?.block} ${JSON.stringify(work?.watchLater)}`
+
+      // Watched: it leaves the queue, and is not suggested again.
+      const w = await say("I watched Atomic Habits")
+      if (noAi(w, "watched") || !/1 left/.test(w.reply)) return `watched: ${w.reply}`
+      const after = (await api("get", `/now?at=${dayKey(0)}T20:00`)).body.data
+      if (after?.watchLater?.title !== "System design basics") return `Now after watching: ${JSON.stringify(after?.watchLater)}`
+
+      // Changing your mind: a queued save can still be turned into something else.
+      const re = await decide(b, { choice: "DROP" })
+      if (re.status !== 200 || (await db.capture.findUnique({ where: { id: b } }))?.status !== "DISMISSED") return `drop a queued save: ${re.status}`
+
+      // Add to a list: the title goes on the named list, and a well-known list is started.
+      const c = await save("Interstellar", "https://example.com/interstellar")
+      const l = await decide(c, { choice: "LIST", list: "movies" })
+      const movies = await db.allyNote.findFirst({ where: { userId, collection: "Movies" } })
+      if (l.status !== 200 || !movies?.items.includes("Interstellar")) return `add to list: ${l.status} ${JSON.stringify(movies?.items)}`
+      const row = await db.capture.findUnique({ where: { id: c } })
+      if (row?.status !== "CONVERTED" || (row.createdOutputs as any)?.type !== "LIST") return `capture after list: ${JSON.stringify(row?.createdOutputs)}`
+      const noList = await decide(await save("Something", "https://example.com/x"), { choice: "LIST" })
+      return noList.status === 422 ? null : `a list choice with no list returned ${noList.status}`
+    },
+  },
+  {
+    id: "L9",
+    name: "Any content: several links at once (one triage), rest to Watch later with Undo, saves summary, old saves, long pasted text",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      const area = await careerId(api)
+      await db.identity.upsert({ where: { userId }, update: { thisYearGoal: "Switch to a better software job" }, create: { userId, thisYearGoal: "Switch to a better software job" } })
+
+      // Four links shared in one message: saved together, none acted on.
+      const urls = ["https://example.com/system-design-interview", "https://example.com/cat-memes", "https://example.com/pasta-recipe", "https://example.com/react-course"]
+      const r = await say(urls.join(" "))
+      if (!/^Saved 4\./.test(r.reply)) return `batch reply: ${r.reply}`
+      const saves = await db.capture.findMany({ where: { userId, status: "PENDING", suggestedOutputs: { path: ["kind"], equals: "SAVE" } } })
+      if (saves.length !== 4) return `${saves.length} saves made, expected 4`
+      const triaged = saves.map((c) => (c.suggestedOutputs as any).triage)
+      if (triaged.some((t: unknown) => t !== "MATTERS" && t !== "LATER")) return `triage values: ${triaged}`
+      if ((await db.task.count({ where: { userId } })) !== 0) return "a batch share made tasks"
+      const later = triaged.filter((t: string) => t === "LATER").length
+      if (later === 0) return "nothing could wait"
+      const ask = ofType(r, "ASK")[0] as any
+      if (!ask || ask.options?.[0]?.title !== `Put the other ${later} in watch later` || ask.options[0].command !== true) return `no chip for the rest: ${JSON.stringify(ask)}`
+      for (const c of saves) {
+        const p = (c.suggestedOutputs as any).proposal
+        if (!p.suggestedChoice || !p.contentType) return `a batch save has no type or suggestion: ${JSON.stringify(p).slice(0, 160)}`
+      }
+
+      // One tap puts the rest in Watch later; Undo puts them back.
+      const move = await say(ask.options[0].title)
+      if (!new RegExp(`^Put ${later} in watch later`).test(move.reply)) return `move: ${move.reply}`
+      const queued = await db.capture.count({ where: { userId, status: "CONVERTED", createdOutputs: { path: ["type"], equals: "LATER" } } })
+      if (queued !== later) return `${queued} queued, expected ${later}`
+      const shown = await say("show watch later")
+      if (!new RegExp(`Watch later \\(${later}\\)`).test(shown.reply)) return `show: ${shown.reply}`
+      const act = move.actions.find((x: any) => x.type === "SAVES_MOVED") as any
+      if (!act?.activityId || (await api("post", `/activity/${act.activityId}/undo`)).status !== 200) return "undo of the move failed"
+      if ((await db.capture.count({ where: { userId, status: "PENDING", suggestedOutputs: { path: ["kind"], equals: "SAVE" } } })) !== 4) return "undo did not put them back"
+
+      // The week in numbers, without judging.
+      const sum = await say("how many saves did I act on this week")
+      if (!/^You saved 4 this week: 4 still need a decision\./.test(sum.reply)) return `summary: ${sum.reply}`
+      const api2 = (await api("get", "/guide/saves/summary")).body.data
+      if (api2?.counts?.saved !== 4 || api2.counts.waiting !== 4) return `summary api: ${JSON.stringify(api2)}`
+
+      // Old saves are asked about once, and can be let go with Undo.
+      await db.capture.create({
+        data: {
+          userId,
+          rawText: "https://example.com/old",
+          detectedUrl: "https://example.com/old",
+          status: "PENDING",
+          purpose: "LEARN",
+          feelings: [],
+          createdAt: new Date(Date.now() - 45 * 86_400_000),
+          suggestedOutputs: { kind: "SAVE", purposeBy: "ai", summary: { state: "NONE", lines: [] }, proposal: { contentTitle: "A video from last month", purpose: "LEARN", feelings: [], action: "Learn", minimum: "", when: "THIS_WEEK", kind: "LEARN", actions: [{ action: "Learn", minimum: "", as: "TODO", when: "THIS_WEEK" }] } } as never,
+        },
+      })
+      const old = await say("still want these?")
+      if (!/1 save has waited over a month/.test(old.reply) || !/A video from last month/.test(old.reply)) return `stale: ${old.reply}`
+      const gone = await say("let go of old saves")
+      if (!/Let go of 1 old save/.test(gone.reply) || (await db.capture.count({ where: { userId, status: "DISMISSED" } })) !== 1) return `let go: ${gone.reply}`
+      const act2 = gone.actions.find((x: any) => x.type === "SAVES_MOVED") as any
+      if (!act2?.activityId || (await api("post", `/activity/${act2.activityId}/undo`)).status !== 200 || (await db.capture.count({ where: { userId, status: "DISMISSED" } })) !== 0) return "undo of let go failed"
+
+      // A long pasted text is read whole up to 30,000 characters and in parts beyond, and says so.
+      const para = "The habit loop has a cue, a craving, a response and a reward, and small changes repeated daily add up to large results over a year. "
+      const long = para.repeat(Math.ceil(45_000 / para.length))
+      const made = await api("post", "/guide/saves", { text: long })
+      if (made.status !== 201) return `long text save returned ${made.status}: ${JSON.stringify(made.body).slice(0, 160)}`
+      const dto = made.body.data
+      if (!dto.proposal.suggestedChoice || !dto.proposal.contentType) return `long text proposal has no type: ${JSON.stringify(dto.proposal).slice(0, 160)}`
+      if (dto.summary.state === "READY" && !/read the start, the middle and the end/.test(dto.summary.lines.join(" "))) return `a sampled text did not say so: ${JSON.stringify(dto.summary)}`
+      void area
+      return null
+    },
+  },
 ]

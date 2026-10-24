@@ -14,11 +14,16 @@ export const historySchema = z.object({
 })
 
 export const createSaveSchema = z.object({
-  text: z.string().max(4000).optional(),
+  // A link, a few words, or a whole pasted chapter (read whole up to 30,000 characters, then in parts).
+  text: z.string().max(100_000).optional(),
 })
 
 export const decideSaveSchema = z.object({
-  choice: z.enum(["ACTION", "SHELF", "DROP"]),
+  // ACTION = Do it, SHELF = Lift me up, LATER = Watch later, LIST = Add to a list, DROP = let it go.
+  choice: z.enum(["ACTION", "SHELF", "DROP", "LATER", "LIST"]),
+  // LATER: how long it is, if known. LIST: the list to put it on.
+  minutes: z.number().int().min(1).max(600).optional(),
+  list: z.string().max(60).optional(),
   action: z.string().max(200).optional(),
   minimum: z.string().max(200).optional(),
   areaId: z.string().optional(),
@@ -45,3 +50,7 @@ export const saveMoodsSchema = z.object({ moods: z.array(z.string().max(60)).min
 export type DecideSaveDto = z.infer<typeof decideSaveSchema>
 export type RespondDto = z.infer<typeof respondSchema>
 export type HistoryQueryDto = z.infer<typeof historySchema>
+
+// Up to 10 shared items at once (each a link, possibly with a few words).
+export const batchSavesSchema = z.object({ items: z.array(z.string().min(1).max(4000)).min(1).max(10) })
+export const decideManySchema = z.object({ ids: z.array(z.string()).min(1).max(30), choice: z.enum(["LATER", "DROP"]) })

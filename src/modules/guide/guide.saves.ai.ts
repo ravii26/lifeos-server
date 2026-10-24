@@ -2,6 +2,21 @@ import { geminiClient, GEMINI_MODEL } from "../../lib/gemini.js"
 import { groqClient } from "../../lib/groq.js"
 import { runWithAiFallback } from "../../lib/ai-fallback.js"
 import logger from "../../lib/logger.js"
+import { safeFetch } from "./guide.saves.read.js"
+import {
+  choiceFor,
+  cleanContentType,
+  cleanDomain,
+  extractArticleText,
+  isFetchableUrl,
+  listFor,
+  looksBlocked,
+  readingMinutes,
+  suggestionReason,
+  type ContentType,
+  type Domain,
+  type SuggestedChoice,
+} from "./saves.type.rules.js"
 
 // Saved content → one action. A save is only worth keeping if it turns into
 // something the person will do (or comfort for a hard day); everything else
@@ -50,6 +65,16 @@ export interface SaveProposal {
   when: SaveWhen
   reason: string
   source: "ai" | "heuristic"
+  // D7: what kind of content it is, which part of life, and what Ally suggests. The AI only says
+  // the type and domain; the suggestion comes from saves.type.rules.ts. Old saves do not have these.
+  contentType?: ContentType
+  domain?: Domain
+  lengthMinutes?: number | null
+  suggestedChoice?: SuggestedChoice
+  listName?: string | null
+  suggestionReason?: string
+  // 3 to 5 lines of what a long text or article says, when it was read.
+  summaryLines?: string[]
 }
 
 const URL_RE = /https?:\/\/[^\s<>"']+/i
@@ -84,6 +109,8 @@ const decodeEntities = (s: string) =>
 export const readLink = async (url: string): Promise<LinkInfo> => {
   const platform = platformOf(url)
   const info: LinkInfo = { url, title: null, author: null, platform }
+  // Never fetch the server's own network on someone's say-so (see saves.type.rules.ts).
+  if (!isFetchableUrl(url)) return info
   try {
     if (platform === "YouTube") {
       const res = await fetchWithTimeout(
@@ -98,8 +125,8 @@ export const readLink = async (url: string): Promise<LinkInfo> => {
       return info
     }
     if (platform === "Instagram") return info
-    const res = await fetchWithTimeout(url, 4000)
-    if (!res.ok || !(res.headers.get("content-type") ?? "").includes("text/html")) return info
+    const res = await safeFetch(url, 4000)
+    if (!res || !res.ok || !(res.headers.get("content-type") ?? "").includes("text/html")) return info
     const html = (await res.text()).slice(0, 200_000)
     const og = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1]
     const title = og ?? html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]
@@ -117,6 +144,8 @@ export interface SaveAiInput {
   yearGoal: string | null
   // Set when the person corrected the guess: the proposal is redone for that purpose.
   forcePurpose?: SavePurposeGuess
+  // Longer text (an article, a pasted chapter, a PDF): how much of it to send, and ask for a summary.
+  textLimit?: number
 }
 
 const SYSTEM_PROMPT = `The user saved a piece of content (video, reel, post, article) in a life app. Most saved content is never acted on. Decide what it is FOR, then turn it into small concrete actions.
@@ -132,10 +161,16 @@ Rules:
 
 Return JSON only: {"contentTitle": string, "purpose": "LEARN"|"FEELING", "feelings": [string], "kind": string, "actions": [{"action": string, "minimum": string, "as": "TODO"|"HABIT", "when": string}], "areaId": string|null, "reason": string}`
 
+const TYPE_RULES = `Also add these keys to the same JSON object:
+- "contentType": one of WORKOUT, RECIPE, TUTORIAL, COURSE, BOOK, MOTIVATION, RECOMMENDATION, PLACE, MONEY, PRODUCT, NEWS, FUN. WORKOUT = exercises or a routine; RECIPE = food to cook; TUTORIAL = how-to or lesson; COURSE = a long series or playlist; BOOK = ideas from a book or self-help text; MOTIVATION = a speech, quote or edit that lifts; RECOMMENDATION = a list of movies, books or shows to pick from; PLACE = a cafe, trek or trip; MONEY = a money tip (information only, never advice); PRODUCT = a gadget or thing to buy; NEWS = a fact or update; FUN = a meme or entertainment with nothing to do.
+- "domain": one of career, coding, fitness, food, money, mindset, relationships, travel, fun, learning, other.
+- "lengthMinutes": how long it takes to watch or read, a whole number, or null if you cannot tell.
+- "summary": 3 to 5 short lines (at most 18 words each) of what a long text, article or document actually says, only when "saved.text" is long (about 600 characters or more). Otherwise an empty list. Only what is in the text; never invent.`
+
 const toPrompt = (input: SaveAiInput) =>
   JSON.stringify({
     saved: {
-      text: input.text.slice(0, 2000),
+      text: input.text.slice(0, input.textLimit ?? 2000),
       url: input.link?.url ?? null,
       title: input.link?.title ?? null,
       author: input.link?.author ?? null,
@@ -160,6 +195,10 @@ interface Parsed {
   areaId?: unknown
   when?: unknown
   reason?: unknown
+  contentType?: unknown
+  domain?: unknown
+  lengthMinutes?: unknown
+  summary?: unknown
 }
 
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "")
@@ -194,6 +233,8 @@ const finalize = (p: Parsed, input: SaveAiInput): SaveProposal => {
   if (!actions.length) actions = fallback.actions
   const areaId = typeof p.areaId === "string" && input.areas.some((a) => a.id === p.areaId) ? p.areaId : fallback.areaId
   const feelings = purpose === "FEELING" ? (cleanFeelings(p.feelings).length ? cleanFeelings(p.feelings) : fallback.feelings) : []
+  const typed = typedFields(p, purpose, `${input.link?.title ?? ""} ${input.text.slice(0, 500)}`)
+  const summaryLines = (Array.isArray(p.summary) ? p.summary : []).map((l) => str(l, 160)).filter(Boolean).slice(0, 5)
   return {
     contentTitle: str(p.contentTitle, 160) || fallback.contentTitle,
     kind: purpose === "FEELING" ? "MOTIVATION" : KINDS.includes(p.kind as SaveKind) ? (p.kind as SaveKind) : fallback.kind,
@@ -206,7 +247,27 @@ const finalize = (p: Parsed, input: SaveAiInput): SaveProposal => {
     when: actions[0]!.when,
     reason: str(p.reason, 240) || fallback.reason,
     source: "ai",
+    ...typed,
+    ...(summaryLines.length >= 2 ? { summaryLines } : {}),
   }
+}
+
+// The typed half of a proposal. The model's contentType and domain are checked against the allowed
+// lists; what to suggest comes from the rules, not the model. A FEELING save is always "lift me up"
+// and a LEARN one never is (the person may have corrected the guess).
+export const typedFields = (
+  p: { contentType?: unknown; domain?: unknown; lengthMinutes?: unknown },
+  purpose: SavePurposeGuess,
+  text: string,
+): Pick<SaveProposal, "contentType" | "domain" | "lengthMinutes" | "suggestedChoice" | "listName" | "suggestionReason"> => {
+  const contentType: ContentType = cleanContentType(p.contentType) ?? (purpose === "FEELING" ? "MOTIVATION" : "TUTORIAL")
+  const domain = cleanDomain(p.domain)
+  const len = typeof p.lengthMinutes === "number" && Number.isFinite(p.lengthMinutes) ? Math.min(600, Math.max(1, Math.round(p.lengthMinutes))) : null
+  let choice = choiceFor(contentType, len)
+  if (purpose === "FEELING") choice = "LIFT"
+  else if (choice === "LIFT") choice = "DO"
+  const listName = choice === "LIST" ? listFor(contentType, domain, text) : null
+  return { contentType, domain, lengthMinutes: len, suggestedChoice: choice, listName, suggestionReason: suggestionReason(contentType, choice, listName) }
 }
 
 const MOTIVATION_WORDS = /motivat|inspir|discipline|mindset|never give up|hustle|success story|grind|nobody is coming|you can do it/i
@@ -234,6 +295,7 @@ export const heuristicProposal = (input: SaveAiInput): SaveProposal => {
     when: "THIS_WEEK",
     reason: main ? `It fits ${main.name}${main.tier === "MAIN" ? ", your most important area" : ""}.` : "A small step beats another save.",
     source: "heuristic",
+    ...typedFields({}, feeling ? "FEELING" : "LEARN", `${contentTitle} ${input.text.slice(0, 500)}`),
   }
 }
 
@@ -243,7 +305,9 @@ const viaGemini = async (input: SaveAiInput): Promise<SaveProposal> => {
     model: GEMINI_MODEL,
     generationConfig: { responseMimeType: "application/json" },
   })
-  const result = await model.generateContent([{ text: SYSTEM_PROMPT }, { text: toPrompt(input) }])
+  const result = await model.generateContent([{ text: `${SYSTEM_PROMPT}
+
+${TYPE_RULES}` }, { text: toPrompt(input) }])
   return finalize(JSON.parse(result.response.text()) as Parsed, input)
 }
 
@@ -251,7 +315,9 @@ const viaGroq = async (input: SaveAiInput): Promise<SaveProposal> => {
   if (!groqClient) throw new Error("Groq client not initialized")
   const response = await groqClient.chat.completions.create({
     messages: [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: `${SYSTEM_PROMPT}
+
+${TYPE_RULES}` },
       { role: "user", content: toPrompt(input) },
     ],
     model: "openai/gpt-oss-120b",
@@ -278,6 +344,9 @@ export interface VideoRead {
   purpose: SavePurposeGuess
   feelings: string[]
   actions: SaveAction[]
+  contentType?: unknown
+  domain?: unknown
+  lengthMinutes?: number | null
 }
 
 const VIDEO_PROMPT = `Watch this video the person saved in a life app. Return JSON only:
@@ -296,13 +365,13 @@ export const watchVideo = async (url: string, areas: SaveAreaOption[], yearGoal:
     const model = geminiClient.getGenerativeModel({ model: GEMINI_MODEL, generationConfig: { responseMimeType: "application/json" } })
     const call = model.generateContent([
       { fileData: { mimeType: "video/mp4", fileUri: url } } as never,
-      { text: `${VIDEO_PROMPT}\n\nTheir year goal: ${yearGoal ?? "not set"}. Their areas: ${areas.map((a) => `${a.name} (${a.tier})`).join(", ") || "none yet"}.` },
+      { text: `${VIDEO_PROMPT}\n\nAlso add to the JSON: "contentType" (one of WORKOUT, RECIPE, TUTORIAL, COURSE, BOOK, MOTIVATION, RECOMMENDATION, PLACE, MONEY, PRODUCT, NEWS, FUN), "domain" (one of career, coding, fitness, food, money, mindset, relationships, travel, fun, learning, other) and "lengthMinutes" (the video's length in whole minutes).\n\nTheir year goal: ${yearGoal ?? "not set"}. Their areas: ${areas.map((a) => `${a.name} (${a.tier})`).join(", ") || "none yet"}.` },
     ])
     const result = await Promise.race([
       call,
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("video read timed out")), VIDEO_TIMEOUT_MS)),
     ])
-    const p = JSON.parse(result.response.text()) as { contentTitle?: unknown; summary?: unknown; purpose?: unknown; feelings?: unknown; actions?: unknown }
+    const p = JSON.parse(result.response.text()) as { contentTitle?: unknown; summary?: unknown; purpose?: unknown; feelings?: unknown; actions?: unknown; contentType?: unknown; domain?: unknown; lengthMinutes?: unknown }
     const lines = (Array.isArray(p.summary) ? p.summary : []).map((l) => str(l, 160)).filter(Boolean).slice(0, 5)
     if (lines.length < 2) return null
     const purpose: SavePurposeGuess = p.purpose === "FEELING" ? "FEELING" : "LEARN"
@@ -314,6 +383,9 @@ export const watchVideo = async (url: string, areas: SaveAreaOption[], yearGoal:
       purpose,
       feelings: purpose === "FEELING" ? cleanFeelings(p.feelings) : [],
       actions: purpose === "FEELING" ? actions.slice(0, 1) : actions,
+      contentType: p.contentType,
+      domain: p.domain,
+      lengthMinutes: typeof p.lengthMinutes === "number" ? p.lengthMinutes : null,
     }
   } catch (err) {
     logger.info(`Video read skipped for ${url}: ${err instanceof Error ? err.message : String(err)}`)

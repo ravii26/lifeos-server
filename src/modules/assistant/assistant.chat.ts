@@ -51,6 +51,7 @@ import {
 } from "../progress/progress.service.js"
 import { getTonightService } from "../guide/guide.service.js"
 import { extractUrl } from "../guide/guide.saves.ai.js"
+import { batchShareChat } from "./assistant.saves.js"
 import { upsertSettings } from "../settings/settings.repository.js"
 import { asDirectness, asFocus, preferenceIntent, preferenceReply, styleForPrompt } from "../settings/personalization.rules.js"
 import { recordActivity, type UndoPayload } from "../activity/activity.service.js"
@@ -107,6 +108,10 @@ export type ChatAction = (
   // A timer started or stopped ("start timer for DSA", "stop timer"); minutes is 0 when discarded.
   | { type: "TIMER_STARTED"; id: string; title: string; activityId?: string }
   | { type: "TIMER_STOPPED"; id: string; title: string; minutes: number; activityId?: string }
+  // "Call Priya" / "WhatsApp Rahul": the phone opens the link; Ally sends nothing.
+  | { type: "CONTACT"; name: string; mode: "CALL" | "WHATSAPP"; url: string; title: string }
+  // Several saves put back, let go of or moved together (with one Undo).
+  | { type: "SAVES_MOVED"; title: string; activityId?: string }
   | { type: "LIMIT_SET"; id: string; title: string; detail: string; activityId?: string }
   | { type: "LIMIT_USED"; id: string; title: string; detail: string; activityId?: string }
   | { type: "COUNT_ADDED"; habitId: string; title: string; count: number; target: number | null; detail: string; activityId?: string }
@@ -1000,6 +1005,10 @@ export const assistantChat = async (
   opts: { spoken?: boolean } = {},
 ): Promise<ChatResult> => {
   const text = message.trim()
+
+  // Several links at once: saved together and sorted in one go, nothing acted on.
+  const batched = await batchShareChat(userId, text).catch(() => null)
+  if (batched) return batched
 
   // A shared link is a save: the app opens the save → action flow for it.
   const url = extractUrl(text)

@@ -4,7 +4,9 @@ import { classifyMediaCapture } from "../capture/capture.ai.js"
 import { createCapture, findCaptureById, updateCapture } from "../capture/capture.repository.js"
 import { createTaskService } from "../task/task.service.js"
 import { createHabitService } from "../habit/habit.service.js"
-import { createAllyNoteService } from "../allynote/allynote.service.js"
+import { createAllyNoteService, updateAllyNoteService } from "../allynote/allynote.service.js"
+import { resolveList, wellKnownList } from "../allynote/lists.rules.js"
+import type { QueueItem } from "./saves.later.rules.js"
 import { createVaultItem } from "../vault/vault.repository.js"
 import { logBehavior } from "../behavior/behavior.service.js"
 import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
@@ -27,6 +29,9 @@ import { setTonightToTaskService } from "./guide.service.js"
 import type { DecideSaveDto } from "./guide.schema.js"
 import { withAiFeature } from "../../lib/ai-usage.js"
 import { cleanMoods, ownMoods } from "./comfort.rules.js"
+import { readArticle, readPdfText } from "./guide.saves.read.js"
+import { FULL_READ_CHARS, sampleLongText } from "./saves.type.rules.js"
+import { typedFields } from "./guide.saves.ai.js"
 
 // "NONE" = nothing to read (not a video link), "PENDING" = Ally is watching it,
 // "READY" = the summary is in, "UNAVAILABLE" = it could not be watched.
@@ -53,6 +58,11 @@ interface Stored {
   proposal: SaveProposal
   summary?: { state: SummaryState; lines: string[] }
   purposeBy?: "ai" | "user"
+  // D7: long text was read in parts (start, middle, end), or a page could not be read.
+  sampled?: boolean
+  blocked?: boolean
+  // Batch shares: whether it matters for the person's goals or can wait.
+  triage?: "MATTERS" | "LATER"
 }
 
 type CaptureRow = NonNullable<Awaited<ReturnType<typeof findCaptureById>>>
@@ -73,6 +83,11 @@ const storedOf = (raw: Prisma.JsonValue | null): Stored | null => {
 }
 
 const isShelved = (c: CaptureRow) => (c.createdOutputs as { type?: string } | null)?.type === "VAULT"
+// Queued with "Watch later": kept (status CONVERTED) with its length and when it was queued.
+const laterOf = (c: { createdOutputs: Prisma.JsonValue | null }): { minutes: number | null; queuedAt: string | null } | null => {
+  const o = c.createdOutputs as { type?: string; minutes?: number | null; queuedAt?: string } | null
+  return o?.type === "LATER" ? { minutes: typeof o.minutes === "number" ? o.minutes : null, queuedAt: o.queuedAt ?? null } : null
+}
 
 const toDto = (c: CaptureRow): SaveDto => {
   const stored = storedOf(c.suggestedOutputs)
@@ -118,35 +133,85 @@ export const createSaveService = async (userId: string, input: SaveInput): Promi
   if (!text && !input.file) throw new ValidationError("Share a link, some text, or a screenshot")
 
   const url = extractUrl(text)
-  const [link, areas, identity, described] = await Promise.all([
+  const isPdf = input.file?.mimeType === "application/pdf"
+  // A web page that is an article (not a video or a social post, which read differently).
+  const articleUrl = !!url && !["YouTube", "Instagram", "X"].includes(platformOf(url) ?? "")
+  const [link, areas, identity, described, article] = await Promise.all([
     url ? readLink(url) : Promise.resolve<LinkInfo | null>(null),
     prisma.area.findMany({ where: { userId, isActive: true }, select: { id: true, name: true, tier: true } }),
     prisma.identity.findUnique({ where: { userId }, select: { thisYearGoal: true } }),
     input.file
-      ? classifyMediaCapture(input.file.buffer, input.file.mimeType, text || undefined)
-          .then((c) => c.transcript ?? null)
-          .catch(() => null)
+      ? isPdf
+        ? readPdfText(input.file.buffer)
+        : classifyMediaCapture(input.file.buffer, input.file.mimeType, text || undefined)
+            .then((c) => c.transcript ?? null)
+            .catch(() => null)
       : Promise.resolve<string | null>(null),
+    articleUrl ? readArticle(url!) : Promise.resolve(null),
   ])
-  if (described) text = text ? `${text}\n${described}` : described
 
-  const proposal = await proposeAction({ text, link, areas, yearGoal: identity?.thisYearGoal ?? null })
+  // The text the AI reads: the person's own words, plus the article, the PDF or the pasted chapter.
+  // Past 30,000 characters it reads the start, the middle and the end, and says so.
+  const intro = url ? text.replace(url, "").trim() : text
+  const pasted = !input.file && !articleUrl && intro.length > 2000
+  let aiText = text
+  let sampled = false
+  let blocked = false
+  let readMinutes: number | null = null
+  if (article) {
+    if (article.blocked) blocked = true
+    else {
+      const s = sampleLongText(article.text)
+      aiText = `${intro}\n${s.text}`.trim()
+      sampled = s.sampled
+      readMinutes = article.minutes
+    }
+  } else if (isPdf) {
+    if (described) {
+      const s = sampleLongText(described)
+      aiText = `${intro}\n${s.text}`.trim()
+      sampled = s.sampled
+    } else blocked = true
+  } else if (pasted) {
+    const s = sampleLongText(text)
+    aiText = s.text
+    sampled = s.sampled
+  } else if (described) {
+    aiText = text ? `${text}\n${described}` : described
+  }
+  if (described && !isPdf) text = text ? `${text}\n${described}` : described
+  if (isPdf && !text) text = "PDF"
+
+  const long = (article && !blocked) || (isPdf && !blocked) || pasted || (!!described && described.length > 1500)
+  const proposal = await proposeAction({ text: aiText, link, areas, yearGoal: identity?.thisYearGoal ?? null, textLimit: long ? FULL_READ_CHARS + 2000 : undefined })
+  // A page's reading time is a better length than a guess.
+  if (readMinutes !== null && !proposal.lengthMinutes) {
+    Object.assign(proposal, typedFields({ contentType: proposal.contentType, domain: proposal.domain, lengthMinutes: readMinutes }, proposal.purpose, text))
+  }
   const isVideo = !!url && platformOf(url) === "YouTube"
+  const lines = proposal.summaryLines ?? []
+  const summary: Stored["summary"] =
+    lines.length >= 2
+      ? { state: "READY", lines: sampled ? [...lines, "This was long, so I read the start, the middle and the end."] : lines }
+      : { state: blocked ? "UNAVAILABLE" : isVideo ? "PENDING" : "NONE", lines: [] }
 
   const stored: Stored = {
     kind: "SAVE",
     proposal,
-    summary: { state: isVideo ? "PENDING" : "NONE", lines: [] },
+    summary,
     purposeBy: "ai",
+    ...(sampled ? { sampled } : {}),
+    ...(blocked ? { blocked } : {}),
   }
   const capture = await createCapture({
     userId,
-    rawText: text || url || proposal.contentTitle,
+    rawText: (text || url || proposal.contentTitle).slice(0, 20_000),
     detectedUrl: url,
     urlMetadata: (link ?? undefined) as Prisma.InputJsonValue | undefined,
-    mediaType: input.file ? "IMAGE" : "TEXT",
+    mediaType: input.file && !isPdf ? "IMAGE" : "TEXT",
     status: "PENDING",
     purpose: proposal.purpose,
+    ...(lines.length >= 2 ? { summary: lines.join("\n") } : {}),
     feelings: proposal.feelings,
     suggestedOutputs: stored as unknown as Prisma.InputJsonValue,
   })
@@ -185,6 +250,8 @@ const watchInBackground = async (userId: string, id: string, url: string, areas:
       minimum: actions[0]!.minimum,
       when: actions[0]!.when,
       kind: purpose === "FEELING" ? "MOTIVATION" : stored.proposal.kind,
+      // The video itself says what it is and how long it is: better than the title's guess.
+      ...typedFields({ contentType: read.contentType, domain: read.domain, lengthMinutes: read.lengthMinutes }, purpose, read.title ?? stored.proposal.contentTitle),
     }
     await saveStored(id, userId, { ...stored, proposal, summary: { state: "READY", lines: read.lines } }, {
       summary: read.lines.join("\n"),
@@ -208,6 +275,9 @@ export interface SaveListItem {
   url: string | null
   platform: string | null
   hasSummary: boolean
+  // Watch later: waiting in the queue, with its length if known.
+  later: boolean
+  minutes: number | null
   createdAt: Date
 }
 
@@ -220,7 +290,7 @@ export const listSavesService = async (userId: string): Promise<SaveListItem[]> 
     take: 60,
   })
   return rows
-    .filter((c) => c.status === "PENDING" || isShelved(c))
+    .filter((c) => c.status === "PENDING" || isShelved(c) || laterOf(c))
     .map((c) => {
       const stored = storedOf(c.suggestedOutputs)!
       const meta = c.urlMetadata as LinkInfo | null
@@ -234,6 +304,8 @@ export const listSavesService = async (userId: string): Promise<SaveListItem[]> 
         url: c.detectedUrl,
         platform: meta?.platform ?? null,
         hasSummary: stored.summary?.state === "READY",
+        later: !!laterOf(c),
+        minutes: laterOf(c)?.minutes ?? null,
         createdAt: c.createdAt,
       }
     })
@@ -344,6 +416,16 @@ export const decideSaveService = async (userId: string, id: string, input: Decid
   if (input.choice === "SHELF" && isShelved(capture) && shelvedId) {
     return { choice: "SHELF", taskId: null, taskIds: [], habitIds: [], vaultItemId: shelvedId, noteId: null, setAsTonight: false }
   }
+  // Already queued for later: choosing "later" again only updates its length;
+  // choosing anything else takes it out of the queue first.
+  if (laterOf(capture)) {
+    if (input.choice === "LATER") {
+      if (input.minutes) await updateCapture(id, userId, { createdOutputs: { ...(capture.createdOutputs as object), minutes: input.minutes } as Prisma.InputJsonValue })
+      return { choice: "LATER", taskId: null, taskIds: [], habitIds: [], vaultItemId: null, noteId: null, setAsTonight: false }
+    }
+    await updateCapture(id, userId, { status: "PENDING", createdOutputs: Prisma.JsonNull })
+    return decideSaveService(userId, id, input)
+  }
   // Choosing a step, or letting it go, for a save Ally had shelved means the
   // guess was wrong: take it off the shelf first, then carry on.
   if (isShelved(capture) && input.choice !== "SHELF") {
@@ -366,6 +448,37 @@ export const decideSaveService = async (userId: string, id: string, input: Decid
   if (input.choice === "SHELF") {
     const item = await shelve(userId, id, proposal ?? ({ contentTitle, feelings: [] } as unknown as SaveProposal), url, capture.rawText)
     return { choice: "SHELF", ...empty, vaultItemId: item.id }
+  }
+
+  if (input.choice === "LATER") {
+    await updateCapture(id, userId, {
+      status: "CONVERTED",
+      createdOutputs: { type: "LATER", minutes: input.minutes ?? null, queuedAt: new Date().toISOString() } as Prisma.InputJsonValue,
+    })
+    return { choice: "LATER", ...empty }
+  }
+
+  if (input.choice === "LIST") {
+    const wanted = input.list?.trim()
+    if (!wanted) throw new ValidationError("Which list? For example Movies, Books or Shopping.")
+    const lists = await prisma.allyNote.findMany({ where: { userId, template: "LIST" }, select: { id: true, collection: true, title: true, items: true, done: true } })
+    const existing = resolveList(wanted, lists)
+    const item = contentTitle.slice(0, 120)
+    let noteId: string
+    if (existing) {
+      await updateAllyNoteService(userId, existing.id, { add: [item] }, { source: "SHARE" })
+      noteId = existing.id
+    } else {
+      const known = wellKnownList(wanted)
+      const made = await createAllyNoteService(
+        userId,
+        { collection: known?.collection ?? wanted.charAt(0).toUpperCase() + wanted.slice(1), template: "LIST", title: known?.title ?? `${wanted.charAt(0).toUpperCase()}${wanted.slice(1)} list`, items: [item], text: url },
+        { source: "SHARE" },
+      )
+      noteId = made.id
+    }
+    await updateCapture(id, userId, { status: "CONVERTED", createdOutputs: { type: "LIST", id: noteId, noteId, list: existing?.collection ?? wanted } as Prisma.InputJsonValue })
+    return { choice: "LIST", ...empty, noteId }
   }
 
   // One or several steps, each a to-do or a habit. A single `action` still works.
@@ -445,4 +558,44 @@ export const decideSaveService = async (userId: string, id: string, input: Decid
   })
   const setAsTonight = tonightTaskId ? await setTonightToTaskService(userId, tonightTaskId) : false
   return { choice: "ACTION", taskId: taskIds[0] ?? null, taskIds, habitIds, vaultItemId: null, noteId, setAsTonight }
+}
+
+// ---- Watch later (D6) -------------------------------------------------------------------------
+
+// The queue, oldest first.
+export const listQueueService = async (userId: string): Promise<(QueueItem & { captureId: string })[]> => {
+  const rows = await prisma.capture.findMany({
+    where: { userId, status: "CONVERTED", suggestedOutputs: { path: ["kind"], equals: "SAVE" }, createdOutputs: { path: ["type"], equals: "LATER" } },
+    orderBy: { createdAt: "asc" },
+    take: 100,
+  })
+  return rows.map((c) => {
+    const stored = storedOf(c.suggestedOutputs)!
+    const later = laterOf(c)!
+    const meta = c.urlMetadata as LinkInfo | null
+    return {
+      id: c.id,
+      captureId: c.id,
+      title: stored.proposal.contentTitle,
+      minutes: later.minutes,
+      url: c.detectedUrl,
+      platform: meta?.platform ?? null,
+      queuedAt: later.queuedAt ? new Date(later.queuedAt) : c.createdAt,
+    }
+  })
+}
+
+// "I watched it": it leaves the queue and is kept as watched (not a task, not shelved).
+export const markWatchedService = async (userId: string, id: string): Promise<boolean> => {
+  const c = await findCaptureById(id, userId)
+  if (!c || !laterOf(c)) return false
+  await updateCapture(id, userId, { createdOutputs: { type: "WATCHED", at: new Date().toISOString() } as Prisma.InputJsonValue })
+  return true
+}
+
+export const removeFromQueueService = async (userId: string, id: string): Promise<boolean> => {
+  const c = await findCaptureById(id, userId)
+  if (!c || !laterOf(c)) return false
+  await updateCapture(id, userId, { status: "DISMISSED" })
+  return true
 }

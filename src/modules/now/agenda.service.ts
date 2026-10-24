@@ -4,6 +4,7 @@
    Plan. The phone fetches this and schedules it as local notifications,
    so it works without push, on the free server, and offline once fetched.
    ===================================================================== */
+import { savesWeekLineService } from "../guide/saves.batch.service.js"
 import type { ActivitySource } from "@prisma/client"
 import prisma from "../../lib/prisma.js"
 import { recordActivity } from "../activity/activity.service.js"
@@ -71,6 +72,8 @@ const weekLines = async (userId: string, c: Clock): Promise<string[]> => {
       lines.push(`${name.get(l.habitId) ?? "Habit"}: ${l._count._all} time${l._count._all === 1 ? "" : "s"}`)
     }
   }
+  const saves = await savesWeekLineService(userId).catch(() => null)
+  if (saves) lines.push(saves)
   return lines
 }
 

@@ -106,3 +106,20 @@ describe("upcoming occurrences", () => {
     expect(list.map((d) => d.toISOString())).toEqual([iso("2026-10-20T09:00"), iso("2026-10-27T09:00")])
   })
 })
+
+describe("yearly repeats (birthdays)", () => {
+  const tz = "Asia/Kolkata"
+  it("comes back the same day next year at the same time", () => {
+    const at = localToUtc("2026-03-12T09:00", tz)!
+    expect(nextOccurrence("FREQ=YEARLY", at, tz)?.toISOString()).toBe(localToUtc("2027-03-12T09:00", tz)?.toISOString())
+  })
+  it("moves 29 February to the last day of February in a non-leap year", () => {
+    const at = localToUtc("2028-02-29T09:00", tz)!
+    expect(nextOccurrence("FREQ=YEARLY", at, tz)?.toISOString()).toBe(localToUtc("2029-02-28T09:00", tz)?.toISOString())
+  })
+  it("lists the next occurrences from a past start", () => {
+    const at = localToUtc("2024-03-12T09:00", tz)!
+    const next = upcomingOccurrences("FREQ=YEARLY", at, tz, new Date(Date.UTC(2026, 9, 24)), 2)
+    expect(next.map((d) => d.toISOString())).toEqual([localToUtc("2027-03-12T09:00", tz)!.toISOString(), localToUtc("2028-03-12T09:00", tz)!.toISOString()])
+  })
+})

@@ -1241,7 +1241,12 @@ model AllyNote {
   template     NoteTemplate @default(INFO)
   title        String
   items        String[]
+  // Items ticked off a LIST (shopping, movies); ticking never deletes.
+  done         String[]     @default([])
   text         String?
+  // Structure that belongs to one kind of note: a diet is a day-by-day map, a person
+  // has a phone and a birthday. Read by code, never by the AI (ADR 0039).
+  meta         Json?
   sourceSaveId String?
 
   createdAt DateTime @default(now())

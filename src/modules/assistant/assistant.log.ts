@@ -26,6 +26,10 @@ import {
 import { limitIntent } from "../log/limits.rules.js"
 import { limitChat, statusLine } from "./assistant.limits.js"
 import { timeIntent } from "../log/time.rules.js"
+import { listChat } from "./assistant.lists.js"
+import { dietChat } from "./assistant.diet.js"
+import { peopleChat } from "./assistant.people.js"
+import { savesChat } from "./assistant.saves.js"
 import { timeChat } from "./assistant.time.js"
 import type { ChatResult } from "./assistant.chat.js"
 
@@ -120,6 +124,14 @@ export const logChat = async (userId: string, text: string): Promise<ChatResult 
     const r = await limitChat(userId, await getUserTimezone(userId), limit)
     if (r) return r
   }
+  const dieted = await dietChat(userId, text)
+  if (dieted) return dieted
+  const listed = await listChat(userId, text)
+  if (listed) return listed
+  const queued = await savesChat(userId, text)
+  if (queued) return queued
+  const person = await peopleChat(userId, text)
+  if (person) return person
   const intent = logIntent(text)
   if (!intent) return null
   if ((intent.kind === "ENTRY" || intent.kind === "ASK") && intent.series === "weight") {

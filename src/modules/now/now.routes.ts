@@ -3,6 +3,9 @@ import type { Request, Response } from "express"
 import { z } from "zod"
 import { authenticate } from "../../shared/middleware/auth.middleware.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
+import { mealNowService } from "./meal.service.js"
+import { routineNowService } from "./routine.service.js"
+import { watchLaterNowService } from "./later.service.js"
 import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
 import {
   getNowService,
@@ -38,7 +41,15 @@ const at = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).optional()
 router.get("/", async (req: Request, res: Response) => {
   const q = parse(z.object({ minutes: z.coerce.number().int().positive().optional(), at, smallest: z.enum(["true", "false"]).optional() }), req.query)
   await maybeRefreshHabitStages(req.user!.id, await getClock(req.user!.id, q.at))
-  sendSuccess(res, "Right now", await getNowService(req.user!.id, { minutes: q.minutes, at: q.at, smallest: q.smallest === "true" }))
+  const [now, meal] = await Promise.all([
+    getNowService(req.user!.id, { minutes: q.minutes, at: q.at, smallest: q.smallest === "true" }),
+    mealNowService(req.user!.id, q.at).catch(() => null),
+  ])
+  const [routine, watchLater] = await Promise.all([
+    routineNowService(req.user!.id, now.block).catch(() => null),
+    watchLaterNowService(req.user!.id, { availableMinutes: now.availableMinutes, block: now.block, mode: now.mode }).catch(() => null),
+  ])
+  sendSuccess(res, "Right now", { ...now, meal, routine, watchLater })
 })
 
 // POST /now/prep/:habitId/done — the prep step is done for tonight.

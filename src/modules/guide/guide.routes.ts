@@ -7,6 +7,9 @@ import {
   nextController,
   createSaveController,
   decideSaveController,
+  batchSavesController,
+  decideManySavesController,
+  savesSummaryController,
   getSaveController,
   listSavesController,
   setSavePurposeController,
@@ -15,8 +18,8 @@ import {
 } from "./guide.controller.js"
 import { validate, validateQuery } from "../../shared/middleware/validate.middleware.js"
 import { authenticate } from "../../shared/middleware/auth.middleware.js"
-import { uploadCaptureMedia } from "../../shared/middleware/upload.middleware.js"
-import { respondSchema, historySchema, createSaveSchema, decideSaveSchema, savePurposeSchema, saveMoodsSchema } from "./guide.schema.js"
+import { uploadSaveMedia } from "../../shared/middleware/upload.middleware.js"
+import { respondSchema, historySchema, createSaveSchema, decideSaveSchema, savePurposeSchema, saveMoodsSchema, batchSavesSchema, decideManySchema } from "./guide.schema.js"
 
 const router = Router()
 
@@ -34,7 +37,13 @@ router.get("/next", nextController)
 router.get("/history", validateQuery(historySchema), historyController)
 
 // POST /guide/saves — share a link/text/screenshot; returns one proposed action.
-router.post("/saves", uploadCaptureMedia, validate(createSaveSchema), createSaveController)
+router.post("/saves", uploadSaveMedia, validate(createSaveSchema), createSaveController)
+// POST /guide/saves/batch — up to 10 links at once (before /saves/:id routes).
+router.post("/saves/batch", validate(batchSavesSchema), batchSavesController)
+// POST /guide/saves/decide-many — Watch later or let go for several saves.
+router.post("/saves/decide-many", validate(decideManySchema), decideManySavesController)
+// GET /guide/saves/summary — what became of the saves, and which are old.
+router.get("/saves/summary", savesSummaryController)
 // POST /guide/saves/:id/decide — ACTION (make it a task) | SHELF (hard days) | DROP.
 router.post("/saves/:id/decide", validate(decideSaveSchema), decideSaveController)
 // GET /guide/saves — waiting for a decision, or on the shelf.

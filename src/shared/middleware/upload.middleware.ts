@@ -19,6 +19,26 @@ const upload = multer({
   },
 })
 
+// Saves also take a PDF (a book chapter, notes): Gemini reads it (guide.saves.read.ts).
+const saveUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (/^(image|audio)\//i.test(file.mimetype) || file.mimetype === "application/pdf") cb(null, true)
+    else cb(new ValidationError("Only image, audio or PDF files are allowed"))
+  },
+})
+
+export const uploadSaveMedia = (req: Request, res: Response, next: NextFunction) => {
+  saveUpload.single("file")(req, res, (err: unknown) => {
+    if (!err) return next()
+    if (err instanceof multer.MulterError) {
+      return next(new ValidationError(err.code === "LIMIT_FILE_SIZE" ? "File too large (max 25MB)" : `Upload failed: ${err.message}`))
+    }
+    next(err)
+  })
+}
+
 // Accepts an optional single "file" field. Non-multipart requests (plain JSON
 // text captures) pass straight through untouched. Multer errors (e.g. file too
 // large) are normalised into our ValidationError so the error middleware

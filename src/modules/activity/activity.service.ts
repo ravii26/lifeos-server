@@ -4,7 +4,8 @@
    from it, so nothing progress-related is ever hand-maintained.
    Recording never breaks the action it describes: failures are logged.
    ===================================================================== */
-import type { ActivityEvent, ActivityItem, ActivitySource, ActivityType, Prisma } from "@prisma/client"
+import { Prisma } from "@prisma/client"
+import type { ActivityEvent, ActivityItem, ActivitySource, ActivityType } from "@prisma/client"
 import prisma from "../../lib/prisma.js"
 import logger from "../../lib/logger.js"
 import { embedMemory } from "../assistant/assistant.memory.semantic.js"
@@ -32,11 +33,13 @@ export type UndoPayload =
   // Progress is derived from the log, so undoing a logged count only marks the event undone.
   | { kind: "NOOP" }
   | { kind: "RESTORE_ARCHIVED"; items: { taskId: string; prevStatus: string }[] }
-  | { kind: "RESTORE_NOTE"; noteId: string; collection: string; title: string; items: string[]; text: string | null }
-  | { kind: "RESTORE_ALLY_NOTE"; note: { collection: string; template: string; title: string; items: string[]; text: string | null } }
+  | { kind: "RESTORE_NOTE"; noteId: string; collection: string; title: string; items: string[]; text: string | null; done?: string[]; meta?: unknown }
+  | { kind: "RESTORE_ALLY_NOTE"; note: { collection: string; template: string; title: string; items: string[]; text: string | null; done?: string[]; meta?: unknown } }
   | { kind: "DELETE_METRIC_ENTRY"; entryId: string }
   | { kind: "DELETE_LOG_ENTRY"; entryId: string }
   | { kind: "DELETE_TIME_ENTRY"; entryId: string }
+  // Saves put back to waiting for a decision (let go of old saves, or moved to watch later).
+  | { kind: "RESET_SAVES"; ids: string[] }
   | { kind: "RESTORE_TIME_ENTRY"; entry: { label: string; itemType: string | null; itemId: string | null; startedAt: string; date: string } }
   | { kind: "RESTORE_MILESTONE"; milestoneId: string }
   | { kind: "RESTORE_PROJECT_STATUS"; projectId: string; prev: string }
@@ -154,11 +157,14 @@ const applyUndo = async (userId: string, undo: UndoPayload): Promise<void> => {
     case "RESTORE_NOTE":
       await prisma.allyNote.updateMany({
         where: { id: undo.noteId, userId },
-        data: { collection: undo.collection, title: undo.title, items: undo.items, text: undo.text },
+        data: { collection: undo.collection, title: undo.title, items: undo.items, text: undo.text, ...(undo.done && { done: undo.done }), ...(undo.meta !== undefined && { meta: undo.meta as never }) },
       })
       return
     case "RESTORE_ALLY_NOTE":
-      await prisma.allyNote.create({ data: { userId, ...undo.note, template: undo.note.template as "LIST" } })
+      await prisma.allyNote.create({ data: { userId, ...undo.note, template: undo.note.template as "LIST", meta: (undo.note.meta ?? undefined) as never } })
+      return
+    case "RESET_SAVES":
+      await prisma.capture.updateMany({ where: { id: { in: undo.ids }, userId }, data: { status: "PENDING", createdOutputs: Prisma.JsonNull } })
       return
     case "DELETE_TIME_ENTRY":
       await prisma.timeEntry.deleteMany({ where: { id: undo.entryId, userId } })

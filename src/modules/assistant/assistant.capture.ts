@@ -111,6 +111,11 @@ export const nextOccurrence = (rule: string, at: Date, timeZone: string): Date |
     const [y, m, d] = key.split("-").map(Number) as [number, number, number]
     const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate() // days in the next month
     nextKey = new Date(Date.UTC(y, m, Math.min(d, lastDay))).toISOString().slice(0, 10)
+  } else if (freq === "YEARLY") {
+    // Birthdays: the same day next year (29 February falls back to the last day of February).
+    const [y, m, d] = key.split("-").map(Number) as [number, number, number]
+    const lastDay = new Date(Date.UTC(y + 1, m, 0)).getUTCDate()
+    nextKey = new Date(Date.UTC(y + 1, m - 1, Math.min(d, lastDay))).toISOString().slice(0, 10)
   }
   if (!nextKey) return null
   return new Date(localDayStartMs(nextKey, timeZone) + minutesIntoDay * 60_000)
