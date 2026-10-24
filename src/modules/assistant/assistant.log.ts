@@ -99,6 +99,53 @@ const addCount = async (userId: string, tz: string, c: Extract<LogIntent, { kind
   return bump(userId, tz, habit, c.n, "CHAT")
 }
 
+// Water and the like go to Health when there is one, else the Main area, else any.
+const countAreaFor = async (userId: string): Promise<string> => {
+  const areas = await prisma.area.findMany({ where: { userId, isActive: true }, select: { id: true, name: true, tier: true }, orderBy: { order: "asc" } })
+  const found = areas.find((a) => /health|fitness|body/i.test(a.name)) ?? areas.find((a) => a.tier === "MAIN") ?? areas[0]
+  if (found) return found.id
+  const made = await prisma.area.create({ data: { userId, name: "Health", tier: "SECONDARY", color: "#8a8a8a", icon: "circle", order: 99 }, select: { id: true } })
+  return made.id
+}
+
+const capFirst = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
+
+// "track water, 8 glasses a day": a count habit with a daily target. A yes/no
+// habit of the same name ("Drink water") becomes the count, so there is one
+// place for it; a count that exists just gets the new target. All undoable.
+const trackCount = async (userId: string, t: Extract<LogIntent, { kind: "TRACK" }>): Promise<ChatResult> => {
+  const habits = await prisma.habit.findMany({ where: { userId, isActive: true, isLimit: false }, select: COUNT_SELECT })
+  const same = matchCountHabit(t.what, habits)
+  const per = `${t.target}${t.unit ? ` ${t.unit}` : ""} a day`
+  const howTo = `Say "+1 ${t.what}" each time, or tap +1 on Now.`
+  if (same) {
+    if (same.habitType === "COUNT" && same.targetCount === t.target) return reply(`You're already counting ${same.title.toLowerCase()}: ${per}. ${howTo}`)
+    await prisma.habit.update({ where: { id: same.id }, data: { habitType: "COUNT", targetCount: t.target } })
+    const event = await recordActivity(userId, {
+      type: "UPDATED",
+      itemType: "HABIT",
+      itemId: same.id,
+      title: `${same.title}: ${per}`,
+      source: "CHAT",
+      undo: { kind: "RESTORE_FIELDS", model: "habit", id: same.id, prev: { habitType: same.habitType, targetCount: same.targetCount } },
+    })
+    return reply(`Okay. ${same.title} is now counted: ${per}. ${howTo}`, [{ type: "HABIT_ADDED", id: same.id, title: event?.title ?? same.title }])
+  }
+  const habit = await prisma.habit.create({
+    data: { userId, areaId: await countAreaFor(userId), title: capFirst(t.what), habitType: "COUNT", targetCount: t.target, frequency: "DAILY" },
+    select: { id: true, title: true },
+  })
+  const event = await recordActivity(userId, {
+    type: "CREATED",
+    itemType: "HABIT",
+    itemId: habit.id,
+    title: `${habit.title}: ${per}`,
+    source: "CHAT",
+    undo: { kind: "ARCHIVE_HABIT", habitId: habit.id },
+  })
+  return reply(`Okay. I'll count ${t.what}: ${per}. ${howTo}`, [{ type: "HABIT_ADDED", id: habit.id, title: event?.title ?? habit.title }])
+}
+
 // +n on a count habit by id (the phone's +1 button, a notification action). Null if it is not theirs.
 export const countHabitById = async (userId: string, tz: string, habitId: string, n: number) => {
   const habit = await prisma.habit.findFirst({ where: { id: habitId, userId, isActive: true, habitType: "COUNT" }, select: COUNT_SELECT })
@@ -165,5 +212,6 @@ export const logChat = async (userId: string, text: string): Promise<ChatResult 
   const tz = await getUserTimezone(userId)
   if (intent.kind === "ENTRY") return addEntry(userId, tz, intent)
   if (intent.kind === "COUNT") return addCount(userId, tz, intent)
+  if (intent.kind === "TRACK") return trackCount(userId, intent)
   return answer(userId, tz, intent)
 }

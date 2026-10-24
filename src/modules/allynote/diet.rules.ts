@@ -59,6 +59,17 @@ export const parseMeals = (body: string): Partial<Record<Meal, string>> => {
     const text = clean(m[1]!)
     if (text) out[mealKey(m[2]!)] = text.slice(0, 200)
   }
+  if (Object.keys(out).length) return out
+  // "breakfast oats, lunch dal rice, dinner paneer roti": the meal first,
+  // with no separator. Every part must start with a meal, or it isn't a diet.
+  const parts = body.split(/\s*[,;]\s*/).filter(Boolean)
+  const lead = new RegExp(`^(?:and\\s+)?${MEAL_RE}\\s+(.+)$`, "i")
+  const found = parts.map((p) => p.match(lead))
+  if (!found.every(Boolean)) return out
+  for (const m of found) {
+    const text = clean(m![2]!)
+    if (text) out[mealKey(m![1]!)] = text.slice(0, 200)
+  }
   return out
 }
 

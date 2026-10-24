@@ -144,6 +144,39 @@ export interface NowCandidate {
   skippedToday?: boolean
   target?: { behind: number; target: number; unit: "min" | "count"; countUnit: string | null }
   count?: number | null // a counted session: "apply to 2 jobs"
+  counted?: boolean // a count habit ("8 glasses"): it is the +1 line, not a pick
+}
+
+// Plan 16 §1, Layer 2: after fixed things and musts with deadlines, the basics
+// you said matter every day (gym, walk, reading) come before growth targets.
+// A basic is a habit due today that belongs to exactly this part of the day;
+// habits without a part of the day and count habits never jump the queue.
+// A "Prep ..." habit is the step before a habit, shown as the evening prep line, not a basic.
+const isBasicNow = (c: NowCandidate, current: Block): boolean =>
+  c.sourceType === "HABIT" && !c.counted && c.block === current && !c.skippedToday && !/^prep\b/i.test(c.title)
+
+const isMustNow = (c: NowCandidate, todayKey: string): boolean => {
+  if (c.sourceType !== "TASK" || !c.dueKey || c.skippedToday) return false
+  // Yesterday, today or tomorrow. Older than that it goes back to the score
+  // (still high), so one missed date doesn't take every slot for days.
+  const d = Math.round((Date.parse(`${c.dueKey}T00:00:00Z`) - Date.parse(`${todayKey}T00:00:00Z`)) / 86_400_000)
+  return d >= -1 && d <= 1
+}
+
+// Musts first, then this part of the day's basics, then everything else by score.
+const queueOrder =
+  (todayKey: string, current: Block) =>
+  (a: { c: NowCandidate; s: { score: number } }, b: { c: NowCandidate; s: { score: number } }): number => {
+    const rank = (x: NowCandidate) => (isMustNow(x, todayKey) ? 0 : isBasicNow(x, current) ? 1 : 2)
+    return rank(a.c) - rank(b.c) || b.s.score - a.s.score || a.c.title.localeCompare(b.c.title)
+  }
+
+// A part of the day this day doesn't have (a GYM block, a COMMUTE on a
+// weekend) would hide the item forever: treat it as anytime. Office work
+// keeps its block, so it never spills into a day off.
+const placeable = (candidates: NowCandidate[], blocks: DayBlock[]): NowCandidate[] => {
+  const present = new Set(blocks.map((b) => b.block))
+  return candidates.map((c) => (c.block && c.block !== "OFFICE" && !present.has(c.block) ? { ...c, block: null } : c))
 }
 
 export interface NowOption {
@@ -228,10 +261,19 @@ const officeOrder = (a: NowCandidate, b: NowCandidate): number => {
   return bp - ap || a.order - b.order
 }
 
+// "work on the report for 30 minutes", "1 hour": the minutes a minimum names itself.
+export const minutesIn = (text: string | null | undefined): number | null => {
+  const m = (text ?? "").match(/(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m)\b/i)
+  if (!m) return null
+  const n = Math.round(Number(m[1]) * (/^h/i.test(m[2]!) ? 60 : 1))
+  return n > 0 ? n : null
+}
+
 const sizeFor = (c: NowCandidate, minutes: number, minimumOnly: boolean): { minutes: number; smaller: boolean } | null => {
   const natural = c.sizeMinutes ?? DEFAULT_SIZE
   const sizes = [...(c.sizes ?? [])].sort((a, b) => a.minutes - b.minutes)
-  if (minimumOnly) return { minutes: sizes[0]?.minutes ?? SMALLEST, smaller: true }
+  // A minimum that says its own length ("30 minutes on the report") is that long, not 2 min.
+  if (minimumOnly) return { minutes: sizes[0]?.minutes ?? minutesIn(c.minimum) ?? SMALLEST, smaller: true }
   if (natural <= minutes) return { minutes: natural, smaller: false }
   const fit = [...sizes].reverse().find((s) => s.minutes <= minutes)
   if (fit) return { minutes: fit.minutes, smaller: true }
@@ -257,7 +299,10 @@ export const rightNow = (input: NowInput): NowResult => {
 
   const available = input.minutes ?? (block.freeMinutes > 0 ? block.freeMinutes : block.block === "OFFICE" ? 60 : 30)
 
-  const fitting = input.candidates.filter((c) => c.tier !== "LATER" && fitsBlock(c.block, block.block))
+  // A part of the day this day doesn't have (a GYM block, a COMMUTE on a
+  // weekend) would hide the item forever: treat it as anytime. Office work
+  // keeps its block, so it never spills into a day off.
+  const fitting = placeable(input.candidates, input.blocks).filter((c) => c.tier !== "LATER" && fitsBlock(c.block, block.block))
   const sized = fitting
     .map((c) => ({ c, size: sizeFor(c, available, minimumOnly) }))
     .filter((x): x is { c: NowCandidate; size: { minutes: number; smaller: boolean } } => x.size !== null)
@@ -267,7 +312,7 @@ export const rightNow = (input: NowInput): NowResult => {
   const ranked =
     block.block === "OFFICE"
       ? scored.sort((a, b) => officeOrder(a.c, b.c))
-      : scored.sort((a, b) => b.s.score - a.s.score || a.c.title.localeCompare(b.c.title))
+      : scored.sort(queueOrder(input.todayKey, block.block))
 
   // A to-do due today or tomorrow that needs most of the free time left
   // takes the rest of the day.
@@ -333,7 +378,10 @@ export const rightNow = (input: NowInput): NowResult => {
       : input.mode === "BUSY"
         ? "Busy week: the smallest version counts. "
         : ""
-  const how = top.smaller ? `just ${top.minimum.replace(/\.$/, "").toLowerCase()} (${top.minutes} min)` : `${top.title} (${top.minutes} min)`
+  // The minimum's own words already give a length ("for 30 minutes"): don't repeat it.
+  const how = top.smaller
+    ? `just ${top.minimum.replace(/\.$/, "").replace(/^just\s+/i, "").toLowerCase()}${minutesIn(top.minimum) ? "" : ` (${top.minutes} min)`}`
+    : `${top.title} (${top.minutes} min)`
   if (focus) {
     const when = focus.dueKey === input.todayKey ? "today" : "tomorrow"
     const rest = waiting.length ? ` ${waiting.join(", ")} can wait until it's done.` : ""
@@ -378,14 +426,14 @@ export const suggestDay = (input: Omit<NowInput, "minutes">): SuggestedBlock[] =
     if (e <= input.nowMin || b.block === "OFFICE") continue
     const free = s >= input.nowMin ? b.freeMinutes : Math.round((b.freeMinutes * (e - input.nowMin)) / (e - s))
     if (free < MIN_SLOT) continue
-    const ranked = input.candidates
+    const ranked = placeable(input.candidates, input.blocks)
       .filter((c) => !used.has(c.sourceId) && c.tier !== "LATER" && !c.skippedToday && fitsBlock(c.block, b.block))
       .map((c) => {
         const size = sizeFor(c, free, minimumOnly)
         return size ? { c, size, s: scoreItem(scoreInputFor(c, b.block, free, size.minutes), input.todayKey) } : null
       })
       .filter((x): x is NonNullable<typeof x> => x !== null)
-      .sort((x, y) => y.s.score - x.s.score || x.c.title.localeCompare(y.c.title))
+      .sort(queueOrder(input.todayKey, b.block))
     let left = free
     const items: SuggestedItem[] = []
     for (const r of ranked) {

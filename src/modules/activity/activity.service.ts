@@ -101,7 +101,7 @@ export const listActivity = (userId: string, since: Date, limit = 200) =>
 // Only these fields can be put back by RESTORE_FIELDS; dates travel as ISO strings.
 const RESTORABLE: Record<"task" | "habit" | "project" | "settings" | "goal" | "allyNote" | "area" | "memory", string[]> = {
   task: ["sizeMinutes", "dueDate", "status", "archivedAt", "remindAt", "windowEnd", "title", "priority"],
-  habit: ["targetMinutes", "frequency", "specificDays", "isActive", "reminderTime", "title"],
+  habit: ["targetMinutes", "frequency", "specificDays", "isActive", "reminderTime", "title", "habitType", "targetCount"],
   project: ["sessionMinutes", "status", "title", "priority", "deadline"],
   area: ["name", "tier", "isActive"],
   memory: ["sensitive"],

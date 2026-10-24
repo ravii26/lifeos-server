@@ -166,6 +166,76 @@ describe("right now", () => {
     const r = rightNow(input({ nowMin: toMin("20:00"), mode: "BUSY", candidates: [cand({ sourceId: "a", sizeMinutes: 30 })] }))
     expect(r.options[0]!.minutes).toBe(2)
   })
+  it("a minimum that names its length keeps it, and isn't said twice", () => {
+    const r = rightNow(input({ nowMin: toMin("20:00"), gapDays: 3, candidates: [cand({ sourceId: "report", sizeMinutes: 240, minimum: "Work on the report for 30 minutes" })] }))
+    expect(r.options[0]!.minutes).toBe(30)
+    expect(r.message).toMatch(/for 30 minutes\./)
+    expect(r.message).not.toMatch(/\(\d+ min\)/)
+  })
+  it("today's basics for this part of the day come before growth targets", () => {
+    const r = rightNow(
+      input({
+        nowMin: toMin("20:00"),
+        candidates: [
+          cand({ sourceId: "calls", sourceType: "PROJECT", block: "EVENING", tier: "MAIN", sizeMinutes: 20, target: { behind: 5, target: 5, unit: "count", countUnit: "calls" } }),
+          cand({ sourceId: "walk", sourceType: "HABIT", block: "EVENING", tier: "SECONDARY", sizeMinutes: 20 }),
+          // Anytime and count habits never jump the queue.
+          cand({ sourceId: "water", sourceType: "HABIT", block: null, tier: "SECONDARY", counted: true }),
+          cand({ sourceId: "stretch", sourceType: "HABIT", block: null, tier: "SECONDARY", sizeMinutes: 5 }),
+        ],
+      }),
+    )
+    expect(r.options.map((o) => o.sourceId).slice(0, 2)).toEqual(["walk", "calls"])
+  })
+  it("a prep step is not a basic, and the default minimum reads once", () => {
+    const r = rightNow(
+      input({
+        nowMin: toMin("20:00"),
+        gapDays: 3,
+        candidates: [
+          cand({ sourceId: "prep", title: "Prep Read 20 pages", sourceType: "HABIT", block: "EVENING", tier: "SECONDARY" }),
+          cand({ sourceId: "walk", sourceType: "HABIT", block: "EVENING", tier: "SECONDARY", sizeMinutes: 20 }),
+        ],
+      }),
+    )
+    expect(r.options[0]!.sourceId).toBe("walk")
+    expect(r.message).not.toMatch(/just just/i)
+  })
+  it("a must due tomorrow still beats the basics", () => {
+    const r = rightNow(
+      input({
+        nowMin: toMin("20:00"),
+        candidates: [
+          cand({ sourceId: "walk", sourceType: "HABIT", block: "EVENING", tier: "SECONDARY", sizeMinutes: 20 }),
+          cand({ sourceId: "form", tier: "MAINTAIN", sizeMinutes: 10, dueKey: "2026-10-08" }),
+        ],
+      }),
+    )
+    expect(r.options[0]!.sourceId).toBe("form")
+    // Days past its date, it no longer jumps ahead of today's basics.
+    const late = rightNow(
+      input({
+        nowMin: toMin("20:00"),
+        candidates: [
+          cand({ sourceId: "walk", sourceType: "HABIT", block: "EVENING", tier: "SECONDARY", sizeMinutes: 20 }),
+          cand({ sourceId: "form", tier: "MAINTAIN", sizeMinutes: 10, dueKey: "2026-10-03" }),
+        ],
+      }),
+    )
+    expect(late.options[0]!.sourceId).toBe("walk")
+  })
+  it("a part of the day the schedule doesn't have means anytime, except office work", () => {
+    const r = rightNow(
+      input({
+        nowMin: toMin("20:00"),
+        blocks: defaultDay(3).filter((b) => b.block !== "GYM"),
+        candidates: [cand({ sourceId: "gym", sourceType: "HABIT", block: "GYM", tier: "SECONDARY", sizeMinutes: 45 })],
+      }),
+    )
+    expect(r.options[0]?.sourceId).toBe("gym")
+    const weekend = rightNow(input({ nowMin: toMin("20:00"), blocks: defaultDay(6), weekday: 6, candidates: [cand({ sourceId: "work", block: "OFFICE" })] }))
+    expect(weekend.options).toHaveLength(0)
+  })
 })
 
 describe("capacity guard", () => {

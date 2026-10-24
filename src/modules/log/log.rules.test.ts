@@ -60,6 +60,19 @@ describe("logIntent: counts", () => {
     expect(logIntent("I had a glass of water")).toEqual({ kind: "COUNT", n: 1, what: "glass of water" })
     expect(logIntent("drank water")).toEqual({ kind: "COUNT", n: 1, what: "water" })
   })
+
+  it("reads a daily count to keep", () => {
+    const water = { kind: "TRACK", what: "water", target: 8, unit: "glasses" }
+    expect(logIntent("Track water, 8 glasses a day")).toEqual(water)
+    expect(logIntent("track my water 8 glasses daily")).toEqual(water)
+    expect(logIntent("Drink 8 glasses of water a day")).toEqual(water)
+    expect(logIntent("I want to drink 8 glasses of water every day")).toEqual(water)
+    expect(logIntent("8 glasses of water a day")).toEqual(water)
+    expect(logIntent("water: 8 glasses a day")).toEqual(water)
+    // Logging what happened stays a count, not a new target.
+    expect(logIntent("drank 2 glasses of water")).toEqual({ kind: "COUNT", n: 2, what: "glasses of water" })
+    expect(logIntent("track water")).toBeNull()
+  })
 })
 
 describe("logIntent: questions", () => {

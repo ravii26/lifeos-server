@@ -38,7 +38,7 @@ import {
 import type { Tier } from "../guide/guide.rules.js"
 import { adviseNow, targetPace, targetSession } from "./brain.rules.js"
 import { asDirectness, asFocus, wantsAdvice } from "../settings/personalization.rules.js"
-import { areaIdleDays, savesToday, skipsOf, weeklyTargets } from "./brain.service.js"
+import { areaIdleDays, mondayOf, savesToday, skipsOf, weeklyTargets } from "./brain.service.js"
 
 const WEEKDAY_CODES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
 const PRIORITY_RANK = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as const
@@ -127,7 +127,8 @@ export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandi
     }),
     prisma.habit.findMany({
       where: { userId, isActive: true, isLimit: false },
-      include: { logs: { where: { date: dateFromKey(c.todayKey), completed: true }, select: { id: true } } },
+      // From Monday, so "gym 4 times a week" stops asking once the 4 are done.
+      include: { logs: { where: { date: { gte: dateFromKey(mondayOf(c.todayKey).key), lte: dateFromKey(c.todayKey) }, completed: true }, select: { date: true } } },
     }),
     weeklyTargets(userId, c),
     skipsOf(userId, c),
@@ -166,7 +167,11 @@ export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandi
 
   const fromHabits: NowCandidate[] = habits
     // An automatic habit is part of you now: it is not prompted any more.
-    .filter((h) => h.stage !== "AUTOMATIC" && h.logs.length === 0 && habitScheduledOn(h, c.weekday))
+    .filter((h) => {
+      const doneToday = h.logs.some((l) => utcDayKey(l.date) === c.todayKey)
+      const weekFull = h.frequency === "WEEKLY" && (h.weeklyTarget ?? 0) > 0 && h.logs.length >= h.weeklyTarget!
+      return h.stage !== "AUTOMATIC" && !doneToday && !weekFull && habitScheduledOn(h, c.weekday)
+    })
     .map((h, i) => ({
       sourceType: "HABIT" as const,
       sourceId: h.id,
@@ -184,6 +189,7 @@ export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandi
       goalWhy: null,
       areaIdleDays: idle.get(h.areaId) ?? null,
       skippedToday: skips.today.has(h.id),
+      counted: h.habitType === "COUNT",
     }))
 
   // A session towards each weekly target that still needs time today.

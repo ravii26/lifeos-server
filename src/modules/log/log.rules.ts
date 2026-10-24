@@ -14,6 +14,7 @@ export type LogPeriod = "TODAY" | "YESTERDAY" | "WEEK" | "LAST_7" | "MONTH" | "L
 
 export type LogIntent =
   | { kind: "COUNT"; n: number; what: string }
+  | { kind: "TRACK"; what: string; target: number; unit: string | null } // "track water, 8 glasses a day"
   | { kind: "ENTRY"; series: LogSeries; value: number; unit: string; label: string | null; dayOffset: 0 | -1 }
   | { kind: "ASK"; series: LogSeries; period: LogPeriod | null; label: string | null }
 
@@ -74,6 +75,15 @@ const COUNT_PLUS_AFTER = /^(.{2,40}?)\s*\+\s*(\d{1,2})$/
 const COUNT_VERB = /^(?:i\s+)?(?:drank|had|ate|took|did)\s+(\d{1,2})\s+(.{2,40})$/i
 const COUNT_ONE = /^(?:i\s+)?(?:drank|had)\s+(?:a\s+|one\s+|1\s+)?((?:glass|cup|bottle)(?:es|s)?\s+of\s+water|water)$/i
 
+// A daily count to keep: "track water, 8 glasses a day", "drink 8 glasses of
+// water daily", "8 glasses of water a day", "water: 8 glasses a day".
+const TRACK_UNIT = "(glasses|cups|bottles|litres|liters|servings|times)"
+const TRACK_DAY = "(?:\\s+(?:a|per|each|every)\\s+day|\\s+daily)"
+const TRACK_NAMED = new RegExp(`^(?:track|count)\\s+(?:my\\s+)?(.{2,30}?)\\s*[,:-]?\\s+(\\d{1,2})\\s+${TRACK_UNIT}(?:\\s+of\\s+\\S+)?${TRACK_DAY}$`, "i")
+const TRACK_VERB = new RegExp(`^(?:i\\s+(?:want|need)\\s+to\\s+)?(?:track\\s+|count\\s+)?(?:drink|have|eat)\\s+(\\d{1,2})\\s+${TRACK_UNIT}\\s+of\\s+(.{2,30}?)${TRACK_DAY}$`, "i")
+const TRACK_BARE = new RegExp(`^(\\d{1,2})\\s+${TRACK_UNIT}\\s+of\\s+(.{2,30}?)${TRACK_DAY}$`, "i")
+const TRACK_WORD = new RegExp(`^([a-z]{3,20})\\s*[,:-]?\\s+(\\d{1,2})\\s+${TRACK_UNIT}${TRACK_DAY}$`, "i")
+
 const ASK_SPEND = /^(?:how much|what)\s+(?:did|have|do)\s+i\s+(?:spend|spent)\b(.*)$/i
 const ASK_SPEND_TOTAL = /^(?:how much|what)(?:'s| is| was| were)?\s+(?:my\s+)?(?:total\s+)?(?:spending|expenses?)\b(.*)$/i
 const ASK_SLEEP = /^(?:how (?:much |well )?did i sleep|how (?:much|well) have i (?:slept|been sleeping)|(?:what(?:'s| is) )?my (?:average )?sleep|average sleep)\b/i
@@ -95,6 +105,12 @@ export const logIntent = (text: string): LogIntent | null => {
       return { kind: "ASK", series: "money", period, label: tidyLabel(on?.[1]) }
     }
   }
+
+  // ---- a daily count to keep: "track water, 8 glasses a day"
+  const named = t.match(TRACK_NAMED) ?? t.match(TRACK_WORD)
+  if (named && Number(named[2]) > 0) return { kind: "TRACK", what: named[1]!.trim().toLowerCase(), target: Number(named[2]), unit: named[3]!.toLowerCase() }
+  const verbal = t.match(TRACK_VERB) ?? t.match(TRACK_BARE)
+  if (verbal && Number(verbal[1]) > 0) return { kind: "TRACK", what: verbal[3]!.trim().toLowerCase(), target: Number(verbal[1]), unit: verbal[2]!.toLowerCase() }
 
   // ---- counts: "+1 water", "drank 2 glasses of water"
   const plus = t.match(COUNT_PLUS)

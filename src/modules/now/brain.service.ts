@@ -124,11 +124,14 @@ export const areaIdleDays = async (userId: string, c: Clock): Promise<Map<string
   for (const t of tasks) seen(t.areaId, t.completedAt)
   for (const l of logs) seen(l.habit.areaId, l.date)
   for (const e of projectEvents) seen(projectArea.get(e.itemId!), e.at)
-  const areas = await prisma.area.findMany({ where: { userId, isActive: true }, select: { id: true } })
+  const areas = await prisma.area.findMany({ where: { userId, isActive: true }, select: { id: true, createdAt: true } })
   const out = new Map<string, number>()
+  const daysSince = (at: Date) => Math.max(0, Math.round((localDayStartMs(c.todayKey, c.tz) - localDayStartMs(dayKeyInTz(at, c.tz), c.tz)) / DAY))
   for (const a of areas) {
     const at = last.get(a.id)
-    out.set(a.id, at ? Math.max(0, Math.round((localDayStartMs(c.todayKey, c.tz) - localDayStartMs(dayKeyInTz(at, c.tz), c.tz)) / DAY)) : 14)
+    // Nothing done yet: idle only since the area was made, so a new area is
+    // never said to have gone two weeks without time.
+    out.set(a.id, at ? daysSince(at) : Math.min(14, daysSince(a.createdAt)))
   }
   return out
 }

@@ -587,7 +587,16 @@ interface ExecResult {
   cite: string | null // "(From your Breakfast note.)" added to the reply
   skipped: number // duplicates we did not create again: not a failure
   asked: Extract<ChatAction, { type: "ASK" }> | null
+  prepDropped: boolean // a "Prep …" habit nobody asked for was not made
 }
+
+// The model's reply may still mention the prep step it planned; drop those sentences.
+export const withoutPrepClaims = (reply: string): string =>
+  reply
+    .split(/(?<=[.!?])\s+/)
+    .filter((s) => !/\bprep(?:are|aring)?\b/i.test(s))
+    .join(" ")
+    .trim()
 
 const MODE_SAY: Record<Mode, string> = {
   NORMAL: "Back to normal. I'll plan your days again.",
@@ -597,9 +606,31 @@ const MODE_SAY: Record<Mode, string> = {
   HOLIDAY: "Holiday mode on. Plans are paused. Enjoy it, tell me when you're back.",
 }
 
+const PREP_WORDS = /\b(?:prep|prepare|preparing|get ready|ready the|night before|evening before|the day before|tayyari|soak|pack|lay out|keep ready)\b/i
+
+// A habit is personal time, so it never lives inside office hours (where Now
+// shows only work). "After office" is the evening, "before office" the morning.
+export const habitBlock = (block: string, anchor: string | null | undefined): string => {
+  if (block !== "OFFICE") return block
+  if (/\b(?:after|post)\s+(?:office|work)\b/i.test(anchor ?? "")) return "EVENING"
+  if (/\bbefore\s+(?:office|work)\b/i.test(anchor ?? "")) return "MORNING"
+  return ""
+}
+
+// "gym 4 times a week": a weekly count, read from the person's own words next
+// to the habit's name, so "and a walk every day" in the same message stays daily.
+export const timesAWeek = (message: string, title: string): number | null => {
+  const word = title.trim().split(/\s+/)[0]?.toLowerCase().replace(/[^a-z]/g, "")
+  if (!word || word.length < 3) return null
+  const m = message.match(new RegExp(`\\b${word}\\w*\\b[^,.;]{0,30}?\\b(\\d)\\s*(?:x|times)\\s*(?:a|per|every)\\s*week`, "i"))
+  const n = m ? Number(m[1]) : 0
+  return n >= 1 && n <= 6 ? n : null
+}
+
 const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], message = ""): Promise<ExecResult> => {
   const done: ChatAction[] = []
   let skipped = 0
+  let prepDropped = false
   let say: string | null = null
   let cite: string | null = null
   let asked: ExecResult["asked"] = null
@@ -780,8 +811,16 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
           skipped++
           continue
         }
-        const days = strings(a.days, 7).map((d) => d.toUpperCase().slice(0, 3)).filter((d) => ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"].includes(d))
-        const block = String(a.timeBlock ?? "").toUpperCase()
+        // The prep rule is for "prep the night before"; "read before sleep" made
+        // a "Prep Read" habit nobody asked for. Only keep one they asked about.
+        if (/^prep\b/i.test(a.title.trim()) && !PREP_WORDS.test(message)) {
+          skipped++
+          prepDropped = true
+          continue
+        }
+        const perWeek = timesAWeek(message, a.title)
+        const days = perWeek ? [] : strings(a.days, 7).map((d) => d.toUpperCase().slice(0, 3)).filter((d) => ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"].includes(d))
+        const block = habitBlock(String(a.timeBlock ?? "").toUpperCase(), a.anchor)
         const habit = await createHabitService(
           userId,
           {
@@ -791,7 +830,8 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
             prepareAhead: a.prepare?.trim() || undefined,
             prepTime: clock(a.prepTime),
             timeBlock: ["MORNING", "COMMUTE", "OFFICE", "GYM", "EVENING", "NIGHT"].includes(block) ? (block as "MORNING") : undefined,
-            frequency: days.length ? "CUSTOM" : "DAILY",
+            frequency: perWeek ? "WEEKLY" : days.length ? "CUSTOM" : "DAILY",
+            weeklyTarget: perWeek ?? undefined,
             specificDays: days.length ? (days as ("MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN")[]) : undefined,
             reminderTime: clock(a.reminderTime),
             anchor: a.anchor?.trim() || undefined,
@@ -898,7 +938,7 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
       logger.warn(`Chat action ${a.type} failed:`, err)
     }
   }
-  return { done, say, cite, skipped, asked }
+  return { done, say, cite, skipped, asked, prepDropped }
 }
 
 // ---- entry ---------------------------------------------------------
@@ -1102,7 +1142,8 @@ export const assistantChat = async (
   if (plan.role === "FRIEND" && !EXPLICIT_TASK.test(text)) {
     plan.actions = plan.actions.filter((a) => !CREATES.has(a.type ?? ""))
   }
-  const { done: actions, say, cite, skipped, asked } = await execute(userId, ctx, plan.actions, text)
+  const { done: actions, say, cite, skipped, asked, prepDropped } = await execute(userId, ctx, plan.actions, text)
+  const modelReply = prepDropped ? withoutPrepClaims(plan.reply) || "Saved what you said." : plan.reply
   const [forgotten, remembered] = await Promise.all([
     forgetMemories(userId, plan.forget, ctx.memories).catch(() => []),
     saveMemories(userId, plan.remember, ctx.memories).catch(() => []),
@@ -1123,7 +1164,7 @@ export const assistantChat = async (
     ? `Which one did you finish: ${asked.options.map((o) => `"${o.title}"`).join(" or ")}?`
     : say
       ? [say, ...notes].join("\n\n")
-      : [cite ? `${plan.reply} ${cite}` : plan.reply, ...notes].join("\n\n")
+      : [cite ? `${modelReply} ${cite}` : modelReply, ...notes].join("\n\n")
   // Capacity guard: never silently overload today (plan rule 6).
   let capacity: ChatResult["capacity"]
   if (actions.some((x) => x.type === "TASK_ADDED" || x.type === "PROJECT_ADDED")) {

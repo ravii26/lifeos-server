@@ -23,6 +23,14 @@ describe("parseMeals", () => {
     expect(parseMeals("oats, boiled eggs for breakfast; paneer for dinner")).toEqual({ breakfast: "oats, boiled eggs", dinner: "paneer" })
     expect(parseMeals("just some words")).toEqual({})
   })
+
+  it("reads the meal-first form with no separator", () => {
+    expect(parseMeals("breakfast oats, lunch dal rice, dinner paneer roti")).toEqual({ breakfast: "oats", lunch: "dal rice", dinner: "paneer roti" })
+    expect(parseMeals("breakfast poha, and dinner khichdi")).toEqual({ breakfast: "poha", dinner: "khichdi" })
+    // One part without a meal: not a diet, the AI decides.
+    expect(parseMeals("breakfast oats, gym at 7")).toEqual({})
+    expect(dietIntent("Monday diet: breakfast oats, lunch dal rice, dinner paneer roti")).toEqual({ kind: "SET", days: ["1"], meals: { breakfast: "oats", lunch: "dal rice", dinner: "paneer roti" } })
+  })
 })
 
 describe("dietIntent: setting the plan", () => {
