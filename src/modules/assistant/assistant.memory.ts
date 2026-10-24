@@ -8,6 +8,7 @@ import type { Memory, MemoryKind } from "@prisma/client"
 import prisma from "../../lib/prisma.js"
 import { recordActivity } from "../activity/activity.service.js"
 import { visibleMemories } from "../search/search.rules.js"
+import { backfillEmbeddings, embedMemory, embedQuery, semanticBonus, similarities } from "./assistant.memory.semantic.js"
 
 export const MEMORY_KINDS: MemoryKind[] = ["FACT", "PREFERENCE", "GOAL", "STRUGGLE", "FEELING", "PERSON", "EVENT"]
 
@@ -27,12 +28,15 @@ const words = (s: string): Set<string> =>
       .filter((w) => w.length > 2 && !STOP.has(w)),
   )
 
-// Pure ranking so it can be tested without a database.
-export const rankMemories = <T extends Pick<Memory, "content" | "importance" | "createdAt">>(
+// Pure ranking so it can be tested without a database. `similar` (memory id ->
+// similarity to the message, from assistant.memory.semantic.ts) adds a bonus
+// for memories that mean the same thing even when they share no words.
+export const rankMemories = <T extends Pick<Memory, "content" | "importance" | "createdAt"> & { id?: string }>(
   memories: T[],
   message: string,
   now: Date = new Date(),
   limit = MAX_RECALL,
+  similar?: Map<string, number>,
 ): T[] => {
   const q = words(message)
   return memories
@@ -40,7 +44,8 @@ export const rankMemories = <T extends Pick<Memory, "content" | "importance" | "
       const overlap = [...words(m.content)].filter((w) => q.has(w)).length
       const ageDays = (now.getTime() - m.createdAt.getTime()) / 86_400_000
       const recency = Math.max(0, 1 - ageDays / 60) // fades over ~2 months
-      return { m, score: m.importance * 2 + overlap * 3 + recency * 2 }
+      const meaning = m.id && similar?.has(m.id) ? semanticBonus(similar.get(m.id)!) : 0
+      return { m, score: m.importance * 2 + overlap * 3 + recency * 2 + meaning }
     })
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
@@ -53,8 +58,15 @@ export const recallMemories = async (userId: string, message: string) => {
     orderBy: { createdAt: "desc" },
     take: POOL,
   })
+  // Memories saved before embeddings existed get theirs in the background.
+  backfillEmbeddings(pool)
+  // Only worth a Google call when something could be matched, and nothing is
+  // lost if it fails: the ranking just falls back to words, importance, recency.
+  const embedded = pool.filter((m) => m.embedding.length > 0)
+  const query = embedded.length > 0 ? await embedQuery(message) : null
+  const similar = query ? similarities(embedded, query) : undefined
   // Health and mental-health memories stay out of the prompt unless the person raises the topic.
-  return rankMemories(visibleMemories(pool, message), message)
+  return rankMemories(visibleMemories(pool, message), message, new Date(), MAX_RECALL, similar)
 }
 
 export interface MemoryWrite {
@@ -80,6 +92,7 @@ export const saveMemories = async (userId: string, writes: MemoryWrite[], known:
     const source = w.source === "SAID" ? "SAID" : "INFERRED"
     const sensitive = w.sensitive === true
     const memory = await prisma.memory.create({ data: { userId, content, kind, importance, source, sensitive } })
+    void embedMemory(memory.id, content, sensitive)
     const event = await recordActivity(userId, {
       type: "REMEMBERED",
       itemType: "MEMORY",

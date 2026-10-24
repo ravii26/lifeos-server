@@ -11,11 +11,22 @@ const EMBED_MODEL = "gemini-embedding-001"
 
 export const embeddingsAvailable = (): boolean => geminiClient !== null
 
-// Embed a single text (used for the question at ask time).
-export const embedText = async (text: string): Promise<number[]> => {
+// Embed a single text (used for the question at ask time). `task` tells Google
+// whether the text is a stored item or a search query (better matches); `dims`
+// shrinks the vector (the model's default is 3072 numbers). The installed SDK
+// types predate `outputDimensionality`, but the API accepts it.
+export const embedText = async (
+  text: string,
+  opts: { task?: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY"; dims?: number } = {},
+): Promise<number[]> => {
   if (!geminiClient) throw new Error("Gemini client not initialized")
   const model = geminiClient.getGenerativeModel({ model: EMBED_MODEL })
-  const res = await model.embedContent(text)
+  const request = {
+    content: { role: "user", parts: [{ text }] },
+    ...(opts.task && { taskType: opts.task }),
+    ...(opts.dims && { outputDimensionality: opts.dims }),
+  }
+  const res = await model.embedContent(request as Parameters<typeof model.embedContent>[0])
   return res.embedding.values
 }
 

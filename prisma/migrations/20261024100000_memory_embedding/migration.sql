@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Memory" ADD COLUMN     "embedding" DOUBLE PRECISION[] DEFAULT ARRAY[]::DOUBLE PRECISION[];
+

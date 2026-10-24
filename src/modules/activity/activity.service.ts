@@ -7,6 +7,7 @@
 import type { ActivityEvent, ActivityItem, ActivitySource, ActivityType, Prisma } from "@prisma/client"
 import prisma from "../../lib/prisma.js"
 import logger from "../../lib/logger.js"
+import { embedMemory } from "../assistant/assistant.memory.semantic.js"
 import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
 
 export interface ActivityInput {
@@ -215,8 +216,8 @@ const applyUndo = async (userId: string, undo: UndoPayload): Promise<void> => {
     case "DELETE_MEMORY":
       await prisma.memory.deleteMany({ where: { id: undo.memoryId, userId } })
       return
-    case "RESTORE_MEMORY":
-      await prisma.memory.create({
+    case "RESTORE_MEMORY": {
+      const restored = await prisma.memory.create({
         data: {
           userId,
           content: undo.memory.content,
@@ -226,7 +227,9 @@ const applyUndo = async (userId: string, undo: UndoPayload): Promise<void> => {
           sensitive: undo.memory.sensitive,
         },
       })
+      void embedMemory(restored.id, restored.content, restored.sensitive)
       return
+    }
     case "RESTORE_SETTING":
       await prisma.userSettings.updateMany({ where: { userId }, data: { [undo.field]: undo.prev } })
       return
