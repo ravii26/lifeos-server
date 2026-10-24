@@ -8,6 +8,7 @@ import {
   createSaveController,
   decideSaveController,
   batchSavesController,
+  watchedSaveController,
   decideManySavesController,
   savesSummaryController,
   getSaveController,
@@ -44,6 +45,8 @@ router.post("/saves/batch", validate(batchSavesSchema), batchSavesController)
 router.post("/saves/decide-many", validate(decideManySchema), decideManySavesController)
 // GET /guide/saves/summary — what became of the saves, and which are old.
 router.get("/saves/summary", savesSummaryController)
+// POST /guide/saves/:id/watched — it leaves Watch later.
+router.post("/saves/:id/watched", watchedSaveController)
 // POST /guide/saves/:id/decide — ACTION (make it a task) | SHELF (hard days) | DROP.
 router.post("/saves/:id/decide", validate(decideSaveSchema), decideSaveController)
 // GET /guide/saves — waiting for a decision, or on the shelf.

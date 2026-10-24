@@ -59,7 +59,7 @@ export interface ScenarioContext {
   newDevice: () => Promise<ScenarioContext["api"]>
   // Fresh per scenario: an empty account with one MAIN area (Career).
   say: (message: string) => Promise<ChatReplyShape>
-  api: (method: "get" | "post" | "patch" | "put", path: string, body?: unknown) => Promise<{ status: number; body: any }>
+  api: (method: "get" | "post" | "patch" | "put" | "delete", path: string, body?: unknown) => Promise<{ status: number; body: any }>
 }
 
 export interface Scenario {
@@ -2247,6 +2247,69 @@ export const scenarios: Scenario[] = [
       if (dto.summary.state === "READY" && !/read the start, the middle and the end/.test(dto.summary.lines.join(" "))) return `a sampled text did not say so: ${JSON.stringify(dto.summary)}`
       void area
       return null
+    },
+  },
+  {
+    id: "L10",
+    name: "Phone endpoints: Log overview, +1 on a count, remove / restore an entry, tick and reset a list, the timer on Now",
+    status: "ready",
+    async run({ api, say, db, userId }) {
+      const area = await careerId(api)
+      const hid = (await api("post", "/habits", { title: "Drink 8 glasses of water", areaId: area, habitType: "COUNT", targetCount: 8 })).body.data.id as string
+      await say("spent 250 on lunch")
+      await say("slept 7 hours")
+      await say("weight 74.5")
+      await say("limit Instagram to 1 hour")
+      await say("spent 40 min on instagram")
+
+      // One read fills the Log and limits screen.
+      const o1 = (await api("get", "/log/overview")).body.data
+      if (o1?.money?.monthTotal !== 250 || o1.money.byCategory?.[0]?.category !== "food") return `money: ${JSON.stringify(o1?.money)}`
+      if (o1.sleep?.latest !== 7 || o1.weight?.latest !== 74.5) return `sleep / weight: ${JSON.stringify([o1.sleep, o1.weight])}`
+      if (!o1.counts?.some((c: any) => c.id === hid && c.count === 0 && c.target === 8)) return `counts: ${JSON.stringify(o1.counts)}`
+      if (!/Instagram: 40 min of 1 h today/.test(o1.limits?.[0]?.line ?? "")) return `limits: ${JSON.stringify(o1.limits)}`
+      if (o1.recent?.length !== 3) return `recent entries: ${o1.recent?.length}`
+
+      // +1 on a count, as the Plan row and a notification button do.
+      const c1 = await api("post", "/log/count", { habitId: hid, n: 1 })
+      const c2 = await api("post", "/log/count", { habitId: hid, n: 2 })
+      if (c1.status !== 200 || c2.body.data?.count !== 3 || c2.body.data.target !== 8 || !/3 of 8/.test(c2.body.data.line)) return `count: ${JSON.stringify(c2.body)}`
+      if ((await api("post", "/log/count", { habitId: "nope" })).status !== 404) return "a count on someone else's habit was not refused"
+      if ((await api("post", `/activity/${c2.body.data.activityId}/undo`)).status !== 200) return "undo of +2 failed"
+      const o2 = (await api("get", "/log/overview")).body.data
+      if (o2.counts.find((c: any) => c.id === hid).count !== 1) return `count after undo: ${JSON.stringify(o2.counts)}`
+
+      // Removing an entry, and getting it back.
+      const lunch = o1.recent.find((r: any) => r.series === "money")
+      const del = await api("delete", `/log/entries/${lunch.id}`)
+      if (del.status !== 200 || (await db.logEntry.count({ where: { userId, series: "money" } })) !== 0) return `delete entry: ${del.status}`
+      if ((await api("post", `/activity/${del.body.data.activityId}/undo`)).status !== 200 || (await db.logEntry.count({ where: { userId, series: "money" } })) !== 1) return "undo of the removal failed"
+
+      // Ticking a list item and resetting a routine.
+      const list = await db.allyNote.create({ data: { userId, collection: "Shopping", template: "LIST", title: "Shopping list", items: ["Milk", "Eggs", "Bread"] } })
+      const t1 = await api("post", `/ally-notes/${list.id}/tick`, { item: "Eggs", done: true })
+      if (t1.status !== 200 || t1.body.data.done.join() !== "Eggs") return `tick: ${JSON.stringify(t1.body).slice(0, 160)}`
+      const t2 = await api("post", `/ally-notes/${list.id}/tick`, { item: "Eggs", done: false })
+      if (t2.body.data.done.length !== 0) return "untick failed"
+      await api("post", `/ally-notes/${list.id}/tick`, { item: "Milk", done: true })
+      await api("post", `/ally-notes/${list.id}/tick`, { item: "Bread", done: true })
+      const reset = await api("post", `/ally-notes/${list.id}/reset`, {})
+      if (reset.body.data.done.length !== 0 || reset.body.data.items.length !== 3) return `reset: ${JSON.stringify(reset.body).slice(0, 160)}`
+      await api("post", `/ally-notes/${list.id}/tick`, { item: "Milk", done: true })
+      const cleared = await api("post", `/ally-notes/${list.id}/reset`, { clear: true })
+      if (cleared.body.data.items.join() !== "Eggs,Bread" || cleared.body.data.done.length !== 0) return `clear ticked: ${JSON.stringify(cleared.body).slice(0, 160)}`
+      if ((await api("post", `/ally-notes/nope/tick`, { item: "x", done: true })).status !== 404) return "tick on a missing note was not a 404"
+
+      // The running timer shows on Now with how long it has been.
+      const idle = (await api("get", "/now")).body.data
+      if (idle?.timer !== null) return "a timer is shown when none is running"
+      if (!idle.counts?.some((c: any) => c.id === hid && c.count === 1 && c.target === 8)) return `counts on Now: ${JSON.stringify(idle.counts)}`
+      await say("start timer for reading")
+      await db.timeEntry.updateMany({ where: { userId, endedAt: null }, data: { startedAt: new Date(Date.now() - 12 * 60_000) } })
+      const timer = (await api("get", "/now")).body.data?.timer
+      if (timer?.label !== "reading" || timer.minutes < 11 || timer.minutes > 13 || timer.forgotten) return `timer on Now: ${JSON.stringify(timer)}`
+      await say("stop timer")
+      return (await api("get", "/now")).body.data?.timer === null ? null : "the timer stayed on Now after stop"
     },
   },
 ]

@@ -71,19 +71,16 @@ const addEntry = async (userId: string, tz: string, e: Extract<LogIntent, { kind
   ])
 }
 
-const addCount = async (userId: string, tz: string, c: Extract<LogIntent, { kind: "COUNT" }>): Promise<ChatResult | null> => {
-  const habits = await prisma.habit.findMany({
-    where: { userId, isActive: true, habitType: "COUNT" },
-    select: { id: true, title: true, habitType: true, targetCount: true, targetMinutes: true, isLimit: true, createdAt: true },
-  })
-  const habit = matchCountHabit(c.what, habits)
-  if (!habit) return null // not clearly one of their count habits: the AI decides
+type CountHabit = { id: string; title: string; habitType: "BOOLEAN" | "COUNT" | "TIMER"; targetCount: number | null; targetMinutes: number | null; isLimit: boolean; createdAt: Date }
+
+// Adds n to today's count on a count habit (a limit or an ordinary one) and says where that leaves it.
+const bump = async (userId: string, tz: string, habit: CountHabit, n: number, source: "CHAT" | "APP" | "NOTIFICATION"): Promise<ChatResult> => {
   const today = localDateOnly(new Date(), tz)
   const prev = await prisma.habitLog.findUnique({ where: { habitId_date: { habitId: habit.id, date: today } }, select: { count: true } })
-  const count = (prev?.count ?? 0) + c.n
+  const count = (prev?.count ?? 0) + n
   const done = habit.targetCount ? count >= habit.targetCount : true
   // A limit's logs are never "completed": it is a cap, not something to finish.
-  const r = await logHabitService(habit.id, userId, { count, completed: habit.isLimit ? false : done }, { source: "CHAT" })
+  const r = await logHabitService(habit.id, userId, { count, completed: habit.isLimit ? false : done }, { source })
   if (habit.isLimit) {
     const line = await statusLine(userId, tz, habit)
     return reply(line, [{ type: "COUNT_ADDED", habitId: habit.id, title: habit.title, count, target: habit.targetCount ?? null, detail: `${count}/${habit.targetCount ?? 0}`, activityId: r.activityId }])
@@ -91,6 +88,24 @@ const addCount = async (userId: string, tz: string, c: Extract<LogIntent, { kind
   const of = habit.targetCount ? ` of ${habit.targetCount}` : ""
   const text = `${habit.title}: ${count}${of}.${habit.targetCount && done && (prev?.count ?? 0) < habit.targetCount ? " That's today's target." : ""}`
   return reply(text, [{ type: "COUNT_ADDED", habitId: habit.id, title: habit.title, count, target: habit.targetCount ?? null, detail: `${count}${of}`, activityId: r.activityId }])
+}
+
+const COUNT_SELECT = { id: true, title: true, habitType: true, targetCount: true, targetMinutes: true, isLimit: true, createdAt: true } as const
+
+const addCount = async (userId: string, tz: string, c: Extract<LogIntent, { kind: "COUNT" }>): Promise<ChatResult | null> => {
+  const habits = await prisma.habit.findMany({ where: { userId, isActive: true, habitType: "COUNT" }, select: COUNT_SELECT })
+  const habit = matchCountHabit(c.what, habits)
+  if (!habit) return null // not clearly one of their count habits: the AI decides
+  return bump(userId, tz, habit, c.n, "CHAT")
+}
+
+// +n on a count habit by id (the phone's +1 button, a notification action). Null if it is not theirs.
+export const countHabitById = async (userId: string, tz: string, habitId: string, n: number) => {
+  const habit = await prisma.habit.findFirst({ where: { id: habitId, userId, isActive: true, habitType: "COUNT" }, select: COUNT_SELECT })
+  if (!habit) return null
+  const r = await bump(userId, tz, habit, n, "APP")
+  const a = r.actions[0] as { count: number; target: number | null; activityId?: string } | undefined
+  return { habitId, title: habit.title, count: a?.count ?? 0, target: a?.target ?? null, line: r.reply, activityId: a?.activityId }
 }
 
 const DEFAULT_PERIOD: Record<LogSeries, LogPeriod> = { money: "MONTH", sleep: "LAST_7", weight: "LAST_MONTH" }

@@ -6,6 +6,8 @@ import { sendSuccess } from "../../shared/utils/response.util.js"
 import { mealNowService } from "./meal.service.js"
 import { routineNowService } from "./routine.service.js"
 import { watchLaterNowService } from "./later.service.js"
+import { timerNowService } from "./timer.service.js"
+import { countsTodayService } from "../log/log.overview.service.js"
 import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
 import {
   getNowService,
@@ -49,7 +51,8 @@ router.get("/", async (req: Request, res: Response) => {
     routineNowService(req.user!.id, now.block).catch(() => null),
     watchLaterNowService(req.user!.id, { availableMinutes: now.availableMinutes, block: now.block, mode: now.mode }).catch(() => null),
   ])
-  sendSuccess(res, "Right now", { ...now, meal, routine, watchLater })
+  const [timer, counts] = await Promise.all([timerNowService(req.user!.id).catch(() => null), countsTodayService(req.user!.id).catch(() => [])])
+  sendSuccess(res, "Right now", { ...now, meal, routine, watchLater, timer, counts })
 })
 
 // POST /now/prep/:habitId/done — the prep step is done for tonight.

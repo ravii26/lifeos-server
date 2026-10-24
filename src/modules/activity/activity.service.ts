@@ -37,6 +37,7 @@ export type UndoPayload =
   | { kind: "RESTORE_ALLY_NOTE"; note: { collection: string; template: string; title: string; items: string[]; text: string | null; done?: string[]; meta?: unknown } }
   | { kind: "DELETE_METRIC_ENTRY"; entryId: string }
   | { kind: "DELETE_LOG_ENTRY"; entryId: string }
+  | { kind: "RESTORE_LOG_ENTRY"; entry: { series: string; value: number; unit: string; label: string | null; date: string } }
   | { kind: "DELETE_TIME_ENTRY"; entryId: string }
   // Saves put back to waiting for a decision (let go of old saves, or moved to watch later).
   | { kind: "RESET_SAVES"; ids: string[] }
@@ -177,6 +178,9 @@ const applyUndo = async (userId: string, undo: UndoPayload): Promise<void> => {
       })
       return
     }
+    case "RESTORE_LOG_ENTRY":
+      await prisma.logEntry.create({ data: { userId, series: undo.entry.series, value: undo.entry.value, unit: undo.entry.unit, label: undo.entry.label, date: new Date(undo.entry.date) } })
+      return
     case "DELETE_LOG_ENTRY":
       await prisma.logEntry.deleteMany({ where: { id: undo.entryId, userId } })
       return

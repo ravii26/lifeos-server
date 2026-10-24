@@ -8,9 +8,9 @@ import {
 } from "./guide.service.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
 import { batchSavesService, decideManyService, savesSummaryService, staleSavesService } from "./saves.batch.service.js"
-import { createSaveService, decideSaveService, getSaveService, listMoodsService, listSavesService, setSaveMoodsService, setSavePurposeService } from "./guide.saves.service.js"
+import { createSaveService, decideSaveService, getSaveService, listMoodsService, markWatchedService, listSavesService, setSaveMoodsService, setSavePurposeService } from "./guide.saves.service.js"
 import { HttpStatus } from "../../shared/constants/httpStatus.js"
-import { ValidationError } from "../../shared/utils/errors.util.js"
+import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
 import type { HistoryQueryDto } from "./guide.schema.js"
 
 export const getTonightController = async (req: Request, res: Response) => {
@@ -64,6 +64,13 @@ export const savesSummaryController = async (req: Request, res: Response) => {
   const days = Math.min(90, Math.max(1, Number(req.query.days) || 7))
   const [counts, stale] = await Promise.all([savesSummaryService(req.user!.id, days), staleSavesService(req.user!.id)])
   sendSuccess(res, "Saves", { days, counts, stale: stale.map((s) => ({ id: s.id, title: s.title, createdAt: s.createdAt })) })
+}
+
+// POST /guide/saves/:id/watched — "I watched it": it leaves Watch later.
+export const watchedSaveController = async (req: Request, res: Response) => {
+  const ok = await markWatchedService(req.user!.id, String(req.params.id))
+  if (!ok) throw new NotFoundError("That save is not in your watch later")
+  sendSuccess(res, "Watched", { id: String(req.params.id) })
 }
 
 export const decideSaveController = async (req: Request, res: Response) => {
