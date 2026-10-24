@@ -673,9 +673,10 @@ export const scenarios: Scenario[] = [
       const inv = await api("post", "/projects", { title: "Investing goal", areaId: area, kind: "WORK" })
       const id = inv.body.data.id as string
       await api("post", "/tasks", { title: "Open a brokerage account", areaId: area, projectId: id })
+      // Chat management (ADR 0030) pauses by code and answers with a removed / paused receipt.
       const paused = await say("pause my investing goal")
-      const p = ofType(paused, "PROJECT_STATUS")[0] as any
-      if (p?.status !== "PAUSED") return `status ${p?.status}`
+      const p = ofType(paused, "ITEM_REMOVED")[0] as any
+      if (p?.detail !== "paused" || !p.activityId) return `pause: ${JSON.stringify(p)} / ${paused.reply}`
       if (/fail|lazy|give up|quit|should have/i.test(paused.reply)) return `guilt wording: ${paused.reply}`
       const row = (await api("get", `/projects/${id}`)).body.data
       if (row.status !== "PAUSED") return `project is ${row.status}`

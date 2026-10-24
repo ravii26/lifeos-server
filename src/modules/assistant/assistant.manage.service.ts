@@ -235,7 +235,9 @@ export const manageChat = async (userId: string, text: string): Promise<ChatResu
   const action = await archiveOne(userId, item, pause)
   if (!action) return reply(`"${item.title}" is already gone.`)
   const verbed = pause ? "Paused" : item.kind === "PROJECT" ? "Let go of" : "Removed"
-  return reply(`${verbed} "${item.title}". Tap Undo, or say "bring back ${item.title}" any time.`, [action])
+  // Letting a goal go is a decision, not a failure: said once, calmly (plan 16, F26).
+  const calm = !pause && item.kind === "PROJECT" ? " Choosing what not to carry is a real decision, and what you already did stays in your history." : ""
+  return reply(`${verbed} "${item.title}".${calm} Tap Undo, or say "bring back ${item.title}" any time.`, [action])
 }
 
 const doMany = async (userId: string, items: Item[], pause: boolean, label: string): Promise<ChatResult> => {
