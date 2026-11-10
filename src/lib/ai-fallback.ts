@@ -1,7 +1,8 @@
 import { env } from "../config/env.config.js"
 import { aiCreditsAllowed, compatProvider } from "./aicredits.js"
 import logger from "./logger.js"
-import { withAiFeature } from "./ai-usage.js"
+import { markAiLimited, withAiFeature } from "./ai-usage.js"
+import { overDailyAiLimit } from "./ai-limit.js"
 
 // Shared "try providers in order → deterministic heuristic" orchestration used
 // by every AI-backed feature. Availability is decided at the call site: pass
@@ -83,6 +84,13 @@ async function tryProviders<T>(
   providers: AiFallbackProviders<T>,
   heuristic: () => T | Promise<T>,
 ): Promise<T> {
+  // Today's AI is used up for this person: answer the plain way, and say why.
+  if (await overDailyAiLimit()) {
+    markAiLimited()
+    logger.info(`${label}: daily AI cap reached, using heuristic`)
+    return await heuristic()
+  }
+
   const order = providerOrder(env.PREFERRED_AI_PROVIDER, {
     aicredits: !!providers.groq && aiCreditsAllowed(),
     gemini: !!providers.gemini,

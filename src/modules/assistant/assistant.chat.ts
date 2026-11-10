@@ -8,6 +8,7 @@ import prisma from "../../lib/prisma.js"
 import { geminiClient, GEMINI_MODEL } from "../../lib/gemini.js"
 import { groqClient } from "../../lib/groq.js"
 import { runWithAiFallback } from "../../lib/ai-fallback.js"
+import { aiWasLimited } from "../../lib/ai-usage.js"
 import { createTaskService, completeTaskService } from "../task/task.service.js"
 import { logHabitService, createHabitService } from "../habit/habit.service.js"
 import { createProjectService } from "../project/project.service.js"
@@ -132,6 +133,8 @@ export interface ChatResult {
   usedAi: boolean
   // Every AI provider failed, so this answer is the plain fallback. A command handled by code is not this.
   aiDown?: boolean
+  // Today's AI for this person is used up (lib/ai-limit.ts); the reply was made without it.
+  aiLimit?: boolean
 }
 
 // ---- context -------------------------------------------------------
@@ -1137,7 +1140,9 @@ export const assistantChat = async (
       return { role: "ASSISTANT", reply: done.length ? `Done. Nudge is ${on}.` : "That didn't go through. Please try again.", actions: done, usedAi: false }
     }
     const old = await assistantAsk(userId, text, history)
-    return { role: "ASSISTANT", reply: old.answer, actions: [], usedAi: false, aiDown: true }
+    return aiWasLimited()
+      ? { role: "ASSISTANT", reply: old.answer, actions: [], usedAi: false, aiLimit: true }
+      : { role: "ASSISTANT", reply: old.answer, actions: [], usedAi: false, aiDown: true }
   }
 
   // How someone feels is recognised in code, so comfort never depends on the model noticing.

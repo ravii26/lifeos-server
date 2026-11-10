@@ -15,6 +15,9 @@ import logger from "./logger.js"
 interface AiContext {
   userId?: string
   feature?: string
+  // Shared by everything one request starts, so a cap hit deep inside a
+  // feature can still be reported in the reply (see lib/ai-limit.ts).
+  flags?: { limited: boolean }
 }
 
 const aiContext = new AsyncLocalStorage<AiContext>()
@@ -22,14 +25,24 @@ const aiContext = new AsyncLocalStorage<AiContext>()
 // Called once per authenticated request: everything that request starts,
 // including background work it kicks off, belongs to this user.
 export const enterAiUser = (userId: string) => {
-  aiContext.enterWith({ ...aiContext.getStore(), userId })
+  aiContext.enterWith({ ...aiContext.getStore(), userId, flags: { limited: false } })
 }
 
 export const withAiFeature = <T>(feature: string, fn: () => Promise<T>): Promise<T> =>
   aiContext.run({ ...aiContext.getStore(), feature }, fn)
 
 export const withAiUser = <T>(userId: string, fn: () => Promise<T>): Promise<T> =>
-  aiContext.run({ ...aiContext.getStore(), userId }, fn)
+  aiContext.run({ ...aiContext.getStore(), userId, flags: { limited: false } }, fn)
+
+// Who the AI is working for right now, if anyone.
+export const currentAiUser = (): string | undefined => aiContext.getStore()?.userId
+
+// This request reached the person's daily AI cap and was answered without AI.
+export const markAiLimited = (): void => {
+  const flags = aiContext.getStore()?.flags
+  if (flags) flags.limited = true
+}
+export const aiWasLimited = (): boolean => aiContext.getStore()?.flags?.limited === true
 
 export interface AiCallRecord {
   provider: "aicredits" | "gemini" | "groq"

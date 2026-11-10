@@ -50,6 +50,16 @@ router.post("/:id/reset", async (req: Request, res: Response) => {
   sendSuccess(res, "Note updated", out)
 })
 
+// POST /ally-notes/:id/contacted — you just called or messaged this person (from their card).
+// Kept in the note's meta so People can say "it's been a while"; not an activity, so not in the Log.
+router.post("/:id/contacted", async (req: Request, res: Response) => {
+  const note = await prisma.allyNote.findFirst({ where: { id: String(req.params.id), userId: req.user!.id, collection: "People" }, select: { id: true, meta: true } })
+  if (!note) throw new NotFoundError("Person not found")
+  const meta = note.meta && typeof note.meta === "object" && !Array.isArray(note.meta) ? (note.meta as Record<string, unknown>) : {}
+  const out = await prisma.allyNote.update({ where: { id: note.id }, data: { meta: { ...meta, lastContact: new Date().toISOString() } } })
+  sendSuccess(res, "Noted", out)
+})
+
 router.delete("/:id", async (req: Request, res: Response) => {
   const out = await deleteAllyNoteService(req.user!.id, String(req.params.id))
   if (!out) throw new NotFoundError("Note not found")

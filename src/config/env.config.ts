@@ -22,6 +22,9 @@ const envSchema = z.object({
   AICREDITS_MODELS: z.string().optional(),
   // Soft cap per server process per day, so a flood of messages cannot spend the balance.
   AICREDITS_DAILY_CALL_LIMIT: blankIsUnset(z.coerce.number().int().positive().default(1500)),
+  // AI requests one person can make in a day (their own time zone). After that
+  // Ally answers without AI until tomorrow. 0 turns the cap off. Admins have none.
+  AI_DAILY_CALLS_PER_USER: blankIsUnset(z.coerce.number().int().min(0).default(100)),
   // Which provider to try first. Unset: AICredits when its key is set, else Groq.
   PREFERRED_AI_PROVIDER: blankIsUnset(z.enum(["aicredits", "gemini", "groq"]).optional()),
   PUBLIC_BASE_URL: z.string().url().optional(),
