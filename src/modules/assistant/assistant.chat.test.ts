@@ -35,6 +35,41 @@ describe("safety and pattern guards", () => {
     expect(isCrisis("thinking about suicide")).toBe(true)
     expect(isCrisis("I'm dead tired after the gym")).toBe(false)
   })
+
+  it("hears the same thing in Hinglish and Hindi", () => {
+    for (const said of [
+      "ab jeene ka mann nahi",
+      "Jeene ka man nahi karta yaar",
+      "mujhe marna hai",
+      "main marna chahta hoon",
+      "mar jana chahti hu",
+      "jeena nahi chahta",
+      "ab nahi jeena",
+      "aatmahatya ka khayal aa raha hai",
+      "khud ko khatam kar dunga",
+      "apni jaan de dunga",
+      "zindagi khatam kar lunga",
+      "मरना चाहता हूं",
+      "अब जीने का मन नहीं",
+      "आत्महत्या कर लूंगा",
+    ]) {
+      expect(isCrisis(said), said).toBe(true)
+    }
+  })
+
+  it("leaves ordinary Hinglish alone", () => {
+    for (const said of [
+      "aaj thak ke mar gaya",
+      "gym jaane ka mann nahi",
+      "kaam karne ka mann nahi hai",
+      "marne ki fursat nahi hai",
+      "mummy ko call yaad dilana",
+      "mar gaya yaar itna kaam",
+      "जिम जाने का मन नहीं",
+    ]) {
+      expect(isCrisis(said), said).toBe(false)
+    }
+  })
   it("adds the evidence line only when asking for more content", () => {
     const p = [{ id: "CONSUMING_NOT_DOING", evidence: "Saved 7 things in 2 weeks and acted on 0." }]
     expect(contentRedirect("suggest one more video", p, "Try this one")).toContain("Saved 7")

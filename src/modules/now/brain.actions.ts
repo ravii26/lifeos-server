@@ -7,10 +7,11 @@ import type { ActivitySource } from "@prisma/client"
 import prisma from "../../lib/prisma.js"
 import { recordActivity } from "../activity/activity.service.js"
 import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
-import { addUtcDays, dateFromKey } from "../../shared/utils/time.util.js"
+import { addUtcDays, dateFromKey, utcDayKey } from "../../shared/utils/time.util.js"
 import { localToUtc } from "../assistant/assistant.capture.js"
 import { nextSaturdayKey } from "./brain.rules.js"
 import { getClock } from "./now.service.js"
+import { holdReason } from "./pile.rules.js"
 
 const DEFAULT_SESSION = 25
 
@@ -55,6 +56,7 @@ export const applyAdviceService = async (
   const c = await getClock(userId)
   const tomorrow = addUtcDays(dateFromKey(c.todayKey), 1)
   const saturday = dateFromKey(nextSaturdayKey(c.todayKey))
+  const hold = input.choice === "TOMORROW" ? holdReason(utcDayKey(tomorrow)) : input.choice === "WEEKEND" ? holdReason(nextSaturdayKey(c.todayKey)) : undefined
 
   if (input.sourceType === "TASK") {
     const t = await prisma.task.findFirst({ where: { id: input.sourceId, userId }, select: { id: true, title: true, sizeMinutes: true, dueDate: true, status: true, archivedAt: true } })
@@ -71,7 +73,7 @@ export const applyAdviceService = async (
       : input.choice === "TOMORROW" ? `${t.title} moved to tomorrow.`
       : input.choice === "WEEKEND" ? `${t.title} moved to Saturday.`
       : `Let go of ${t.title}. It's archived, not deleted.`
-    const ev = await recordActivity(userId, { type: input.choice === "LET_GO" ? "ARCHIVED" : "UPDATED", itemType: "TASK", itemId: t.id, title: message, source, undo: { kind: "RESTORE_FIELDS", model: "task", id: t.id, prev } })
+    const ev = await recordActivity(userId, { type: input.choice === "LET_GO" ? "ARCHIVED" : "UPDATED", itemType: "TASK", itemId: t.id, title: message, reason: hold, source, undo: { kind: "RESTORE_FIELDS", model: "task", id: t.id, prev } })
     return { message, activityId: ev?.id }
   }
 
@@ -103,7 +105,7 @@ export const applyAdviceService = async (
   if (!p) throw new NotFoundError("Project not found")
   const prev = { sessionMinutes: p.sessionMinutes, status: p.status }
   if (input.choice === "TOMORROW" || input.choice === "WEEKEND") {
-    const ev = await recordActivity(userId, { type: "SKIPPED", itemType: "PROJECT", itemId: p.id, title: p.title, reason: input.choice.toLowerCase(), source, undo: { kind: "NOOP" } })
+    const ev = await recordActivity(userId, { type: "SKIPPED", itemType: "PROJECT", itemId: p.id, title: p.title, reason: hold, source, undo: { kind: "NOOP" } })
     return { message: input.choice === "TOMORROW" ? `${p.title}: tomorrow, then.` : `${p.title}: the weekend, then.`, activityId: ev?.id }
   }
   const data = input.choice === "SMALLER" ? { sessionMinutes: Math.max(10, Math.round((p.sessionMinutes ?? DEFAULT_SESSION) / 2)) } : { status: "PAUSED" as const }

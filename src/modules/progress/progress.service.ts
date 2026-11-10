@@ -8,6 +8,8 @@ import type { ActivitySource } from "@prisma/client"
 import prisma from "../../lib/prisma.js"
 import { recordActivity } from "../activity/activity.service.js"
 import { getClock, type Clock } from "../now/now.service.js"
+import { areaIdleDays } from "../now/brain.service.js"
+import { quietestArea } from "../now/pile.rules.js"
 import { dateFromKey, dayKeyInTz, localDayStartMs, utcDayKey } from "../../shared/utils/time.util.js"
 import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
 import {
@@ -305,15 +307,18 @@ export interface WeekCardDto {
   habits: { title: string; days: number }[]
   moved: { title: string; message: string }[]
   topArea: string | null
+  daysActive: number
+  minutes: number
+  quietArea: string | null
 }
 
 export const weekCardService = async (userId: string, at?: string): Promise<WeekCardDto> => {
   const c = await getClock(userId, at)
   const since = new Date(c.now.getTime() - 7 * DAY)
-  const [events, habits, stands, tasks] = await Promise.all([
+  const [events, habits, stands, tasks, idle, areas] = await Promise.all([
     prisma.activityEvent.findMany({
       where: { userId, at: { gte: since, lte: c.now }, undoneAt: null, type: { in: ["DONE", "MINIMUM", "LOGGED"] } },
-      select: { type: true, itemType: true, itemId: true },
+      select: { type: true, itemType: true, itemId: true, at: true, minutes: true },
     }),
     prisma.habit.findMany({
       where: { userId, isActive: true, isLimit: false },
@@ -324,7 +329,11 @@ export const weekCardService = async (userId: string, at?: string): Promise<Week
       where: { userId, status: "COMPLETED", completedAt: { gte: since } },
       select: { area: { select: { name: true } } },
     }),
+    areaIdleDays(userId, c),
+    prisma.area.findMany({ where: { userId, isActive: true }, select: { id: true, name: true, tier: true } }),
   ])
+  const daysActive = new Set(events.map((e) => dayKeyInTz(e.at, c.tz))).size
+  const minutes = events.reduce((s, e) => s + (e.minutes ?? 0), 0)
   const done = events.filter((e) => e.type === "DONE" && (e.itemType === "TASK" || e.itemType === "HABIT")).length
   const minimums = events.filter((e) => e.type === "MINIMUM").length
   const kept = done + minimums
@@ -347,5 +356,7 @@ export const weekCardService = async (userId: string, at?: string): Promise<Week
   if (habitDays.length) parts.push(habitDays.map((h) => `${h.title} ${h.days} of 7 days`).join(", ") + ".")
   if (moved.length) parts.push(`Moved: ${moved.map((m) => `${m.title} (${(m.detail as { percent?: number }).percent ?? m.message.split(" · ")[0]}${typeof (m.detail as { percent?: number }).percent === "number" ? "%" : ""})`).join(", ")}.`)
   if (topArea) parts.push(`Most effort went to ${topArea}.`)
-  return { message: parts.join(" "), kept, done, minimums, habits: habitDays, moved: moved.map((m) => ({ title: m.title, message: m.message })), topArea }
+  // Only in a week something happened: pointing out a quiet area in an empty week would just sting.
+  const quietArea = kept > 0 ? quietestArea(areas.map((a) => ({ name: a.name, tier: a.tier, idleDays: idle.get(a.id) ?? 0 }))) : null
+  return { message: parts.join(" "), kept, done, minimums, habits: habitDays, moved: moved.map((m) => ({ title: m.title, message: m.message })), topArea, daysActive, minutes, quietArea }
 }

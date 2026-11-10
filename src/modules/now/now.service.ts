@@ -39,6 +39,7 @@ import type { Tier } from "../guide/guide.rules.js"
 import { adviseNow, targetPace, targetSession } from "./brain.rules.js"
 import { asDirectness, asFocus, wantsAdvice } from "../settings/personalization.rules.js"
 import { areaIdleDays, mondayOf, savesToday, skipsOf, weeklyTargets } from "./brain.service.js"
+import { activeHolds } from "./hold.service.js"
 
 const WEEKDAY_CODES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
 const PRIORITY_RANK = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as const
@@ -114,7 +115,7 @@ export const lastActiveGapDays = async (userId: string, c: Clock): Promise<numbe
 }
 
 export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandidate[]> => {
-  const [areas, tasks, habits, targets, skips, idle] = await Promise.all([
+  const [areas, tasks, habits, targets, skips, idle, holds] = await Promise.all([
     prisma.area.findMany({ where: { userId, isActive: true }, select: { id: true, name: true, tier: true, laterUntil: true } }),
     prisma.task.findMany({
       where: { userId, status: { in: ["TODO", "IN_PROGRESS"] }, archivedAt: null, remindAt: null },
@@ -133,6 +134,7 @@ export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandi
     weeklyTargets(userId, c),
     skipsOf(userId, c),
     areaIdleDays(userId, c),
+    activeHolds(userId, c.todayKey),
   ])
   const area = new Map(areas.map((a) => [a.id, { name: a.name, tier: effectiveTier(a.tier as Tier, a.laterUntil, c.now) }]))
 
@@ -218,7 +220,8 @@ export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandi
     })
   }
 
-  return [...fromTasks, ...fromHabits, ...fromTargets]
+  // "Tomorrow", "this weekend" and parked mean exactly that: nothing suggested before then.
+  return [...fromTasks, ...fromHabits, ...fromTargets].filter((c) => !holds.has(c.sourceId))
 }
 
 // Prep steps ("soak the oats") surface from the prep time on, the evening

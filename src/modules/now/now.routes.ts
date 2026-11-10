@@ -27,6 +27,7 @@ import { MODES, dayFromBasics } from "./now.rules.js"
 import { getAgendaService, moveLeftToTomorrowService, setProactivityService } from "./agenda.service.js"
 import { PROACTIVITY } from "./agenda.rules.js"
 import { maybeRefreshHabitStages } from "../progress/progress.service.js"
+import { decidePileService, getPileService, parkedListService, wakeParkedService } from "./pile.service.js"
 
 const router = Router()
 router.use(authenticate)
@@ -42,7 +43,9 @@ const at = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).optional()
 // GET /now?minutes=20 — the right thing for right now.
 router.get("/", async (req: Request, res: Response) => {
   const q = parse(z.object({ minutes: z.coerce.number().int().positive().optional(), at, smallest: z.enum(["true", "false"]).optional() }), req.query)
-  await maybeRefreshHabitStages(req.user!.id, await getClock(req.user!.id, q.at))
+  const clock = await getClock(req.user!.id, q.at)
+  await maybeRefreshHabitStages(req.user!.id, clock)
+  await wakeParkedService(req.user!.id, clock.todayKey).catch(() => undefined)
   const [now, meal] = await Promise.all([
     getNowService(req.user!.id, { minutes: q.minutes, at: q.at, smallest: q.smallest === "true" }),
     mealNowService(req.user!.id, q.at).catch(() => null),
@@ -99,6 +102,21 @@ router.put("/basics", async (req: Request, res: Response) => {
   if (officeDays.length) await setScheduleService(req.user!.id, officeDays, workDay)
   if (otherDays.length) await setScheduleService(req.user!.id, otherDays, offDay)
   sendSuccess(res, "Day set", await getScheduleService(req.user!.id))
+})
+
+// GET /now/pile — everything on the list against the time there is in a week.
+router.get("/pile", async (req: Request, res: Response) => sendSuccess(res, "Pile", await getPileService(req.user!.id)))
+
+// GET /now/pile/parked — what is parked; undoing its activity brings it back.
+router.get("/pile/parked", async (req: Request, res: Response) => sendSuccess(res, "Parked", await parkedListService(req.user!.id)))
+
+// POST /now/pile/decide — park something until later, or let it go. Both can be undone.
+router.post("/pile/decide", async (req: Request, res: Response) => {
+  const b = parse(
+    z.object({ sourceType: z.enum(["TASK", "HABIT", "PROJECT"]), sourceId: z.string(), decision: z.enum(["PARK", "LET_GO"]) }),
+    req.body,
+  )
+  sendSuccess(res, "Decided", await decidePileService(req.user!.id, b))
 })
 
 // GET /now/capacity — what's planned for today against the free time left.

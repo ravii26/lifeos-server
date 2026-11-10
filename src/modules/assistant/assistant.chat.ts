@@ -130,6 +130,8 @@ export interface ChatResult {
   // More planned for today than there is free time: what stays, what could move.
   capacity?: { message: string; plannedMinutes: number; freeMinutes: number; keep: { id: string; title: string }[]; move: { id: string; title: string }[] }
   usedAi: boolean
+  // Every AI provider failed, so this answer is the plain fallback. A command handled by code is not this.
+  aiDown?: boolean
 }
 
 // ---- context -------------------------------------------------------
@@ -497,7 +499,23 @@ export const searchRequest = (text: string): PlannedAction | null => {
 // matter what the model would have said.
 const CRISIS = /\b(kill myself|suicid\w*|end (it all|my life)|want to die|don'?t want to (live|be alive)|self[- ]?harm|hurt myself|no reason to live)\b/i
 
-export const isCrisis = (text: string) => CRISIS.test(text)
+// The same in Hinglish and Hindi, since Ally is spoken to in both. Written to
+// need a wish to die or self-harm: "thak ke mar gaya" must stay ordinary talk.
+const NAHI = "(?:nahi|nahin|nhi|nai)"
+const CRISIS_HINGLISH = new RegExp(
+  "\\b(?:aatmahatya|atmahatya|khud ?kushi" +
+    "|mar(?:na|\\s+ja+na|\\s+ja+un)\\s+(?:hi\\s+)?(?:chaht|hai\\b)" +
+    `|(?:jeena|jina)\\s+(?:hi\\s+)?${NAHI}\\s+(?:chaht|hai\\b)` +
+    `|${NAHI}\\s+(?:jeena|jina)\\b` +
+    `|(?:jeene|jine)\\s+(?:ka|ki)\\s+(?:mann?|dil|ichh?a|icchha|wajah|vajah)\\s+(?:hi\\s+)?${NAHI}` +
+    "|(?:zindagi|jindagi)\\s+(?:hi\\s+)?(?:khatam|khatm)\\s+(?:kar|karn)" +
+    "|(?:khud|apne\\s+aap)\\s+ko\\s+(?:khatam|khatm|maar|mar\\s+d|nuksan|nuksaan|chot)" +
+    "|apni\\s+jaan\\s+(?:de|le))",
+  "i",
+)
+const CRISIS_HINDI = /आत्महत्या|ख़ुदकुशी|खुदकुशी|मरना\s+(?:ही\s+)?(?:चाहत|है)|मर\s+जाना\s+(?:ही\s+)?चाहत|जीना\s+(?:ही\s+)?नहीं\s+(?:चाहत|है)|जीने\s+(?:का|की)\s+(?:मन|दिल|इच्छा|वजह)\s+(?:ही\s+)?नहीं|(?:ज़िंदगी|जिंदगी)\s+(?:ही\s+)?(?:ख़त्म|खत्म)\s+कर|(?:खुद|ख़ुद|अपने\s+आप)\s+को\s+(?:ख़त्म|खत्म|मार|नुकसान|चोट)|अपनी\s+जान\s+(?:दे|ले)/
+
+export const isCrisis = (text: string) => CRISIS.test(text) || CRISIS_HINGLISH.test(text) || CRISIS_HINDI.test(text)
 
 const EXPLICIT_TASK = /\b(add|task|remind|to-?do|todo|habit|project|goal|put .* on my list|note (it|that) down|yaad)\b/i
 
@@ -1119,7 +1137,7 @@ export const assistantChat = async (
       return { role: "ASSISTANT", reply: done.length ? `Done. Nudge is ${on}.` : "That didn't go through. Please try again.", actions: done, usedAi: false }
     }
     const old = await assistantAsk(userId, text, history)
-    return { role: "ASSISTANT", reply: old.answer, actions: [], usedAi: false }
+    return { role: "ASSISTANT", reply: old.answer, actions: [], usedAi: false, aiDown: true }
   }
 
   // How someone feels is recognised in code, so comfort never depends on the model noticing.
