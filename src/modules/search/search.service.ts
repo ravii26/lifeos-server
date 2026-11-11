@@ -1,6 +1,7 @@
 import prisma from "../../lib/prisma.js"
 import { searchItems, visibleMemories, type SearchHit, type Searchable } from "./search.rules.js"
 import { allowedKeys, fuseRankings, meaningHits, scheduleLifeIndexSync } from "./life-index.js"
+import { currentMemoryWhere } from "../assistant/assistant.memory.rules.js"
 
 interface SaveProposal {
   proposal?: { contentTitle?: string }
@@ -26,7 +27,7 @@ const loadLife = async (userId: string) => {
       take: 300,
     }),
     prisma.project.findMany({ where: { userId, status: { in: ["ACTIVE", "PAUSED"] } }, select: { id: true, title: true, why: true, createdAt: true }, take: 50 }),
-    prisma.memory.findMany({ where: { userId }, select: { id: true, content: true, sensitive: true, createdAt: true }, take: 300 }),
+    prisma.memory.findMany({ where: { userId, ...currentMemoryWhere() }, select: { id: true, content: true, sensitive: true, createdAt: true }, take: 300 }),
   ])
 
   const things: Searchable[] = [

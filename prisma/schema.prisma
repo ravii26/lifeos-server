@@ -1157,6 +1157,12 @@ model Memory {
   // Google embedding (768 numbers) used to recall this by meaning. Empty until
   // embedded; sensitive memories are never sent out to be embedded.
   embedding  Float[]      @default([])
+  // The person's exact words this came from. Empty on memories saved before this existed.
+  quote      String?
+  // Past = stopped being true, kept as history. Future = true until then. Empty = still true.
+  endedAt    DateTime?
+  // The memory that took this one's place.
+  replacedById String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

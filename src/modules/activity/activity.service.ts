@@ -9,6 +9,7 @@ import type { ActivityEvent, ActivityItem, ActivitySource, ActivityType } from "
 import prisma from "../../lib/prisma.js"
 import logger from "../../lib/logger.js"
 import { embedMemory } from "../assistant/assistant.memory.semantic.js"
+import { clearProfile } from "../assistant/assistant.profile.js"
 import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
 
 export interface ActivityInput {
@@ -53,7 +54,7 @@ export type UndoPayload =
   // One chat message can create several things; one payload reverses them all.
   | { kind: "MANY"; items: UndoPayload[] }
   | { kind: "DELETE_MEMORY"; memoryId: string }
-  | { kind: "RESTORE_MEMORY"; memory: { content: string; kind: string; importance: number; source: string; sensitive: boolean } }
+  | { kind: "RESTORE_MEMORY"; memory: { content: string; kind: string; importance: number; source: string; sensitive: boolean; quote?: string | null } }
   | { kind: "RESTORE_SETTING"; field: "nightlyTime"; prev: string | null }
   | { kind: "RESET_COMMITMENT"; commitmentId: string; then?: UndoPayload }
   // Reverse another logged event (e.g. the task a guide answer completed).
@@ -242,6 +243,9 @@ const applyUndo = async (userId: string, undo: UndoPayload): Promise<void> => {
     }
     case "DELETE_MEMORY":
       await prisma.memory.deleteMany({ where: { id: undo.memoryId, userId } })
+      // Whatever this memory replaced is true again.
+      await prisma.memory.updateMany({ where: { replacedById: undo.memoryId, userId }, data: { endedAt: null, replacedById: null } })
+      await clearProfile(userId)
       return
     case "RESTORE_MEMORY": {
       const restored = await prisma.memory.create({
@@ -252,6 +256,7 @@ const applyUndo = async (userId: string, undo: UndoPayload): Promise<void> => {
           importance: undo.memory.importance,
           source: undo.memory.source as never,
           sensitive: undo.memory.sensitive,
+          quote: undo.memory.quote ?? null,
         },
       })
       void embedMemory(restored.id, restored.content, restored.sensitive)

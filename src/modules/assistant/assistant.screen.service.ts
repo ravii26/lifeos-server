@@ -12,6 +12,7 @@ import { respondProjectService } from "../now/brain.actions.js"
 import { ACCOUNT_TEXT, screenIntent, type ScreenIntent } from "./assistant.screen.js"
 import { findItems, quoted, readTarget, type Item } from "./assistant.manage.js"
 import { loadItems } from "./assistant.manage.service.js"
+import { clearProfile } from "./assistant.profile.js"
 import type { ChatAction, ChatResult } from "./assistant.chat.js"
 
 const reply = (text: string, actions: ChatAction[] = []): ChatResult => ({ role: "ASSISTANT", reply: text, actions, usedAi: false })
@@ -67,6 +68,7 @@ const makePrivate = async (userId: string, what: string, value: boolean): Promis
   const row = rows.find((r) => r.id === match.item.id)!
   if (row.sensitive === value) return reply(value ? "That one is already private." : "That one isn't private.")
   await prisma.memory.update({ where: { id: row.id }, data: { sensitive: value } })
+  if (value) await clearProfile(userId)
   const e = await recordActivity(userId, { type: "UPDATED", itemType: "MEMORY", itemId: row.id, title: row.content.slice(0, 80), source: "CHAT", undo: { kind: "RESTORE_FIELDS", model: "memory", id: row.id, prev: { sensitive: row.sensitive } } })
   return reply(value ? `Marked private: "${row.content}". I won't bring it up unless you do.` : `No longer private: "${row.content}".`, [
     { type: "ITEM_UPDATED", itemType: "MEMORY", id: row.id, title: row.content.slice(0, 80), detail: value ? "marked private" : "no longer private", activityId: e?.id },

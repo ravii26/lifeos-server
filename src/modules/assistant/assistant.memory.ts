@@ -9,6 +9,10 @@ import prisma from "../../lib/prisma.js"
 import { recordActivity } from "../activity/activity.service.js"
 import { visibleMemories } from "../search/search.rules.js"
 import { backfillEmbeddings, embedMemory, embedQuery, semanticBonus, similarities } from "./assistant.memory.semantic.js"
+import { asksAboutThePast, canEnd, currentMemoryWhere, endFromUntil, idsFrom, ownWords, quoteIsTheirs } from "./assistant.memory.rules.js"
+import { checkOldFacts, endMemories } from "./assistant.memory.truth.js"
+import { clearProfile } from "./assistant.profile.js"
+import logger from "../../lib/logger.js"
 
 export const MEMORY_KINDS: MemoryKind[] = ["FACT", "PREFERENCE", "GOAL", "STRUGGLE", "FEELING", "PERSON", "EVENT"]
 
@@ -56,7 +60,7 @@ export const rankMemories = <T extends Pick<Memory, "content" | "importance" | "
 // `query`: the message's vector when the caller already has it, so it is embedded once.
 export const recallMemories = async (userId: string, message: string, opts: { limit?: number; query?: number[] | null } = {}) => {
   const pool = await prisma.memory.findMany({
-    where: { userId },
+    where: { userId, ...currentMemoryWhere() },
     orderBy: { createdAt: "desc" },
     take: POOL,
   })
@@ -71,30 +75,60 @@ export const recallMemories = async (userId: string, message: string, opts: { li
   return rankMemories(visibleMemories(pool, message), message, new Date(), opts.limit ?? MAX_RECALL, similar)
 }
 
+// What used to be true, only when the message asks about the past.
+export const recallPastMemories = async (userId: string, message: string) => {
+  if (!asksAboutThePast(message)) return []
+  const past = await prisma.memory.findMany({
+    where: { userId, endedAt: { lte: new Date() } },
+    orderBy: { endedAt: "desc" },
+    take: 20,
+  })
+  return visibleMemories(past, message).slice(0, 8)
+}
+
 export interface MemoryWrite {
   content?: unknown
   kind?: unknown
   importance?: unknown
   source?: unknown
   sensitive?: unknown
+  quote?: unknown
+  replaces?: unknown
+  until?: unknown
 }
 
 const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim()
 
-// Saves what the model chose to remember, skipping exact repeats. Returns
-// what was actually stored so the app can show "Remembered: …".
-export const saveMemories = async (userId: string, writes: MemoryWrite[], known: Memory[]) => {
+// Saves what the model chose to remember, skipping exact repeats. `known` is
+// what is true now and `said` is what the person actually wrote: a memory
+// whose quote is not in there is dropped. Returns what was actually stored so
+// the app can show "Remembered: …".
+export const saveMemories = async (userId: string, writes: MemoryWrite[], known: Memory[], said: string[], timeZone = "Asia/Kolkata") => {
   const seen = new Set(known.map((m) => normalize(m.content)))
+  const own = ownWords(said)
   const saved: (Memory & { activityId?: string })[] = []
   for (const w of writes.slice(0, 3)) {
     const content = typeof w.content === "string" ? w.content.trim().slice(0, 280) : ""
     if (content.length < 4 || seen.has(normalize(content))) continue
+    if (!quoteIsTheirs(w.quote, own)) {
+      logger.info("memory dropped: its quote is not in the person's own words")
+      continue
+    }
     const kind = MEMORY_KINDS.includes(w.kind as MemoryKind) ? (w.kind as MemoryKind) : "FACT"
     const importance = [1, 2, 3].includes(Number(w.importance)) ? Number(w.importance) : 2
     const source = w.source === "SAID" ? "SAID" : "INFERRED"
     const sensitive = w.sensitive === true
-    const memory = await prisma.memory.create({ data: { userId, content, kind, importance, source, sensitive } })
-    void embedMemory(memory.id, content, sensitive)
+    const quote = String(w.quote).trim().slice(0, 280)
+    const endedAt = endFromUntil(w.until, timeZone)
+    const memory = await prisma.memory.create({ data: { userId, content, kind, importance, source, sensitive, quote, endedAt } })
+    const vector = embedMemory(memory.id, content, sensitive)
+    // Something true only for a while ("in Goa till Sunday") never ends what is lasting ("lives in Mumbai").
+    if (!endedAt) {
+      const named = new Set(idsFrom(w.replaces))
+      const replaced = known.filter((m) => named.has(m.id) && canEnd(m, memory))
+      if (replaced.length > 0) await endMemories(userId, replaced, memory.id)
+      else void checkOldFacts(userId, memory, vector)
+    }
     const event = await recordActivity(userId, {
       type: "REMEMBERED",
       itemType: "MEMORY",
@@ -117,6 +151,7 @@ export const forgetMemories = async (userId: string, ids: unknown[], known: Memo
   if (target.length === 0) return [] as (Memory & { activityId?: string })[]
   const gone = known.filter((m) => target.includes(m.id))
   await prisma.memory.deleteMany({ where: { userId, id: { in: target } } })
+  await clearProfile(userId)
   const out: (Memory & { activityId?: string })[] = []
   for (const m of gone) {
     const event = await recordActivity(userId, {
@@ -127,7 +162,7 @@ export const forgetMemories = async (userId: string, ids: unknown[], known: Memo
       source: "CHAT",
       undo: {
         kind: "RESTORE_MEMORY",
-        memory: { content: m.content, kind: m.kind, importance: m.importance, source: m.source, sensitive: m.sensitive },
+        memory: { content: m.content, kind: m.kind, importance: m.importance, source: m.source, sensitive: m.sensitive, quote: m.quote },
       },
     })
     out.push({ ...m, activityId: event?.id })
@@ -138,5 +173,15 @@ export const forgetMemories = async (userId: string, ids: unknown[], known: Memo
 export const listMemories = (userId: string) =>
   prisma.memory.findMany({ where: { userId }, orderBy: [{ importance: "desc" }, { createdAt: "desc" }] })
 
-export const deleteMemory = (userId: string, id: string) =>
-  prisma.memory.deleteMany({ where: { userId, id } })
+export const deleteMemory = async (userId: string, id: string) => {
+  const result = await prisma.memory.deleteMany({ where: { userId, id } })
+  if (result.count > 0) await clearProfile(userId)
+  return result
+}
+
+// "Still true": Ally retired this by mistake, so it counts again.
+export const restoreMemory = async (userId: string, id: string) => {
+  const result = await prisma.memory.updateMany({ where: { userId, id }, data: { endedAt: null, replacedById: null } })
+  if (result.count > 0) await clearProfile(userId)
+  return result
+}

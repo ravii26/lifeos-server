@@ -17,6 +17,7 @@ import { groqClient } from "../../lib/groq.js"
 import { runWithAiFallback } from "../../lib/ai-fallback.js"
 import logger from "../../lib/logger.js"
 import { localDayStartMs, todayKeyInTz } from "../../shared/utils/time.util.js"
+import { currentMemoryWhere } from "./assistant.memory.rules.js"
 
 export const PROFILE_MAX_CHARS = 900
 // Below this there is not enough to say anything a memory list would not.
@@ -103,6 +104,12 @@ const writeProfile = (input: string): Promise<string | null> =>
     () => null,
   )
 
+// A memory ended, was forgotten or went private, so today's profile may repeat
+// it. Dropped at once (chat works without one) and rewritten on the next message.
+export const clearProfile = async (userId: string): Promise<void> => {
+  await prisma.userSettings.updateMany({ where: { userId }, data: { profile: null, profileAt: null } }).catch((err) => logger.warn(`profile not cleared: ${(err as Error).message}`))
+}
+
 // Rewrites the profile when it is from an earlier day. Safe to call after every
 // chat: it returns at once when there is nothing to do, and runs one at a time per person.
 const running = new Set<string>()
@@ -116,7 +123,7 @@ export const refreshProfileIfStale = async (userId: string): Promise<void> => {
     ])
     if (!profileIsStale(settings?.profileAt, user?.timezone ?? "Asia/Kolkata")) return
     const [memories, projects, areas, habits] = await Promise.all([
-      prisma.memory.findMany({ where: { userId, sensitive: false }, orderBy: { createdAt: "desc" }, take: 300, select: { content: true, kind: true, importance: true, createdAt: true } }),
+      prisma.memory.findMany({ where: { userId, sensitive: false, ...currentMemoryWhere() }, orderBy: { createdAt: "desc" }, take: 300, select: { content: true, kind: true, importance: true, createdAt: true } }),
       prisma.project.findMany({ where: { userId, status: "ACTIVE" }, take: 10, select: { title: true } }),
       prisma.area.findMany({ where: { userId, isActive: true }, select: { name: true } }),
       prisma.habit.findMany({ where: { userId, isActive: true }, take: 15, select: { title: true } }),

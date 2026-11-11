@@ -813,6 +813,38 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    id: "MEM1",
+    name: "A change replaces the old fact and keeps it as history",
+    status: "ready",
+    async run({ say, api, db, userId }) {
+      await db.memory.create({ data: { userId, content: "Works at TCS as a developer", kind: "FACT", importance: 3, source: "SAID" } })
+      await say("I left TCS last month, I work at Infosys now")
+      // The wider check runs in the background, so give it a moment.
+      for (let i = 0; i < 10; i++) {
+        const list = (await api("get", "/assistant/memories")).body.data as any[]
+        const old = list.find((m) => /TCS/i.test(m.content) && !/Infosys/i.test(m.content))
+        const fresh = list.find((m) => /Infosys/i.test(m.content))
+        if (!fresh) return "the new job was not remembered"
+        if (!fresh.quote) return "the new memory has no quote"
+        if (old?.endedAt) return null
+        await new Promise((done) => setTimeout(done, 1000))
+      }
+      return "the old job is still marked as true"
+    },
+  },
+  {
+    id: "MEM2",
+    name: "Hinglish memories survive the check that they are in your own words",
+    status: "ready",
+    async run({ say, api }) {
+      await say("mujhe subah chai pasand hai, coffee bilkul nahi")
+      const list = (await api("get", "/assistant/memories")).body.data as any[]
+      const mine = list.find((m) => /chai|tea/i.test(m.content))
+      if (!mine) return "nothing was remembered: the quote was probably translated and dropped"
+      return mine.quote ? null : "remembered without a quote"
+    },
+  },
+  {
     id: "B9",
     name: "The weekly card is given only when asked, and never shames",
     status: "ready",

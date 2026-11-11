@@ -62,7 +62,8 @@ import { upsertSettings } from "../settings/settings.repository.js"
 import { asDirectness, asFocus, preferenceIntent, preferenceReply, styleForPrompt } from "../settings/personalization.rules.js"
 import { recordActivity, type UndoPayload } from "../activity/activity.service.js"
 import { loadPatternFacts, detectPatterns } from "./assistant.patterns.js"
-import { recallMemories, saveMemories, forgetMemories, type MemoryWrite } from "./assistant.memory.js"
+import { recallMemories, recallPastMemories, saveMemories, forgetMemories, type MemoryWrite } from "./assistant.memory.js"
+import { currentMemoryWhere } from "./assistant.memory.rules.js"
 import { assistantAsk } from "./assistant.service.js"
 import { todayKeyInTz, weekdayInTz, dateFromKey, dayKeyInTz } from "../../shared/utils/time.util.js"
 import logger from "../../lib/logger.js"
@@ -194,6 +195,7 @@ const loadContext = async (userId: string, message: string) => {
     .findUnique({ where: { userId }, select: { profile: true } })
     .then((s) => s?.profile ?? null)
     .catch(() => null)
+  const pastMemories = await recallPastMemories(userId, message).catch(() => [])
   const related = memories.query
     ? new Set(
         (
@@ -233,6 +235,7 @@ const loadContext = async (userId: string, message: string) => {
     myMoods,
     spoken: false, // set per message by assistantChat (Talk mode)
     memories: memories.list,
+    pastMemories,
     patterns,
     // Which rare instructions this message gets (ADR 0045).
     extras: extrasFor(message, { hasProjects: projects.length > 0, hasPatterns: patterns.length > 0 }),
@@ -264,7 +267,11 @@ const contextJson = (ctx: Ctx) =>
       kind: m.kind,
       memory: m.content,
       saved: m.createdAt.toISOString().slice(0, 10),
+      ...(m.endedAt && { trueUntil: m.endedAt.toISOString().slice(0, 10) }),
     })),
+    ...(ctx.pastMemories.length > 0 && {
+      noLongerTrue: ctx.pastMemories.map((m) => ({ memory: m.content, ended: m.endedAt!.toISOString().slice(0, 10) })),
+    }),
     // Real dates for the next 7 days so "Thursday" is looked up, not calculated.
     nextDays: Object.fromEntries(
       Array.from({ length: 8 }, (_, i) => {
@@ -361,10 +368,14 @@ Memory:
 - Each remember item also has "source": "SAID" if they told you directly, "INFERRED" if you concluded it; and "sensitive": true for health or mental-health details (those are never brought up unless they raise them).
 - remember: up to 3 NEW durable things worth knowing later: their schedule, goals, struggles, preferences, people in their life, notable events, or how they felt (include the date for feelings/events, e.g. "Felt drained on 5 Oct after manager changed priorities"). Short, third person. Never save tasks/reminders (those are actions), small talk, or anything already in whatYouRemember.
 - kind: FACT | PREFERENCE | GOAL | STRUGGLE | FEELING | PERSON | EVENT. importance: 1 minor, 2 useful, 3 core to who they are.
-- forget: ids from whatYouRemember to delete, when they ask you to forget something or it is no longer true (then remember the corrected version).
+- quote (required on every remember item): the exact words from their own messages that this comes from, copied letter for letter in the language they wrote, never translated or reworded. Only their messages count, never your replies, saved links or notes. No such words means do not remember it.
+- replaces: when something changed ("I left TCS, I'm at Infosys now"), the ids from whatYouRemember that are no longer true. Remember the new fact and list the old ids here. Old facts are kept as history. Otherwise [].
+- until: "YYYY-MM-DD" only if they said it stops being true on a known date ("in Goa till Sunday"). Otherwise null.
+- forget: ids from whatYouRemember to delete, only when they ask you to forget something. If it just changed, use replaces.
+- noLongerTrue, when present, is what used to be true. Use it only to answer about the past; never treat it as current.
 - When they ask what you know about them, answer from whatYouRemember.
 
-Return JSON only: {"role": "FRIEND"|"ASSISTANT"|"MENTOR"|"COACH"|"GUIDE", "reply": string, "actions": [ ... ], "suggest": [{"kind":"HABIT","title":string}], "remember": [{"content": string, "kind": string, "importance": number, "source": "SAID"|"INFERRED", "sensitive": boolean}], "forget": [string]}`
+Return JSON only: {"role": "FRIEND"|"ASSISTANT"|"MENTOR"|"COACH"|"GUIDE", "reply": string, "actions": [ ... ], "suggest": [{"kind":"HABIT","title":string}], "remember": [{"content": string, "kind": string, "importance": number, "source": "SAID"|"INFERRED", "sensitive": boolean, "quote": string, "replaces": [string], "until": string|null}], "forget": [string]}`
 
 interface PlannedAction {
   type?: string
@@ -1215,8 +1226,9 @@ export const assistantChat = async (
   const [forgotten, remembered] = await Promise.all([
     forgetMemories(userId, plan.forget, ctx.memories).catch(() => []),
     // Checked against all their memories, not only the few shown with this message.
-    (plan.remember.length ? prisma.memory.findMany({ where: { userId }, orderBy: { createdAt: "desc" }, take: 300 }) : Promise.resolve(ctx.memories))
-      .then((known) => saveMemories(userId, plan.remember, known))
+    (plan.remember.length ? prisma.memory.findMany({ where: { userId, ...currentMemoryWhere() }, orderBy: { createdAt: "desc" }, take: 300 }) : Promise.resolve(ctx.memories))
+      // Only what they typed counts as their words, the same recent turns the model saw.
+      .then((known) => saveMemories(userId, plan.remember, known, [text, ...history.slice(-10).filter((h) => h.role === "user").map((h) => h.text)], ctx.timeZone))
       .catch(() => []),
   ])
   // Once a day, in the background: rewrite the short profile sent with every chat.

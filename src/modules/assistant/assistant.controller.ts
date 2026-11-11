@@ -5,7 +5,8 @@ import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.j
 import { z } from "zod"
 import prisma from "../../lib/prisma.js"
 import { assistantChat } from "./assistant.chat.js"
-import { listMemories, deleteMemory } from "./assistant.memory.js"
+import { listMemories, deleteMemory, restoreMemory } from "./assistant.memory.js"
+import { clearProfile } from "./assistant.profile.js"
 import { upcomingOccurrences } from "./assistant.capture.js"
 import { getUserTimezone } from "../auth/auth.repository.js"
 
@@ -113,7 +114,15 @@ export const updateMemoryController = async (req: Request, res: Response) => {
   if (typeof sensitive !== "boolean") throw new ValidationError("sensitive must be true or false")
   const result = await prisma.memory.updateMany({ where: { id: String(req.params.id), userId: req.user!.id }, data: { sensitive } })
   if (result.count === 0) throw new NotFoundError("Memory not found")
+  if (sensitive) await clearProfile(req.user!.id)
   sendSuccess(res, "Updated")
+}
+
+// POST /assistant/memories/:id/restore — "Still true": Ally retired this by mistake.
+export const restoreMemoryController = async (req: Request, res: Response) => {
+  const result = await restoreMemory(req.user!.id, String(req.params.id))
+  if (result.count === 0) throw new NotFoundError("Memory not found")
+  sendSuccess(res, "Restored")
 }
 
 // GET /assistant/memories — everything the assistant remembers about you.

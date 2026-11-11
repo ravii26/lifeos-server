@@ -8,6 +8,7 @@ import {
   listMemoriesController,
   deleteMemoryController,
   updateMemoryController,
+  restoreMemoryController,
   renameCapturedItemController,
 } from "./assistant.controller.js"
 
@@ -30,5 +31,6 @@ router.patch("/items/:type/:id", renameCapturedItemController)
 router.get("/memories", listMemoriesController)
 router.delete("/memories/:id", deleteMemoryController)
 router.patch("/memories/:id", updateMemoryController)
+router.post("/memories/:id/restore", restoreMemoryController)
 
 export default router

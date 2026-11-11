@@ -27,13 +27,15 @@ const embedDocument = (content: string) => embedText(content, { task: "RETRIEVAL
 
 // Embeds one stored memory. Sensitive memories (health, mental health) are not
 // sent out; they keep matching on words only.
-export const embedMemory = async (id: string, content: string, sensitive: boolean): Promise<void> => {
-  if (sensitive || !embeddingsAvailable()) return
+export const embedMemory = async (id: string, content: string, sensitive: boolean): Promise<number[] | null> => {
+  if (sensitive || !embeddingsAvailable()) return null
   try {
     const embedding = await embedDocument(content)
     await prisma.memory.updateMany({ where: { id }, data: { embedding } })
+    return embedding
   } catch (err) {
     logger.warn(`memory embedding skipped: ${(err as Error).message}`)
+    return null
   }
 }
 

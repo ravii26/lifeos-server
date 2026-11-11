@@ -8,6 +8,7 @@
 import prisma from "../../lib/prisma.js"
 import { recordActivity } from "../activity/activity.service.js"
 import { saveMemories } from "../assistant/assistant.memory.js"
+import { currentMemoryWhere } from "../assistant/assistant.memory.rules.js"
 import { dayFromBasics } from "../now/now.rules.js"
 import { getClock, getMode, setScheduleService } from "../now/now.service.js"
 import { upsertSettings } from "../settings/settings.repository.js"
@@ -73,9 +74,9 @@ export const getKnowService = async (userId: string): Promise<KnowCard> => {
 
 // ---- applying an answer -----------------------------------------------------------------------------
 
-const remember = async (userId: string, content: string, kind: "GOAL" | "STRUGGLE" | "PREFERENCE" | "FACT" | "PERSON") => {
-  const known = await prisma.memory.findMany({ where: { userId }, take: 300 })
-  const saved = await saveMemories(userId, [{ content, kind, importance: 3, source: "SAID", sensitive: false }], known)
+const remember = async (userId: string, content: string, kind: "GOAL" | "STRUGGLE" | "PREFERENCE" | "FACT" | "PERSON", answer: string) => {
+  const known = await prisma.memory.findMany({ where: { userId, ...currentMemoryWhere() }, take: 300 })
+  const saved = await saveMemories(userId, [{ content, kind, importance: 3, source: "SAID", sensitive: false, quote: answer }], known, [answer])
   return saved.length > 0
 }
 
@@ -138,7 +139,7 @@ export const answerKnowService = async (userId: string, id: string, input: { ans
 
   switch (q.id) {
     case "goal": {
-      await remember(userId, `Wants to: ${answer}`, "GOAL")
+      await remember(userId, `Wants to: ${answer}`, "GOAL", answer)
       return { message: `Got it. I'll keep that in mind. Say "make me a plan to ${answer.slice(0, 60).replace(/[.!?]+$/, "")}" whenever you want a weekly plan for it.`, retry: false }
     }
     case "wake":
@@ -149,7 +150,7 @@ export const answerKnowService = async (userId: string, id: string, input: { ans
       return { message: q.id === "hours" ? "Noted. I'll fit your days around that once I know when you wake and sleep." : "Noted.", retry: false }
     }
     case "drain": {
-      if (!/nothing much/.test(lower)) await remember(userId, `Loses time to: ${answer}`, "STRUGGLE")
+      if (!/nothing much/.test(lower)) await remember(userId, `Loses time to: ${answer}`, "STRUGGLE", answer)
       return { message: /nothing much/.test(lower) ? "Good to hear." : "Thanks. I'll keep that in mind, without nagging.", retry: false }
     }
     case "style": {
@@ -163,15 +164,15 @@ export const answerKnowService = async (userId: string, id: string, input: { ans
       return { message: "Got it. I'll lead with that. You can change it in You, How Ally works for you.", retry: false }
     }
     case "focus_time": {
-      await remember(userId, `Works and thinks best in the ${answer.toLowerCase().replace(/^late at night$/, "late night")}`, "PREFERENCE")
+      await remember(userId, `Works and thinks best in the ${answer.toLowerCase().replace(/^late at night$/, "late night")}`, "PREFERENCE", answer)
       return { message: "Good to know. I'll put the hard things there.", retry: false }
     }
     case "health": {
-      await remember(userId, `Exercise and diet: ${answer}`, "FACT")
+      await remember(userId, `Exercise and diet: ${answer}`, "FACT", answer)
       return { message: "Thanks. I'll fit my suggestions around that.", retry: false }
     }
     case "people": {
-      await remember(userId, `Important people: ${answer}`, "PERSON")
+      await remember(userId, `Important people: ${answer}`, "PERSON", answer)
       return { message: "I'll remember them.", retry: false }
     }
   }
