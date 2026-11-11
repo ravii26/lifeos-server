@@ -1,13 +1,16 @@
 import prisma from "../../lib/prisma.js"
 import { searchItems, visibleMemories, type SearchHit, type Searchable } from "./search.rules.js"
+import { allowedKeys, fuseRankings, meaningHits, scheduleLifeIndexSync } from "./life-index.js"
 
 interface SaveProposal {
   proposal?: { contentTitle?: string }
 }
 
 // One question across everything the person put in: taught notes, to-dos,
-// saves, goals and (non-private) memories. Rules only, so it never invents.
-export const searchAllService = async (userId: string, query: string): Promise<SearchHit[]> => {
+// saves, goals and (non-private) memories. Found by words and by meaning
+// (the life index); only real rows come back, so it never invents.
+// Everything searchable, and the memories (with their privacy flag) kept apart.
+const loadLife = async (userId: string) => {
   const [notes, tasks, saves, projects, memories] = await Promise.all([
     prisma.allyNote.findMany({ where: { userId }, take: 300 }),
     prisma.task.findMany({
@@ -26,7 +29,7 @@ export const searchAllService = async (userId: string, query: string): Promise<S
     prisma.memory.findMany({ where: { userId }, select: { id: true, content: true, sensitive: true, createdAt: true }, take: 300 }),
   ])
 
-  const items: Searchable[] = [
+  const things: Searchable[] = [
     ...notes.map((n) => ({ kind: "NOTE" as const, id: n.id, title: n.title, body: [n.collection, ...n.items, n.text ?? ""].join("\n"), at: n.updatedAt })),
     ...tasks.map((t) => ({ kind: "TASK" as const, id: t.id, title: t.title, body: `${t.description ?? ""} ${t.minimumVersion ?? ""}`, at: t.createdAt })),
     ...saves.map((c) => {
@@ -35,7 +38,29 @@ export const searchAllService = async (userId: string, query: string): Promise<S
       return { kind: "SAVE" as const, id: c.id, title, body: `${c.summary ?? ""} ${c.rawText}`, at: c.createdAt }
     }),
     ...projects.map((p) => ({ kind: "PROJECT" as const, id: p.id, title: p.title, body: p.why ?? "", at: p.createdAt })),
-    ...visibleMemories(memories, query).map((m) => ({ kind: "MEMORY" as const, id: m.id, title: m.content, body: "", at: m.createdAt })),
   ]
-  return searchItems(items, query)
+  return { things, memories }
+}
+
+type LifeMemory = Awaited<ReturnType<typeof loadLife>>["memories"][number]
+const memoryItem = (m: LifeMemory): Searchable => ({ kind: "MEMORY", id: m.id, title: m.content, body: "", at: m.createdAt })
+
+// What the life index holds: everything except private memories, which are never indexed.
+const indexable = async (userId: string): Promise<Searchable[]> => {
+  const { things, memories } = await loadLife(userId)
+  return [...things, ...memories.filter((m) => !m.sensitive).map(memoryItem)]
+}
+
+// Called from chat too, so the index fills in without anyone searching.
+export const keepLifeIndexFresh = (userId: string): void => scheduleLifeIndexSync(userId, () => indexable(userId))
+
+export const searchAllService = async (userId: string, query: string): Promise<SearchHit[]> => {
+  const { things, memories } = await loadLife(userId)
+  const items = [...things, ...visibleMemories(memories, query).map(memoryItem)]
+
+  // Keep the life index in step, then fuse the word matches with the meaning matches.
+  scheduleLifeIndexSync(userId, [...things, ...memories.filter((m) => !m.sensitive).map(memoryItem)])
+  const byWords = searchItems(items, query, 20)
+  const byMeaning = await meaningHits(userId, query, allowedKeys(items))
+  return byMeaning.length ? fuseRankings([byWords, byMeaning]) : byWords.slice(0, 8)
 }

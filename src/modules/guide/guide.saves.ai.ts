@@ -359,14 +359,34 @@ Rules:
 
 const VIDEO_TIMEOUT_MS = 90_000
 
+// Watching cheaply (ADR 0046). Gemini bills video by the second; most of what a
+// saved video says is in its audio. So: low resolution, one frame every 5
+// seconds, and only the first 20 minutes (a summary needs the gist, not every
+// minute). By Google's published per-second rates this should be several times
+// cheaper than full quality; the AI usage log shows the real tokens. If the API ever rejects these settings, the
+// video is read once more the old way rather than not at all.
+export const LEAN_VIDEO = { fps: 0.2, endOffset: "1200s", mediaResolution: "MEDIA_RESOLUTION_LOW" } as const
+const rejectedSettings = (err: unknown) => /\b400\b|invalid|unknown name|cannot find field|not supported/i.test(err instanceof Error ? err.message : String(err))
+
 export const watchVideo = async (url: string, areas: SaveAreaOption[], yearGoal: string | null): Promise<VideoRead | null> => {
   if (!geminiClient) return null
   try {
-    const model = geminiClient.getGenerativeModel({ model: GEMINI_MODEL, generationConfig: { responseMimeType: "application/json" } })
-    const call = model.generateContent([
-      { fileData: { mimeType: "video/mp4", fileUri: url } } as never,
-      { text: `${VIDEO_PROMPT}\n\nAlso add to the JSON: "contentType" (one of WORKOUT, RECIPE, TUTORIAL, COURSE, BOOK, MOTIVATION, RECOMMENDATION, PLACE, MONEY, PRODUCT, NEWS, FUN), "domain" (one of career, coding, fitness, food, money, mindset, relationships, travel, fun, learning, other) and "lengthMinutes" (the video's length in whole minutes).\n\nTheir year goal: ${yearGoal ?? "not set"}. Their areas: ${areas.map((a) => `${a.name} (${a.tier})`).join(", ") || "none yet"}.` },
-    ])
+    const ask = `${VIDEO_PROMPT}\n- The summary is about the video only: never mention the person, their goals or their areas.\n\nAlso add to the JSON: "contentType" (one of WORKOUT, RECIPE, TUTORIAL, COURSE, BOOK, MOTIVATION, RECOMMENDATION, PLACE, MONEY, PRODUCT, NEWS, FUN), "domain" (one of career, coding, fitness, food, money, mindset, relationships, travel, fun, learning, other) and "lengthMinutes" (the video's length in whole minutes).\n\nTheir year goal: ${yearGoal ?? "not set"}. Their areas: ${areas.map((a) => `${a.name} (${a.tier})`).join(", ") || "none yet"}.`
+    const read = (lean: boolean) =>
+      geminiClient!
+        .getGenerativeModel({
+          model: GEMINI_MODEL,
+          generationConfig: { responseMimeType: "application/json", ...(lean ? { mediaResolution: LEAN_VIDEO.mediaResolution } : {}) } as never,
+        })
+        .generateContent([
+          { fileData: { mimeType: "video/mp4", fileUri: url }, ...(lean ? { videoMetadata: { fps: LEAN_VIDEO.fps, endOffset: LEAN_VIDEO.endOffset } } : {}) } as never,
+          { text: ask },
+        ])
+    const call = read(true).catch((err: unknown) => {
+      if (!rejectedSettings(err)) throw err
+      logger.warn(`Lean video settings rejected, reading at full quality: ${err instanceof Error ? err.message : String(err)}`)
+      return read(false)
+    })
     const result = await Promise.race([
       call,
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("video read timed out")), VIDEO_TIMEOUT_MS)),

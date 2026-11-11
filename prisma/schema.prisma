@@ -50,6 +50,7 @@ model User {
   daySchedules        DaySchedule[]
   allyNotes           AllyNote[]
   aiCalls             AiCall[]
+  lifeIndex           LifeIndexEntry[]
 }
 
 model Identity {
@@ -876,6 +877,12 @@ model UserSettings {
   focus      String @default("ALL")
   directness String @default("BALANCED")
 
+  // A short profile of this person (ADR 0044), rewritten at most once a day
+  // from their memories, goals and patterns. Sent with every chat instead of a
+  // long memory list, so the big picture costs a few hundred tokens.
+  profile   String?
+  profileAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -1347,4 +1354,47 @@ model AiCall {
 
   @@index([createdAt])
   @@index([userId, createdAt])
+}
+
+// The life index (ADR 0043): one searchable row per thing the person put in
+// (notes, to-dos, saves, goals, non-private memories), with its meaning vector,
+// so search and chat find things by meaning as well as by words. Rebuilt from
+// the real rows, never the other way round: deleting an entry loses nothing.
+model LifeIndexEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      String // NOTE | TASK | SAVE | PROJECT | MEMORY
+  refId     String
+  title     String
+  body      String
+  // Hash of the indexed text, so only changed things are embedded again.
+  hash      String
+  // Google embedding (768 numbers); empty until embedded.
+  embedding Float[]  @default([])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, kind, refId])
+  @@index([userId])
+}
+
+// The shared content brain (ADR 0046): what a public video says, read once and
+// reused for everyone who saves the same one. Only the content itself: no
+// person, no goals, no suggested steps (those are tailored per person).
+model ContentRead {
+  id            String   @id @default(cuid())
+  // "yt:<video id>"
+  key           String   @unique
+  title         String?
+  lines         String[]
+  purpose       String // LEARN | FEELING
+  feelings      String[]
+  contentType   String?
+  domain        String?
+  lengthMinutes Int?
+  // How many later saves reused this read instead of watching again.
+  reused        Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }

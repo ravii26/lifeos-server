@@ -52,7 +52,9 @@ export const rankMemories = <T extends Pick<Memory, "content" | "importance" | "
     .map((x) => x.m)
 }
 
-export const recallMemories = async (userId: string, message: string) => {
+// `limit`: how many to send (fewer now that the daily profile carries the big picture).
+// `query`: the message's vector when the caller already has it, so it is embedded once.
+export const recallMemories = async (userId: string, message: string, opts: { limit?: number; query?: number[] | null } = {}) => {
   const pool = await prisma.memory.findMany({
     where: { userId },
     orderBy: { createdAt: "desc" },
@@ -63,10 +65,10 @@ export const recallMemories = async (userId: string, message: string) => {
   // Only worth a Google call when something could be matched, and nothing is
   // lost if it fails: the ranking just falls back to words, importance, recency.
   const embedded = pool.filter((m) => m.embedding.length > 0)
-  const query = embedded.length > 0 ? await embedQuery(message) : null
+  const query = embedded.length > 0 ? (opts.query !== undefined ? opts.query : await embedQuery(message)) : null
   const similar = query ? similarities(embedded, query) : undefined
   // Health and mental-health memories stay out of the prompt unless the person raises the topic.
-  return rankMemories(visibleMemories(pool, message), message, new Date(), MAX_RECALL, similar)
+  return rankMemories(visibleMemories(pool, message), message, new Date(), opts.limit ?? MAX_RECALL, similar)
 }
 
 export interface MemoryWrite {

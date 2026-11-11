@@ -13,7 +13,12 @@ import { createTaskService, completeTaskService } from "../task/task.service.js"
 import { logHabitService, createHabitService } from "../habit/habit.service.js"
 import { createProjectService } from "../project/project.service.js"
 import { createAllyNoteService, updateAllyNoteService } from "../allynote/allynote.service.js"
-import { searchAllService } from "../search/search.service.js"
+import { keepLifeIndexFresh, searchAllService } from "../search/search.service.js"
+import { meaningHitsFor } from "../search/life-index.js"
+import { embedQuery } from "./assistant.memory.semantic.js"
+import { memoryLimitFor, pickNotes, pickTasksForPrompt, NOTES_PER_MESSAGE } from "./assistant.context.rules.js"
+import { refreshProfileIfStale } from "./assistant.profile.js"
+import { assemblePrompt, extrasFor } from "./assistant.prompt.js"
 import { NOTHING_CHANGED, projectAsTask, unbackedClaim, unbackedStateClaim } from "./assistant.guards.js"
 import { correctActionDates } from "./assistant.dates.js"
 import { cleanMood, customMoodIn, feelingIn, normalizeFeeling, matchComfort, comfortBlock, ownMoods } from "../guide/comfort.rules.js"
@@ -167,7 +172,8 @@ const loadContext = async (userId: string, message: string) => {
     prisma.identity.findUnique({ where: { userId }, select: { thisYearGoal: true } }),
     getTonightService(userId).catch(() => null),
     prisma.userSettings.findUnique({ where: { userId }, select: { nightlyTime: true, focus: true, directness: true } }),
-    recallMemories(userId, message),
+    // The message is embedded once and used for memories and the life index both.
+    embedQuery(message).then((query) => recallMemories(userId, message, { limit: memoryLimitFor(message), query }).then((list) => ({ list, query }))),
     loadPatternFacts(userId).catch(() => null),
     prisma.project.findMany({ where: { userId, status: { in: ["ACTIVE", "PAUSED"] } }, take: 20, select: { id: true, title: true, kind: true, status: true } }),
     prisma.allyNote.findMany({ where: { userId }, orderBy: { updatedAt: "desc" }, take: 200 }),
@@ -178,6 +184,32 @@ const loadContext = async (userId: string, message: string) => {
   const yourDay = `${blocks.map((b) => `${b.block} ${b.start}-${b.end}`).join(", ")}; mode ${mode}`
   // Moods they made up for their saves ("bored", "before an exam"), so saying one brings those saves back (ADR 0029).
   const myMoods = ownMoods(await prisma.vaultItem.findMany({ where: { userId }, select: { triggerTags: true } }).catch(() => [])).map((m) => m.mood)
+
+  // Only the to-dos and notes this message is about (ADR 0044), found by meaning
+  // through the life index as well as by words. The full lists stay on ctx for
+  // the server's own checks (duplicates, which to-do "done" means).
+  keepLifeIndexFresh(userId)
+  // Read on its own so a database without the profile column yet still chats.
+  const profile = await prisma.userSettings
+    .findUnique({ where: { userId }, select: { profile: true } })
+    .then((s) => s?.profile ?? null)
+    .catch(() => null)
+  const related = memories.query
+    ? new Set(
+        (
+          await meaningHitsFor(
+            userId,
+            memories.query,
+            new Set([...tasks.map((t) => `TASK:${t.id}`), ...allNotes.map((n) => `NOTE:${n.id}`)]),
+            12,
+          )
+        ).map((h) => h.id),
+      )
+    : new Set<string>()
+  const tomorrowKey = dayKeyInTz(new Date(Date.now() + 86_400_000), timeZone)
+  const shownTasks = pickTasksForPrompt(tasks, message, tomorrowKey, related)
+  const notes = pickNotes(pickNotesForPrompt(allNotes, message, NOTES_PER_MESSAGE), allNotes, related)
+  const patterns = patternFacts ? detectPatterns(patternFacts) : []
   return {
     timeZone,
     todayKey,
@@ -185,9 +217,11 @@ const loadContext = async (userId: string, message: string) => {
     yourDay,
     areas,
     tasks,
+    shownTasks,
     projects,
-    notes: pickNotesForPrompt(allNotes, message, 12),
-    otherNoteCollections: [...new Set(allNotes.filter((n) => !pickNotesForPrompt(allNotes, message, 12).some((p) => p.id === n.id)).map((n) => n.collection))].slice(0, 30),
+    notes,
+    otherNoteCollections: [...new Set(allNotes.filter((n) => !notes.some((p) => p.id === n.id)).map((n) => n.collection))].slice(0, 30),
+    profile,
     habits,
     reminders,
     identity,
@@ -198,8 +232,10 @@ const loadContext = async (userId: string, message: string) => {
     directness: asDirectness(settings?.directness),
     myMoods,
     spoken: false, // set per message by assistantChat (Talk mode)
-    memories,
-    patterns: patternFacts ? detectPatterns(patternFacts) : [],
+    memories: memories.list,
+    patterns,
+    // Which rare instructions this message gets (ADR 0045).
+    extras: extrasFor(message, { hasProjects: projects.length > 0, hasPatterns: patterns.length > 0 }),
   }
 }
 
@@ -208,10 +244,19 @@ type Ctx = Awaited<ReturnType<typeof loadContext>>
 const nowLocal = (timeZone: string) =>
   new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date())
 
+// What stays the same all day comes first (name, profile, goals, areas): the
+// provider's prompt cache matches from the start, so a stable start is discounted
+// on every message. What changes each message (the time, the memories and
+// to-dos picked for it) comes after.
 const contextJson = (ctx: Ctx) =>
   JSON.stringify({
-    now: `${ctx.todayKey} ${nowLocal(ctx.timeZone)} (${weekdayInTz(ctx.timeZone)})`,
     name: ctx.name,
+    aboutThem: ctx.profile,
+    yearGoal: ctx.identity?.thisYearGoal ?? null,
+    areas: ctx.areas,
+    activeProjects: ctx.projects,
+    habits: ctx.habits.map((h) => h.title),
+    now: `${ctx.todayKey} ${nowLocal(ctx.timeZone)} (${weekdayInTz(ctx.timeZone)})`,
     // Today's parts of the day (OFFICE = at work, no suggestions) and mode.
     yourDay: ctx.yourDay,
     whatYouRemember: ctx.memories.map((m) => ({
@@ -220,8 +265,6 @@ const contextJson = (ctx: Ctx) =>
       memory: m.content,
       saved: m.createdAt.toISOString().slice(0, 10),
     })),
-    yearGoal: ctx.identity?.thisYearGoal ?? null,
-    areas: ctx.areas,
     // Real dates for the next 7 days so "Thursday" is looked up, not calculated.
     nextDays: Object.fromEntries(
       Array.from({ length: 8 }, (_, i) => {
@@ -229,11 +272,9 @@ const contextJson = (ctx: Ctx) =>
         return [i === 0 ? `today (${weekdayInTz(ctx.timeZone, at)})` : weekdayInTz(ctx.timeZone, at), dayKeyInTz(at, ctx.timeZone)]
       }),
     ),
-    activeProjects: ctx.projects,
     // What they taught you. Answer from these, and only these.
     yourNotes: ctx.notes.map((n) => ({ id: n.id, collection: n.collection, template: n.template, title: n.title, items: n.items, text: n.text?.slice(0, 600) ?? null })),
     otherNoteCollections: ctx.otherNoteCollections,
-    habits: ctx.habits.map((h) => h.title),
     tonightsOneThing: ctx.tonight?.commitment
       ? {
           title: ctx.tonight.commitment.title,
@@ -242,7 +283,8 @@ const contextJson = (ctx: Ctx) =>
           status: ctx.tonight.commitment.status,
         }
       : null,
-    openTasks: ctx.tasks.map((t) => ({ id: t.id, title: t.title, due: t.dueDate?.toISOString().slice(0, 10) ?? null })),
+    openTasks: ctx.shownTasks.map((t) => ({ id: t.id, title: t.title, due: t.dueDate?.toISOString().slice(0, 10) ?? null })),
+    openTasksTotal: ctx.tasks.length,
     habitsNotDoneToday: ctx.habits.filter((h) => h.logs.length === 0).map((h) => ({ id: h.id, title: h.title })),
     patternsNoticed: ctx.patterns,
     myMoods: ctx.myMoods,
@@ -252,7 +294,7 @@ const contextJson = (ctx: Ctx) =>
 
 // ---- AI planning ---------------------------------------------------
 
-const SYSTEM_PROMPT = `You are Ally: one companion who knows this person's life (context below). In every reply you take exactly ONE role, chosen from what they need right now:
+export const SYSTEM_PROMPT = `You are Ally: one companion who knows this person's life (context below). In every reply you take exactly ONE role, chosen from what they need right now:
 - FRIEND: they vent, share their day, or feel low. Listen first, reflect what you heard, no fixing unless they ask. If they seem lonely or carry something heavy, gently encourage talking to someone real in their life (use people from memory by name when you can). You are never a replacement for family or friends.
 - ASSISTANT: tasks, reminders, plans, "what should I do now". Act, confirm in a few words.
 - MENTOR: learning a skill or moving ahead in work or studies (whatever their goals, memories and projects say they are working on; never assume a field). Give the next concrete step for their level, not a curriculum. Prefer doing (practise, build, explain out loud) over watching more content.
@@ -284,6 +326,7 @@ You can take actions. Only use ids that appear in the context. Actions:
 - {"type":"USE_NOTES","noteIds":[string]}   (your reply used what they taught you in yourNotes: emit this with the ids you used. The app adds "From your X note".)
 - {"type":"UPDATE_NOTE","noteId":string,"add":[string]|null,"remove":[string]|null}   ("add pancakes to my breakfasts", "remove poha". noteId from yourNotes.)
 - {"type":"SEARCH","query":string}   ("what did I save about caching", "find my notes on X". The app searches notes, saves, to-dos and goals and writes the answer.)
+- openTasks shows only the to-dos this message is about and the ones due by tomorrow; openTasksTotal says how many exist. If they mean a to-do that is not shown, emit SEARCH for it rather than saying it does not exist.
 - {"type":"WHAT_NOW","minutes":number|null}   (they ask what to do now / what to work on / "I have 20 minutes". The app answers from their real day, you only emit this. minutes = the time they said, else null.)
 - {"type":"SET_MODE","mode":"NORMAL"|"BUSY"|"SICK"|"TRAVEL"|"HOLIDAY","until":"YYYY-MM-DD"|null}   ("I'm sick" -> SICK; "busy week" -> BUSY with until = this Sunday; "I'm better / back to normal" -> NORMAL; "I'm travelling / on holiday until Friday" -> TRAVEL / HOLIDAY.)
 - {"type":"SET_SCHEDULE","days":["MON"..],"blocks":[{"block":"MORNING"|"COMMUTE"|"OFFICE"|"GYM"|"EVENING"|"NIGHT","start":"HH:mm","end":"HH:mm"}]}   (they describe their day: "I work 10 to 8:30 on weekdays, gym right after", "college 8 to 2, tuition 5 to 7", "night shift 9pm to 6am". Their main fixed commitment (job, shift, classes) is the OFFICE block. Give the blocks they described; the app fills the rest. Also remember it.)
@@ -313,6 +356,7 @@ Language: they often write Hinglish (Hindi in Roman letters, sometimes Devanagar
 - When they vent or share their day, do not turn it into tasks unless they ask.
 
 Memory:
+- aboutThem is a short profile of this person, written from everything you know. Use it for the big picture; whatYouRemember holds the details that match this message.
 - whatYouRemember is what you already know about them. Use it naturally so they never repeat themselves; don't recite it back.
 - Each remember item also has "source": "SAID" if they told you directly, "INFERRED" if you concluded it; and "sensitive": true for health or mental-health details (those are never brought up unless they raise them).
 - remember: up to 3 NEW durable things worth knowing later: their schedule, goals, struggles, preferences, people in their life, notable events, or how they felt (include the date for feelings/events, e.g. "Felt drained on 5 Oct after manager changed priorities"). Short, third person. Never save tasks/reminders (those are actions), small talk, or anything already in whatYouRemember.
@@ -415,7 +459,8 @@ const SPOKEN_LINE =
 
 const systemText = (ctx: Ctx) => {
   const style = styleForPrompt(ctx.focus, ctx.directness)
-  const base = style ? `${SYSTEM_PROMPT}\n\nHow this person wants you to be: ${style}` : SYSTEM_PROMPT
+  const prompt = assemblePrompt(SYSTEM_PROMPT, ctx.extras)
+  const base = style ? `${prompt}\n\nHow this person wants you to be: ${style}` : prompt
   return ctx.spoken ? `${base}\n\n${SPOKEN_LINE}` : base
 }
 
@@ -1169,8 +1214,13 @@ export const assistantChat = async (
   const modelReply = prepDropped ? withoutPrepClaims(plan.reply) || "Saved what you said." : plan.reply
   const [forgotten, remembered] = await Promise.all([
     forgetMemories(userId, plan.forget, ctx.memories).catch(() => []),
-    saveMemories(userId, plan.remember, ctx.memories).catch(() => []),
+    // Checked against all their memories, not only the few shown with this message.
+    (plan.remember.length ? prisma.memory.findMany({ where: { userId }, orderBy: { createdAt: "desc" }, take: 300 }) : Promise.resolve(ctx.memories))
+      .then((known) => saveMemories(userId, plan.remember, known))
+      .catch(() => []),
   ])
+  // Once a day, in the background: rewrite the short profile sent with every chat.
+  void refreshProfileIfStale(userId)
   const memoryActions: ChatAction[] = [
     ...forgotten.map((m) => ({ type: "FORGOT" as const, id: m.id, text: m.content, activityId: m.activityId })),
     ...remembered.map((m) => ({ type: "REMEMBERED" as const, id: m.id, text: m.content, activityId: m.activityId })),

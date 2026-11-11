@@ -2,13 +2,40 @@
    in .env, using throwaway accounts that are deleted afterwards.
    Usage: npm run evals            (all ready scenarios)
           npm run evals -- F19 B2  (only these ids)
-   Writes a JSON report to evals-reports/ and exits non-zero on any failure. */
-import { mkdirSync, writeFileSync } from "node:fs"
+   Writes a JSON report to evals-reports/ and exits non-zero on any failure.
+   It is also the cost bench: every scenario reports its AI calls, tokens,
+   rupee cost and reply time, and the totals are compared with the previous
+   full run, so a change that saves money but breaks answers shows at once. */
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import request from "supertest"
 import app from "../app.js"
 import prisma from "../lib/prisma.js"
+import { costInr } from "../config/ai-prices.js"
 import { scenarios, type ScenarioContext } from "./scenarios.js"
+import { benchOf, compareBench, type BenchRow, type Spend } from "./bench.js"
+
+// What one eval account spent on AI. The usage log is written without waiting, so give it a moment.
+const spendOf = async (userId: string): Promise<Spend> => {
+  await new Promise((r) => setTimeout(r, 800))
+  const calls = await prisma.aiCall.findMany({ where: { userId }, select: { feature: true, model: true, tokensIn: true, tokensOut: true, ok: true } })
+  let inr = 0
+  let unpriced = 0
+  for (const c of calls) {
+    const cost = costInr(c.model, c.tokensIn, c.tokensOut)
+    if (cost === null) unpriced++
+    else inr += cost
+  }
+  return {
+    calls: calls.length,
+    failedCalls: calls.filter((c) => !c.ok).length,
+    tokensIn: calls.reduce((a, c) => a + c.tokensIn, 0),
+    tokensOut: calls.reduce((a, c) => a + c.tokensOut, 0),
+    inr,
+    unpricedCalls: unpriced,
+    features: [...new Set(calls.map((c) => c.feature))],
+  }
+}
 
 const only = new Set(process.argv.slice(2).filter((a) => !a.startsWith("-")))
 
@@ -52,7 +79,7 @@ const newContext = async (): Promise<{ ctx: ScenarioContext; cleanup: () => Prom
 }
 
 const main = async () => {
-  const results: { id: string; name: string; result: "pass" | "fail" | "pending" | "error"; detail?: string; ms?: number; usedAi?: boolean }[] = []
+  const results: BenchRow[] = []
 
   for (const s of scenarios) {
     if (only.size && !only.has(s.id)) continue
@@ -70,19 +97,24 @@ const main = async () => {
     const { ctx, cleanup } = made
     const started = Date.now()
     let usedAi = true
+    const replyMs: number[] = []
     const tracked: ScenarioContext = {
       ...ctx,
       say: async (m) => {
+        const t = Date.now()
         const r = await ctx.say(m)
+        replyMs.push(Date.now() - t)
         usedAi = usedAi && r.usedAi !== false
         return r
       },
     }
     try {
       const failure = await s.run(tracked)
-      results.push({ id: s.id, name: s.name, result: failure ? "fail" : "pass", detail: failure ?? undefined, ms: Date.now() - started, usedAi })
+      const spend = await spendOf(ctx.userId).catch(() => undefined)
+      results.push({ id: s.id, name: s.name, result: failure ? "fail" : "pass", detail: failure ?? undefined, ms: Date.now() - started, usedAi, replyMs, spend })
     } catch (err) {
-      results.push({ id: s.id, name: s.name, result: "error", detail: err instanceof Error ? err.message : String(err), ms: Date.now() - started, usedAi })
+      const spend = await spendOf(ctx.userId).catch(() => undefined)
+      results.push({ id: s.id, name: s.name, result: "error", detail: err instanceof Error ? err.message : String(err), ms: Date.now() - started, usedAi, replyMs, spend })
     } finally {
       await cleanup().catch(() => undefined)
     }
@@ -91,13 +123,34 @@ const main = async () => {
   const icon = { pass: "PASS   ", fail: "FAIL   ", pending: "pending", error: "ERROR  " } as const
   for (const r of results) {
     const ai = r.result === "pending" ? "" : r.usedAi ? "" : "  [no AI call]"
-    console.log(`${icon[r.result]}  ${r.id.padEnd(4)} ${r.name}${r.detail ? `  (${r.detail})` : ""}${ai}`)
+    const spent = r.spend ? `  [${r.spend.calls} AI, ${r.spend.tokensIn + r.spend.tokensOut} tok, ₹${r.spend.inr.toFixed(3)}]` : ""
+    console.log(`${icon[r.result]}  ${r.id.padEnd(4)} ${r.name}${r.detail ? `  (${r.detail})` : ""}${ai}${spent}`)
   }
   const count = (k: string) => results.filter((r) => r.result === k).length
   console.log(`\n${count("pass")} passed · ${count("fail")} failed · ${count("error")} errors · ${count("pending")} pending (later build steps)`)
 
   mkdirSync("evals-reports", { recursive: true })
-  writeFileSync(`evals-reports/${new Date().toISOString().replace(/[:.]/g, "-")}.json`, JSON.stringify(results, null, 2))
+  // The bench: totals for this run, and against the last full run.
+  const bench = benchOf(results)
+  console.log(
+    `\nBench: ${bench.messages} messages, ${bench.aiCalls} AI calls, ${bench.tokensPerMessage} tokens and ₹${bench.inrPerMessage.toFixed(3)} per message, ` +
+      `replies p50 ${bench.replyP50Ms} ms / p90 ${bench.replyP90Ms} ms, total ₹${bench.inr.toFixed(2)}` +
+      (bench.unpricedCalls ? ` (${bench.unpricedCalls} calls on models with no price set)` : ""),
+  )
+  if (!only.size) {
+    for (const f of readdirSync("evals-reports").filter((n) => n.endsWith(".json")).sort().reverse()) {
+      try {
+        const old = JSON.parse(readFileSync(`evals-reports/${f}`, "utf8"))
+        if (old?.bench) {
+          console.log(compareBench(old.bench, bench, old.results ?? [], results))
+          break
+        }
+      } catch {
+        // An old or unreadable report is skipped.
+      }
+    }
+  }
+  writeFileSync(`evals-reports/${new Date().toISOString().replace(/[:.]/g, "-")}.json`, JSON.stringify({ bench, results }, null, 2))
   await prisma.$disconnect()
   process.exit(count("fail") + count("error") > 0 ? 1 : 0)
 }

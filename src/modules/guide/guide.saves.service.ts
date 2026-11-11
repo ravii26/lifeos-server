@@ -16,7 +16,6 @@ import {
   extractUrl,
   readLink,
   proposeAction,
-  watchVideo,
   platformOf,
   type LinkInfo,
   type SaveAiInput,
@@ -25,6 +24,7 @@ import {
   type SaveProposal,
   type SaveWhen,
 } from "./guide.saves.ai.js"
+import { readVideo } from "./guide.saves.shared.js"
 import { setTonightToTaskService } from "./guide.service.js"
 import type { DecideSaveDto } from "./guide.schema.js"
 import { withAiFeature } from "../../lib/ai-usage.js"
@@ -228,7 +228,7 @@ export const createSaveService = async (userId: string, input: SaveInput): Promi
 // and the summary is marked unavailable: Ally never makes a summary up.
 const watchInBackground = async (userId: string, id: string, url: string, areas: SaveAiInput["areas"], yearGoal: string | null) => {
   try {
-    const read = await withAiFeature("Save video summary", () => watchVideo(url, areas, yearGoal))
+    const read = await withAiFeature("Save video summary", () => readVideo(url, areas, yearGoal))
     const row = await findCaptureById(id, userId)
     const stored = row ? storedOf(row.suggestedOutputs) : null
     if (!row || !stored) return
