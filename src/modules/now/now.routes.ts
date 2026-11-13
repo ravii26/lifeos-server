@@ -29,6 +29,7 @@ import { getAgendaService, moveLeftToTomorrowService, setProactivityService } fr
 import { PROACTIVITY } from "./agenda.rules.js"
 import { maybeRefreshHabitStages } from "../progress/progress.service.js"
 import { decidePileService, getPileService, parkedListService, wakeParkedService } from "./pile.service.js"
+import { dumpService } from "./dump.service.js"
 
 const router = Router()
 router.use(authenticate)
@@ -107,6 +108,12 @@ router.put("/basics", async (req: Request, res: Response) => {
 
 // GET /now/pile — everything on the list against the time there is in a week.
 router.get("/pile", async (req: Request, res: Response) => sendSuccess(res, "Pile", await getPileService(req.user!.id)))
+
+// POST /now/dump — "My head is full": split, save with one Undo, sort, time check.
+router.post("/dump", async (req: Request, res: Response) => {
+  const b = parse(z.object({ text: z.string().trim().min(3).max(4000) }), req.body)
+  sendSuccess(res, "Dump sorted", await dumpService(req.user!.id, b.text), 201)
+})
 
 // GET /now/pile/parked — what is parked; undoing its activity brings it back.
 router.get("/pile/parked", async (req: Request, res: Response) => sendSuccess(res, "Parked", await parkedListService(req.user!.id)))

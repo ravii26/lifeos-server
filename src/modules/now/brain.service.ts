@@ -5,7 +5,7 @@
    ===================================================================== */
 import prisma from "../../lib/prisma.js"
 import { dayKeyInTz, localDayStartMs, utcDayKey } from "../../shared/utils/time.util.js"
-import { effectiveTier, type Block } from "./now.rules.js"
+import { effectiveTier, normalizeDay, defaultDay, type Block } from "./now.rules.js"
 import type { WeeklyTarget } from "./brain.rules.js"
 import type { Tier } from "../guide/guide.rules.js"
 import type { Clock } from "./now.service.js"
@@ -34,7 +34,7 @@ export const weeklyTargets = async (userId: string, c: Clock): Promise<WeeklyTar
   const weekStart = new Date(localDayStartMs(monday.key, c.tz))
   const dayStart = new Date(localDayStartMs(c.todayKey, c.tz))
   const ids = projects.map((p) => p.id)
-  const [logs, tasksDone] = await Promise.all([
+  const [logs, tasksDone, schedule] = await Promise.all([
     prisma.activityEvent.findMany({
       where: { userId, type: { in: ["LOGGED", "DONE", "MINIMUM"] }, itemType: "PROJECT", itemId: { in: ids }, undoneAt: null, at: { gte: weekStart } },
       select: { itemId: true, minutes: true, value: true, at: true },
@@ -43,7 +43,11 @@ export const weeklyTargets = async (userId: string, c: Clock): Promise<WeeklyTar
       where: { userId, projectId: { in: ids }, status: "COMPLETED", completedAt: { gte: weekStart } },
       select: { projectId: true, sizeMinutes: true, completedAt: true },
     }),
+    prisma.daySchedule.findMany({ where: { userId }, select: { weekday: true, blocks: true } }),
   ])
+  // Each day's free minutes, Monday first (weekday 0 is Sunday), so the pace follows real free time.
+  const byDay = new Map(schedule.map((r) => [r.weekday, normalizeDay(r.blocks)]))
+  const dayFree = [1, 2, 3, 4, 5, 6, 0].map((wd) => (byDay.get(wd) ?? defaultDay(wd)).reduce((a, b) => a + b.freeMinutes, 0))
 
   return projects.map((p) => {
     const unit: "min" | "count" = p.weeklyTargetMinutes && p.weeklyTargetMinutes > 0 ? "min" : "count"
@@ -83,6 +87,7 @@ export const weeklyTargets = async (userId: string, c: Clock): Promise<WeeklyTar
       areaName: p.area.name,
       deadlineKey: deadline ? utcDayKey(deadline) : null,
       goalTitle: p.goal?.title ?? null,
+      dayFree,
     }
   })
 }

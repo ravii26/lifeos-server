@@ -247,3 +247,32 @@ describe("rightNow with the brain", () => {
     expect(r.options[0]?.sourceId).toBe("b")
   })
 })
+
+describe("pace follows real free time (decisions log #13)", () => {
+  // Office days leave 150 free minutes, the weekend 480 each: 1,710 in the week.
+  const officeWeek = [150, 150, 150, 150, 150, 480, 480]
+
+  it("is not behind on Thursday when the free time is on the weekend", () => {
+    // Even pace would expect 154 of 360 by Thursday; weighted it is 360 × 450/1710 ≈ 95.
+    const p = targetPace(target({ doneThisWeek: 100, dayFree: officeWeek }))
+    expect(Math.round(p.expectedByToday)).toBe(95)
+    expect(p.behind).toBeLessThan(0)
+  })
+
+  it("puts most of what is left on the free days", () => {
+    const weekday = targetPace(target({ dayFree: officeWeek })).todayShare
+    const saturday = targetPace(target({ daysElapsed: 5, dayFree: officeWeek })).todayShare
+    expect(Math.round(weekday)).toBe(Math.round((360 * 150) / 1260))
+    expect(saturday).toBeGreaterThan(weekday * 2)
+  })
+
+  it("counts only the days since a target set mid-week", () => {
+    // Set on Saturday: the week is Sat + Sun, both free, so Sunday morning expects half.
+    const p = targetPace(target({ target: 120, weekDays: 2, daysElapsed: 1, dayFree: officeWeek }))
+    expect(p.expectedByToday).toBe(60)
+  })
+
+  it("falls back to an even pace with no free time known", () => {
+    expect(Math.round(targetPace(target({ dayFree: [0, 0, 0, 0, 0, 0, 0] })).expectedByToday)).toBe(154)
+  })
+})

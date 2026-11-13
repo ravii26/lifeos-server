@@ -28,6 +28,10 @@ export interface WeeklyTarget {
   areaName: string | null
   deadlineKey: string | null // the project's or its goal's deadline
   goalTitle: string | null
+  // Free minutes of each day of the week, Monday first. With it the pace
+  // follows real free time (decisions log #13): a 10-hour office day owes
+  // little and the free weekend owes most, so Wednesday is never falsely "behind".
+  dayFree?: number[]
 }
 
 export interface TargetPace {
@@ -38,18 +42,29 @@ export interface TargetPace {
   todayShare: number // an even share of what's left, for today
 }
 
+const sum = (xs: number[]) => xs.reduce((a, b) => a + Math.max(0, b), 0)
+
 export const targetPace = (t: WeeklyTarget): TargetPace => {
   const week = t.weekDays ?? 7
   const daysLeft = Math.max(1, week - t.daysElapsed)
-  const expectedByToday = (t.target * t.daysElapsed) / week
   const remaining = Math.max(0, t.target - t.doneThisWeek)
   const doneBeforeToday = t.doneThisWeek - t.doneToday
+  const owed = Math.max(0, t.target - doneBeforeToday)
+  // The days this target counts for are the last `week` days (a target set mid-week counts from then).
+  const weights = t.dayFree?.length === 7 ? t.dayFree.slice(7 - week) : null
+  const total = weights ? sum(weights) : 0
+  if (!weights || total <= 0) {
+    return { expectedByToday: (t.target * t.daysElapsed) / week, behind: (t.target * t.daysElapsed) / week - doneBeforeToday, remaining, daysLeft, todayShare: owed / daysLeft }
+  }
+  const expectedByToday = (t.target * sum(weights.slice(0, t.daysElapsed))) / total
+  const ahead = sum(weights.slice(t.daysElapsed))
   return {
     expectedByToday,
     behind: expectedByToday - doneBeforeToday,
     remaining,
     daysLeft,
-    todayShare: Math.max(0, t.target - doneBeforeToday) / daysLeft,
+    // Today's part of what is still owed, by today's share of the free time left.
+    todayShare: ahead > 0 ? (owed * Math.max(0, weights[t.daysElapsed] ?? 0)) / ahead : owed / daysLeft,
   }
 }
 
