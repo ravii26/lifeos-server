@@ -1,7 +1,7 @@
 import prisma from "../../lib/prisma.js"
 import { env } from "../../config/env.config.js"
 import { modelPrices } from "../../config/ai-prices.js"
-import { summarizeAiCalls } from "./admin.rules.js"
+import { summarizeAiCalls, progressCounters } from "./admin.rules.js"
 
 // The admin page reads days in the founder's time zone.
 const ADMIN_TZ = "Asia/Kolkata"
@@ -93,5 +93,22 @@ export const overviewService = async () => {
     prisma.task.count({ where: { remindAt: { gte: now }, status: { in: ["TODO", "IN_PROGRESS"] }, archivedAt: null } }),
     prisma.capture.count({ where: { createdAt: { gte: weekAgo } } }),
   ])
-  return { users, newUsers, activeThisWeek: activeRows.length, upcomingReminders, savesThisWeek }
+  return { users, newUsers, activeThisWeek: activeRows.length, upcomingReminders, savesThisWeek, progress: await progressService(now) }
+}
+
+// Done / dropped this week and day-7 / day-30 return. Small user counts for
+// now, so plain queries; revisit with a rollup table past a few thousand users.
+const progressService = async (now: Date) => {
+  const weekAgo = new Date(now.getTime() - 7 * 86_400_000)
+  const [weekEvents, users, last] = await Promise.all([
+    prisma.activityEvent.findMany({ where: { at: { gte: weekAgo }, undoneAt: null }, select: { userId: true, type: true }, take: MAX_ROWS }),
+    prisma.user.findMany({ select: { id: true, createdAt: true } }),
+    prisma.activityEvent.groupBy({ by: ["userId"], _max: { at: true } }),
+  ])
+  const lastAt = new Map(last.map((r) => [r.userId, r._max.at]))
+  return progressCounters({
+    weekEvents,
+    users: users.map((u) => ({ id: u.id, createdAt: u.createdAt, lastActivityAt: lastAt.get(u.id) ?? null })),
+    now,
+  })
 }

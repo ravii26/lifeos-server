@@ -62,7 +62,9 @@ describe("AICredits client", () => {
   it("throws one error naming every attempt when all models fail", async () => {
     const { credits } = await load()
     fetchMock.mockResolvedValue(new Response("down", { status: 503 }))
-    await expect(credits.aiCreditsChat({ messages: [] })).rejects.toThrow(/gemini-3.5-flash-lite.*503.*gpt-4o-mini.*503.*claude-haiku/s)
+    await expect(credits.aiCreditsChat({ messages: [] })).rejects.toThrow(/gemini-3.5-flash-lite.*503.*gpt-4o-mini.*503/s)
+    // The expensive Claude Haiku 4.5 is no longer walked during an outage.
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it("uses the models from AICREDITS_MODELS when set", async () => {

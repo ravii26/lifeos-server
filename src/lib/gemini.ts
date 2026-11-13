@@ -12,10 +12,11 @@ if (client) {
     const model = getModel(params, options)
     const generate = model.generateContent.bind(model)
     model.generateContent = ((request, requestOptions) =>
-      trackAiCall("gemini", params.model, () => generate(request, requestOptions), (r) => ({
-        tokensIn: r.response.usageMetadata?.promptTokenCount,
-        tokensOut: r.response.usageMetadata?.candidatesTokenCount,
-      }))) as typeof model.generateContent
+      trackAiCall("gemini", params.model, () => generate(request, requestOptions), (r) => {
+        const u = r.response.usageMetadata as { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number } | undefined
+        // Thinking tokens are billed as output but reported separately, so they are added here.
+        return { tokensIn: u?.promptTokenCount, tokensOut: (u?.candidatesTokenCount ?? 0) + (u?.thoughtsTokenCount ?? 0) }
+      })) as typeof model.generateContent
     const embed = model.embedContent.bind(model)
     model.embedContent = ((request, requestOptions) =>
       trackAiCall("gemini", params.model, () => embed(request, requestOptions), () => ({}))) as typeof model.embedContent

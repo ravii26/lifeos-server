@@ -43,6 +43,7 @@ import { followUpChat } from "./assistant.followup.service.js"
 import { manageChat } from "./assistant.manage.service.js"
 import { editChat } from "./assistant.manage.edit.service.js"
 import { showChat } from "./assistant.manage.show.service.js"
+import { seasonChat } from "../season/season.chat.js"
 import { screenChat } from "./assistant.screen.service.js"
 import { lastRef, type ChatRef } from "./assistant.followup.js"
 import { MODES, BLOCKS, type Mode } from "../now/now.rules.js"
@@ -64,7 +65,6 @@ import { recordActivity, type UndoPayload } from "../activity/activity.service.j
 import { loadPatternFacts, detectPatterns } from "./assistant.patterns.js"
 import { recallMemories, recallPastMemories, saveMemories, forgetMemories, type MemoryWrite } from "./assistant.memory.js"
 import { currentMemoryWhere } from "./assistant.memory.rules.js"
-import { assistantAsk } from "./assistant.service.js"
 import { todayKeyInTz, weekdayInTz, dateFromKey, dayKeyInTz } from "../../shared/utils/time.util.js"
 import logger from "../../lib/logger.js"
 
@@ -487,6 +487,11 @@ const planWithGroq = async (ctx: Ctx, message: string, history: ChatTurn[]): Pro
     messages: toMessages(ctx, message, history),
     model: "openai/gpt-oss-120b",
     response_format: { type: "json_object" },
+    // A chat plan is a short reply plus a few actions. The cap stops a runaway
+    // reply from billing thousands of output tokens; 1,000 leaves room for the
+    // reasoning tokens gpt-oss counts inside it. Low effort keeps those small.
+    max_tokens: CHAT_MAX_OUTPUT,
+    reasoning_effort: "low",
   })
   return parsePlan(res.choices[0]?.message?.content || "{}")
 }
@@ -495,7 +500,8 @@ const planWithGemini = async (ctx: Ctx, message: string, history: ChatTurn[]): P
   if (!geminiClient) throw new Error("Gemini client not initialized")
   const model = geminiClient.getGenerativeModel({
     model: GEMINI_MODEL,
-    generationConfig: { responseMimeType: "application/json" },
+    // Flash-Lite already thinks at its lowest level by default; the cap bounds the reply.
+    generationConfig: { responseMimeType: "application/json", maxOutputTokens: CHAT_MAX_OUTPUT },
   })
   const convo = history
     .slice(-10)
@@ -507,6 +513,12 @@ const planWithGemini = async (ctx: Ctx, message: string, history: ChatTurn[]): P
   ])
   return parsePlan(result.response.text())
 }
+
+// Upper bound on one chat reply (output tokens). Normal plans use 150–400.
+const CHAT_MAX_OUTPUT = 1000
+
+// "What should I do now", recognised without AI for when no provider answers.
+const NO_AI_WHAT_NOW = /\b(what (should|do) i do|what'?s? next|what now|what should i (focus|work|do) on|i have \d+ ?(min|mins|minutes))\b/i
 
 // ---- nudge requests (deterministic backup) --------------------------
 
@@ -1160,7 +1172,8 @@ export const assistantChat = async (
 
   // "Delete my gym habit", "pause the guitar goal", "rename X to Y", "bring back X": by code,
   // reversible, and it asks "which one?" when a name fits several things (ADR 0030).
-  const managed = await (showChat(userId, text).then((r) => r ?? manageChat(userId, text)).then((r) => r ?? editChat(userId, text)).then((r) => r ?? screenChat(userId, text))).catch((err) => {
+  // "Park money until March", "make English my focus": seasons, by code (decisions log #7).
+  const managed = await (seasonChat(userId, text).then((r) => r ?? showChat(userId, text)).then((r) => r ?? manageChat(userId, text)).then((r) => r ?? editChat(userId, text)).then((r) => r ?? screenChat(userId, text))).catch((err) => {
     logger.warn("Manage failed:", err)
     return null
   })
@@ -1195,10 +1208,22 @@ export const assistantChat = async (
       const on = backup.time ? `on, every ${backup.kind === "MORNING" ? "morning" : "night"} at ${backup.time}` : "off"
       return { role: "ASSISTANT", reply: done.length ? `Done. Nudge is ${on}.` : "That didn't go through. Please try again.", actions: done, usedAi: false }
     }
-    const old = await assistantAsk(userId, text, history)
-    return aiWasLimited()
-      ? { role: "ASSISTANT", reply: old.answer, actions: [], usedAi: false, aiLimit: true }
-      : { role: "ASSISTANT", reply: old.answer, actions: [], usedAi: false, aiDown: true }
+    // No AI right now (every provider failed, or the daily cap). The old
+    // router used to run here, and it called the AI again: during an outage
+    // that meant more failed (and on AICredits, billed) attempts. Two things
+    // still matter without AI and are answered by code: how they feel, and
+    // what to do now.
+    const flags = aiWasLimited() ? { aiLimit: true } : { aiDown: true }
+    const felt = feelingIn(text) ?? customMoodIn(text, ctx.myMoods)
+    if (felt || NO_AI_WHAT_NOW.test(text)) {
+      const r = await execute(userId, ctx, [felt ? { type: "COMFORT", feeling: felt } : { type: "WHAT_NOW", minutes: null }])
+      const reply = felt ? ["That sounds hard. I'm here.", r.cite].filter(Boolean).join("\n\n") : r.say || "Nothing needs you right now."
+      return { role: "ASSISTANT", reply, actions: r.done, usedAi: false, ...flags }
+    }
+    const reply = flags.aiLimit
+      ? "That's today's AI limit. Quick things still work: reminders, logs, lists, and \"what should I do now\"."
+      : "I can't think this through right now. Quick things still work: reminders, logs, lists, and \"what should I do now\". Try again in a minute."
+    return { role: "ASSISTANT", reply, actions: [], usedAi: false, ...flags }
   }
 
   // How someone feels is recognised in code, so comfort never depends on the model noticing.

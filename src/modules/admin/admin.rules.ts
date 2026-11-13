@@ -124,6 +124,57 @@ export const summarizeAiCalls = (
   }
 }
 
+/* ---- Progress counters (build plan, Phase 0) -----------------------------------
+   Ally is judged on things finished or dropped on purpose, and on whether
+   people come back, never on time in the app. Pure, so it is unit-tested. */
+
+export interface ProgressInput {
+  // Activity in the last 7 days (undone rows already left out).
+  weekEvents: { userId: string; type: string }[]
+  // Everyone who signed up, with their latest activity (null = none yet).
+  users: { id: string; createdAt: Date; lastActivityAt: Date | null }[]
+  now: Date
+}
+
+export interface ReturnRate {
+  eligible: number // signed up at least N days ago
+  returned: number // did something on or after day N
+  rate: number | null // returned / eligible, null when nobody is eligible yet
+}
+
+export interface Progress {
+  doneThisWeek: number // DONE + smallest version + logged
+  droppedThisWeek: number // archived on purpose (let go, parked away)
+  activeThisWeek: number
+  donePerActiveUser: number | null
+  return7: ReturnRate
+  return30: ReturnRate
+}
+
+const DONE_TYPES = new Set(["DONE", "MINIMUM", "LOGGED"])
+const DROPPED_TYPES = new Set(["ARCHIVED"])
+
+const returnRate = (users: ProgressInput["users"], days: number, now: Date): ReturnRate => {
+  const ms = days * 86_400_000
+  const eligible = users.filter((u) => now.getTime() - u.createdAt.getTime() >= ms)
+  const returned = eligible.filter((u) => u.lastActivityAt && u.lastActivityAt.getTime() - u.createdAt.getTime() >= ms).length
+  return { eligible: eligible.length, returned, rate: eligible.length ? returned / eligible.length : null }
+}
+
+export const progressCounters = ({ weekEvents, users, now }: ProgressInput): Progress => {
+  const doneThisWeek = weekEvents.filter((e) => DONE_TYPES.has(e.type)).length
+  const droppedThisWeek = weekEvents.filter((e) => DROPPED_TYPES.has(e.type)).length
+  const activeThisWeek = new Set(weekEvents.map((e) => e.userId)).size
+  return {
+    doneThisWeek,
+    droppedThisWeek,
+    activeThisWeek,
+    donePerActiveUser: activeThisWeek ? Math.round(((doneThisWeek + droppedThisWeek) / activeThisWeek) * 10) / 10 : null,
+    return7: returnRate(users, 7, now),
+    return30: returnRate(users, 30, now),
+  }
+}
+
 // "a@x.com, B@y.com" → is this email one of them (case-insensitive)?
 export const isAdminEmail = (email: string | undefined, list: string | undefined): boolean => {
   if (!email || !list) return false

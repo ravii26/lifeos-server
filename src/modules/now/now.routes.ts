@@ -7,6 +7,7 @@ import { mealNowService } from "./meal.service.js"
 import { routineNowService } from "./routine.service.js"
 import { watchLaterNowService } from "./later.service.js"
 import { timerNowService } from "./timer.service.js"
+import { applyRestartService } from "./restart.service.js"
 import { countsTodayService } from "../log/log.overview.service.js"
 import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
 import {
@@ -159,10 +160,22 @@ router.post("/respond", async (req: Request, res: Response) => {
   sendSuccess(res, "Answered", await respondNowService(req.user!.id, { ...b, sourceType: b.sourceType }))
 })
 
+// POST /now/restart — after a gap: a light week for the plan and/or sessions moved to
+// the time of day that didn't keep failing. Offered on Now, never done silently.
+router.post("/restart", async (req: Request, res: Response) => {
+  const b = parse(z.object({ lightWeek: z.boolean().optional(), switchTo: z.enum(["MORNING", "EVENING"]).optional() }), req.body)
+  sendSuccess(res, "Restarted", await applyRestartService(req.user!.id, b))
+})
+
 // POST /now/advice — one of the advice buttons: smaller, tomorrow, weekend, let go.
 router.post("/advice", async (req: Request, res: Response) => {
   const b = parse(
-    z.object({ sourceType: z.enum(["TASK", "HABIT", "PROJECT"]), sourceId: z.string(), choice: z.enum(["SMALLER", "TOMORROW", "WEEKEND", "LET_GO"]) }),
+    z.object({
+      sourceType: z.enum(["TASK", "HABIT", "PROJECT"]),
+      sourceId: z.string(),
+      choice: z.enum(["SMALLER", "TOMORROW", "WEEKEND", "LET_GO"]),
+      reason: z.string().max(80).optional(), // "no time", "forgot": what got in the way
+    }),
     req.body,
   )
   sendSuccess(res, "Done", await applyAdviceService(req.user!.id, b))

@@ -363,8 +363,7 @@ const VIDEO_TIMEOUT_MS = 90_000
 // saved video says is in its audio. So: low resolution, one frame every 5
 // seconds, and only the first 20 minutes (a summary needs the gist, not every
 // minute). By Google's published per-second rates this should be several times
-// cheaper than full quality; the AI usage log shows the real tokens. If the API ever rejects these settings, the
-// video is read once more the old way rather than not at all.
+// cheaper than full quality; the AI usage log shows the real tokens.
 export const LEAN_VIDEO = { fps: 0.2, endOffset: "1200s", mediaResolution: "MEDIA_RESOLUTION_LOW" } as const
 const rejectedSettings = (err: unknown) => /\b400\b|invalid|unknown name|cannot find field|not supported/i.test(err instanceof Error ? err.message : String(err))
 
@@ -382,10 +381,12 @@ export const watchVideo = async (url: string, areas: SaveAreaOption[], yearGoal:
           { fileData: { mimeType: "video/mp4", fileUri: url }, ...(lean ? { videoMetadata: { fps: LEAN_VIDEO.fps, endOffset: LEAN_VIDEO.endOffset } } : {}) } as never,
           { text: ask },
         ])
+    // No full-quality retry any more: if Google rejects the lean settings, a
+    // full read costs about 5× more (≈₹7 for one 15-minute video). The save
+    // falls back to the link's title and text instead, like any unreadable video.
     const call = read(true).catch((err: unknown) => {
-      if (!rejectedSettings(err)) throw err
-      logger.warn(`Lean video settings rejected, reading at full quality: ${err instanceof Error ? err.message : String(err)}`)
-      return read(false)
+      if (rejectedSettings(err)) logger.warn(`Lean video settings rejected; not reading at full quality: ${err instanceof Error ? err.message : String(err)}`)
+      throw err
     })
     const result = await Promise.race([
       call,

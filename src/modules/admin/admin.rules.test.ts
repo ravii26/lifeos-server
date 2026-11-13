@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { summarizeAiCalls, isAdminEmail, type AiCallRow } from "./admin.rules.js"
+import { summarizeAiCalls, isAdminEmail, progressCounters, type AiCallRow } from "./admin.rules.js"
 
 const prices = { "gemini-x": { inPerM: 1, outPerM: 2 } }
 const now = new Date("2026-10-15T12:00:00+05:30")
@@ -74,5 +74,45 @@ describe("isAdminEmail", () => {
     expect(isAdminEmail("other@example.com", "me@example.com")).toBe(false)
     expect(isAdminEmail("me@example.com", undefined)).toBe(false)
     expect(isAdminEmail(undefined, "me@example.com")).toBe(false)
+  })
+})
+
+describe("progressCounters", () => {
+  const day = 86_400_000
+  const t = new Date("2026-11-12T12:00:00Z")
+  const ago = (d: number) => new Date(t.getTime() - d * day)
+
+  it("counts done and dropped this week, and active people", () => {
+    const p = progressCounters({
+      weekEvents: [
+        { userId: "a", type: "DONE" },
+        { userId: "a", type: "MINIMUM" },
+        { userId: "b", type: "LOGGED" },
+        { userId: "b", type: "ARCHIVED" },
+        { userId: "b", type: "SKIPPED" },
+      ],
+      users: [],
+      now: t,
+    })
+    expect(p.doneThisWeek).toBe(3)
+    expect(p.droppedThisWeek).toBe(1)
+    expect(p.activeThisWeek).toBe(2)
+    expect(p.donePerActiveUser).toBe(2)
+  })
+
+  it("works out day-7 and day-30 return from sign-up and last activity", () => {
+    const p = progressCounters({
+      weekEvents: [],
+      users: [
+        { id: "new", createdAt: ago(3), lastActivityAt: ago(1) }, // too new for either
+        { id: "back", createdAt: ago(20), lastActivityAt: ago(2) }, // returned after day 7
+        { id: "gone", createdAt: ago(20), lastActivityAt: ago(19) }, // stopped on day 1
+        { id: "old", createdAt: ago(40), lastActivityAt: ago(1) }, // still here after day 30
+      ],
+      now: t,
+    })
+    expect(p.return7).toEqual({ eligible: 3, returned: 2, rate: 2 / 3 })
+    expect(p.return30).toEqual({ eligible: 1, returned: 1, rate: 1 })
+    expect(p.donePerActiveUser).toBeNull()
   })
 })

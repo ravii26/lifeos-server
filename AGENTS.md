@@ -32,6 +32,8 @@ prisma/schema.prisma, prisma/migrations/
 **Key modules:** `assistant` (chat with actions, memory, patterns), `guide` (today's one thing, saves → action),
 `activity` (event log + undo), `task`, `habit`, `area`, `goal`, `project`, `settings`. Older modules (`capture`, `vault`,
 `knowledge`, `document`, `decisions`, …) still exist. Don't extend them unless the plan says so.
+**Plan (Nov 2026):** what Ally does is in `../reports/Ally decisions log.md`, the phase order in `../reports/Ally build plan.md`.
+Legacy modules are frozen: no new features there.
 
 ## Conventions (follow these when adding code)
 - **Route → controller → service → repository.** Controllers stay thin. Validate input with Zod via
@@ -45,7 +47,9 @@ prisma/schema.prisma, prisma/migrations/
 - **AI rules (ADR 0004):** use `runWithAiFallback(label, { gemini, groq }, heuristic)`. Ask for JSON, validate every field,
   check ids against the user's data, and always provide a heuristic fallback. Settings, safety, timing and ordering
   are deterministic code; the AI only picks from shortlists, writes words, parses and summarises.
-- **Product rules:** no streak/guilt language; nothing is sent to the user unprompted (ADR 0006); new needs map to the 6 blocks (ADR 0003).
+- **Product rules:** no streak/guilt language; what Ally sends on its own follows Normal / Quieter / Silent (ADR 0027, which replaced ADR 0006's "nothing unprompted"); new needs map to the 6 blocks (ADR 0003).
+- **Cost (Nov 2026 estimate from code):** a typical user is ≈ ₹101/month in AI; the target after Phase 4 is ≈ ₹30–35. Chat replies are capped (`CHAT_MAX_OUTPUT`), the expensive Claude Haiku 4.5 is not in the AICredits walk, video saves never retry at full quality, and when no AI answers, chat replies from code (feelings, "what now") instead of calling the old router.
+- **Admin progress counters** (`GET /admin/overview` → `progress`): done + dropped per week, day-7 / day-30 return. Ally is judged on these, never on time in the app.
 - Comments explain *why*, in the existing style (short block comments above non-obvious code).
 - Time: user-local days via `shared/utils/time.util.ts` (`todayKeyInTz`, `dateFromKey`, `localDayStartMs`). Default tz `Asia/Kolkata`.
 

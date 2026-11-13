@@ -102,15 +102,15 @@ export const listActivity = (userId: string, since: Date, limit = 200) =>
 // Only these fields can be put back by RESTORE_FIELDS; dates travel as ISO strings.
 const RESTORABLE: Record<"task" | "habit" | "project" | "settings" | "goal" | "allyNote" | "area" | "memory", string[]> = {
   task: ["sizeMinutes", "dueDate", "status", "archivedAt", "remindAt", "windowEnd", "title", "priority"],
-  habit: ["targetMinutes", "frequency", "specificDays", "isActive", "reminderTime", "title", "habitType", "targetCount"],
+  habit: ["targetMinutes", "frequency", "specificDays", "isActive", "reminderTime", "title", "habitType", "targetCount", "timeBlock"],
   project: ["sessionMinutes", "status", "title", "priority", "deadline"],
-  area: ["name", "tier", "isActive"],
+  area: ["name", "tier", "isActive", "laterUntil"],
   memory: ["sensitive"],
-  allyNote: ["title"],
-  settings: ["busyUntil", "focus", "directness", "proactivity"],
+  allyNote: ["title", "meta"],
+  settings: ["busyUntil", "focus", "directness", "proactivity", "seasonNumber", "seasonName", "seasonStartedAt", "seasonEndsAt", "seasonEndEvent", "sleepTargetWake", "sleepHours", "sleepFromWake", "sleepStep", "sleepStepAt"],
   goal: ["status", "parkedAt"],
 }
-const DATE_FIELDS = new Set(["dueDate", "archivedAt", "busyUntil", "parkedAt", "remindAt", "windowEnd", "deadline"])
+const DATE_FIELDS = new Set(["dueDate", "archivedAt", "busyUntil", "parkedAt", "remindAt", "windowEnd", "deadline", "laterUntil", "seasonStartedAt", "seasonEndsAt", "sleepStepAt"])
 
 const restoreFields = async (userId: string, undo: Extract<UndoPayload, { kind: "RESTORE_FIELDS" }>) => {
   const data: Record<string, unknown> = {}

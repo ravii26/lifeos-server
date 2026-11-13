@@ -8,13 +8,16 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { env } from "../config/env.config.js"
 import logger from "./logger.js"
+import { recordAiCall } from "./ai-usage.js"
 
 export const aiCreditsConfigured = !!env.AICREDITS_API_KEY
 
 // Cheap and reliable first (the same model as the Gemini default, then a very
-// cheap OpenAI one, then Claude Haiku). Override with AICREDITS_MODELS
-// (comma-separated, provider-prefixed ids as listed on aicredits.in/models).
-const DEFAULT_MODELS = ["google/gemini-3.5-flash-lite", "openai/gpt-4o-mini", "anthropic/claude-haiku-4.5"]
+// cheap OpenAI one). Claude Haiku 4.5 was third, but at $1/$5 it costs about
+// 3× the others, so an outage turned every message into the expensive model;
+// when both fail, Gemini direct and Groq answer next instead. Override with
+// AICREDITS_MODELS (comma-separated, provider-prefixed ids from aicredits.in/models).
+const DEFAULT_MODELS = ["google/gemini-3.5-flash-lite", "openai/gpt-4o-mini"]
 
 export const aiCreditsModels = (): string[] => {
   const fromEnv = env.AICREDITS_MODELS?.split(",").map((m) => m.trim()).filter(Boolean)
@@ -94,6 +97,7 @@ export const aiCreditsChat = async (params: ChatParams): Promise<ChatResult> => 
   for (const model of aiCreditsModels()) {
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
+    const started = Date.now()
     try {
       const res = await fetch(ENDPOINT, {
         method: "POST",
@@ -119,8 +123,11 @@ export const aiCreditsChat = async (params: ChatParams): Promise<ChatResult> => 
       const choice = data.choices?.[0]
       const content = choice?.message?.content
       // A reply cut off at the length limit is broken JSON: try the next model.
+      // That attempt was still billed, so it gets its own usage row (the
+      // wrapper in lib/groq.ts only records the attempt that finally answers).
       if (content && choice?.finish_reason === "length" && json) {
         attempts.push({ model, status: res.status, detail: "reply was cut off at the length limit" })
+        recordAiCall({ provider: "aicredits", model, tokensIn: data.usage?.prompt_tokens, tokensOut: data.usage?.completion_tokens, durationMs: Date.now() - started, ok: false, error: "cut off at the length limit (billed)" })
         continue
       }
       if (!content) {

@@ -50,9 +50,13 @@ const iso = (d: Date | null) => (d ? d.toISOString() : null)
 // One of the advice buttons on Now. Returns a one-line receipt.
 export const applyAdviceService = async (
   userId: string,
-  input: { sourceType: "TASK" | "HABIT" | "PROJECT"; sourceId: string; choice: AdviceChoice },
+  input: { sourceType: "TASK" | "HABIT" | "PROJECT"; sourceId: string; choice: AdviceChoice; reason?: string },
   source: ActivitySource = "APP",
 ): Promise<{ message: string; activityId?: string }> => {
+  // What got in the way ("no time", "forgot"), kept with the move so a later
+  // restart can learn from it (decisions log #14).
+  const said = input.reason?.trim().slice(0, 80)
+  const why = (r?: string) => (said ? (r ? `${said} · ${r}` : said) : r)
   const c = await getClock(userId)
   const tomorrow = addUtcDays(dateFromKey(c.todayKey), 1)
   const saturday = dateFromKey(nextSaturdayKey(c.todayKey))
@@ -73,7 +77,7 @@ export const applyAdviceService = async (
       : input.choice === "TOMORROW" ? `${t.title} moved to tomorrow.`
       : input.choice === "WEEKEND" ? `${t.title} moved to Saturday.`
       : `Let go of ${t.title}. It's archived, not deleted.`
-    const ev = await recordActivity(userId, { type: input.choice === "LET_GO" ? "ARCHIVED" : "UPDATED", itemType: "TASK", itemId: t.id, title: message, reason: hold, source, undo: { kind: "RESTORE_FIELDS", model: "task", id: t.id, prev } })
+    const ev = await recordActivity(userId, { type: input.choice === "LET_GO" ? "ARCHIVED" : "UPDATED", itemType: "TASK", itemId: t.id, title: message, reason: why(hold), source, undo: { kind: "RESTORE_FIELDS", model: "task", id: t.id, prev } })
     return { message, activityId: ev?.id }
   }
 
@@ -85,7 +89,7 @@ export const applyAdviceService = async (
     const smallest = sizes.length ? Math.min(...sizes) : 2
     if (input.choice === "TOMORROW") {
       // A habit is daily anyway: "tomorrow" is a Not now for today.
-      const ev = await recordActivity(userId, { type: "SKIPPED", itemType: "HABIT", itemId: h.id, title: h.title, reason: "tomorrow", source, undo: { kind: "NOOP" } })
+      const ev = await recordActivity(userId, { type: "SKIPPED", itemType: "HABIT", itemId: h.id, title: h.title, reason: why("tomorrow"), source, undo: { kind: "NOOP" } })
       return { message: `${h.title}: tomorrow, then.`, activityId: ev?.id }
     }
     const data =
@@ -105,7 +109,7 @@ export const applyAdviceService = async (
   if (!p) throw new NotFoundError("Project not found")
   const prev = { sessionMinutes: p.sessionMinutes, status: p.status }
   if (input.choice === "TOMORROW" || input.choice === "WEEKEND") {
-    const ev = await recordActivity(userId, { type: "SKIPPED", itemType: "PROJECT", itemId: p.id, title: p.title, reason: hold, source, undo: { kind: "NOOP" } })
+    const ev = await recordActivity(userId, { type: "SKIPPED", itemType: "PROJECT", itemId: p.id, title: p.title, reason: why(hold), source, undo: { kind: "NOOP" } })
     return { message: input.choice === "TOMORROW" ? `${p.title}: tomorrow, then.` : `${p.title}: the weekend, then.`, activityId: ev?.id }
   }
   const data = input.choice === "SMALLER" ? { sessionMinutes: Math.max(10, Math.round((p.sessionMinutes ?? DEFAULT_SESSION) / 2)) } : { status: "PAUSED" as const }

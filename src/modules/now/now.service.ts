@@ -8,6 +8,8 @@ import prisma from "../../lib/prisma.js"
 import { recordActivity, type UndoPayload } from "../activity/activity.service.js"
 import { localToUtc } from "../assistant/assistant.capture.js"
 import { env } from "../../config/env.config.js"
+import { seasonLine, seasonWeek, seasonWeeks } from "../season/season.rules.js"
+import { restartInfo, type RestartInfo } from "./restart.service.js"
 import {
   dateFromKey,
   dayKeyInTz,
@@ -55,6 +57,14 @@ export interface PrepItem {
 export interface NowDto extends NowResult {
   moved: number // overdue to-dos quietly moved to this week (after a long break)
   prep: PrepItem[]
+  // "Switch & Shape · week 2 of 10" under the greeting; null before the first season.
+  season?: string | null
+  restart?: RestartInfo
+}
+
+const seasonLineFor = (s: { seasonStartedAt: Date | null; seasonEndsAt: Date | null; seasonName: string | null; seasonNumber: number } | null, now: Date): string | null => {
+  if (!s?.seasonStartedAt) return null
+  return seasonLine(s.seasonName, s.seasonNumber, seasonWeek(s.seasonStartedAt, now), seasonWeeks(s.seasonStartedAt, s.seasonEndsAt))
 }
 
 export interface Clock {
@@ -114,7 +124,23 @@ export const lastActiveGapDays = async (userId: string, c: Clock): Promise<numbe
   return last ? Math.max(0, daysBetweenKeys(dayKeyInTz(last.at, c.tz), c.todayKey)) : 0
 }
 
+// Habits that belong to a weekly plan Ally runs (decisions log #1), with the
+// plan's name and week, so the Now card can say where you are in it.
+const planHabits = async (userId: string, todayKey: string): Promise<Map<string, { plan: string; week: number; weeks: number }>> => {
+  const notes = await prisma.allyNote.findMany({ where: { userId, collection: "Fitness", template: "PLAYBOOK" }, select: { meta: true } })
+  const out = new Map<string, { plan: string; week: number; weeks: number }>()
+  for (const n of notes) {
+    const m = (n.meta ?? {}) as { kind?: string; startedKey?: string; phaseWeeks?: number; habits?: Record<string, string> }
+    if (m.kind !== "WEEKPLAN_FITNESS" || !m.startedKey || !m.habits) continue
+    const weeks = m.phaseWeeks ?? 8
+    const week = Math.min(weeks, Math.floor(Math.max(0, daysBetweenKeys(m.startedKey, todayKey)) / 7) + 1)
+    for (const id of Object.values(m.habits)) out.set(id, { plan: "Fitness plan", week, weeks })
+  }
+  return out
+}
+
 export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandidate[]> => {
+  const plans = await planHabits(userId, c.todayKey)
   const [areas, tasks, habits, targets, skips, idle, holds] = await Promise.all([
     prisma.area.findMany({ where: { userId, isActive: true }, select: { id: true, name: true, tier: true, laterUntil: true } }),
     prisma.task.findMany({
@@ -192,6 +218,14 @@ export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandi
       areaIdleDays: idle.get(h.areaId) ?? null,
       skippedToday: skips.today.has(h.id),
       counted: h.habitType === "COUNT",
+      ...(() => {
+        const p = plans.get(h.id)
+        if (!p) return {}
+        const planned = h.frequency === "CUSTOM" ? h.specificDays.length : 7
+        // Counts what is done, never what is missing (no guilt language).
+        const progress = h.logs.length ? `${h.logs.length} of ${planned} done this week.` : "First one this week."
+        return { planWhy: `${p.plan}, week ${p.week} of ${p.weeks}. ${progress}`, detail: h.description }
+      })(),
     }))
 
   // A session towards each weekly target that still needs time today.
@@ -276,20 +310,25 @@ const moveOverdueToThisWeek = async (userId: string, c: Clock): Promise<number> 
 
 export const getNowService = async (userId: string, opts: { minutes?: number | null; at?: string; smallest?: boolean } = {}): Promise<NowDto> => {
   const c = await getClock(userId, opts.at)
-  const [{ mode }, blocks, gapDays, candidates, prep, busyUntil] = await Promise.all([
+  const [{ mode }, blocks, gapDays, candidates, prep, settings] = await Promise.all([
     getMode(userId, c.now),
     getDay(userId, c.weekday),
     lastActiveGapDays(userId, c),
     loadCandidates(userId, c),
     prepDue(userId, c),
-    prisma.userSettings.findUnique({ where: { userId }, select: { busyUntil: true } }).then((s) => s?.busyUntil ?? null),
+    prisma.userSettings.findUnique({
+      where: { userId },
+      select: { busyUntil: true, seasonStartedAt: true, seasonEndsAt: true, seasonName: true, seasonNumber: true },
+    }),
   ])
+  const busyUntil = settings?.busyUntil ?? null
+  const season = seasonLineFor(settings, c.now)
   // "In a meeting till 4": nothing is asked of you until then.
   if (busyUntil && busyUntil.getTime() > c.now.getTime()) {
     const until = new Intl.DateTimeFormat("en-IN", { timeZone: c.tz, hour: "numeric", minute: "2-digit", hour12: true }).format(busyUntil)
     return {
       kind: "REST", mode, block: blockAt(blocks, c.nowMin).block, availableMinutes: 0, smaller: false, freshStart: false, welcomeBack: false,
-      message: `You're busy until ${until}. I'll have the next thing ready then.`, options: [], moved: 0, prep: [], focus: null, advice: null,
+      message: `You're busy until ${until}. I'll have the next thing ready then.`, options: [], moved: 0, prep: [], focus: null, advice: null, season,
     }
   }
   const moved = gapDays >= 14 ? await moveOverdueToThisWeek(userId, c) : 0
@@ -326,7 +365,9 @@ export const getNowService = async (userId: string, opts: { minutes?: number | n
     })
   }
   if (moved) result.message = result.message.replace("Welcome back. Nothing is lost.", `Welcome back. Nothing is lost, and I moved ${moved} old item${moved === 1 ? "" : "s"} to this week.`)
-  return { ...result, moved, prep: mode === "SICK" ? [] : prep }
+  // After a week or more away: what got in the way last time, the honest record, a light week (decisions log #14).
+  const restart = await restartInfo(userId, gapDays, c.now, c.tz).catch(() => null)
+  return { ...result, moved, prep: mode === "SICK" ? [] : prep, season, ...(restart && { restart }) }
 }
 
 // What the brain would place in each free part of the rest of today, for

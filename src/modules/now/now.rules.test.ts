@@ -283,3 +283,23 @@ describe("dayFromBasics (first run)", () => {
     expect(dayFromBasics({ wake: "07:00", sleep: "23:00", office: { start: "06:00", end: "15:00" } })).toBeNull()
   })
 })
+
+describe("plan sessions on the Now card", () => {
+  it("says where you are in the plan, and carries the steps for 'not clear what to do'", () => {
+    const r = rightNow(
+      input({
+        nowMin: toMin("20:00"),
+        candidates: [
+          cand({ sourceId: "gym", sourceType: "HABIT", title: "Brisk walk", block: "EVENING", sizeMinutes: 30, tier: "MAIN", planWhy: "Fitness plan, week 2 of 8. First one this week.", detail: "Flat ground, comfortable shoes." }),
+        ],
+      }),
+    )
+    expect(r.options[0]?.why).toBe("Fitness plan, week 2 of 8. First one this week.")
+    expect(r.options[0]?.detail).toBe("Flat ground, comfortable shoes.")
+  })
+
+  it("adds no detail for ordinary items", () => {
+    const r = rightNow(input({ nowMin: toMin("20:00"), candidates: [cand({ sourceId: "t", block: "EVENING", sizeMinutes: 20 })] }))
+    expect(r.options[0]?.detail).toBeUndefined()
+  })
+})

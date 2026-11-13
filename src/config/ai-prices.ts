@@ -4,10 +4,10 @@
    a price here (or in AI_PRICES_JSON on the server) updates past days too.
 
    Check these against the provider's own price page before trusting the
-   rupee numbers. Last looked up 2026-10-15 from third-party trackers
-   (pricepertoken.com) because Google's page could not be read.
-   AICredits may add a margin on top; set its real rate in AI_PRICES_JSON
-   once known.
+   rupee numbers. Last checked 2026-11 against the official Gemini, Groq,
+   OpenAI and Anthropic pages (reports/Ally situations cost and UX.md).
+   Embeddings and Whisper are not per-token chat prices and stay unset, so
+   the page shows "price not set" for them rather than a wrong number.
    ===================================================================== */
 import { env } from "./env.config.js"
 
@@ -16,11 +16,23 @@ export interface ModelPrice {
   outPerM: number
 }
 
+// AICredits bills list price plus a 10.25% margin (research, Nov 2026), so its
+// rows are the list price × 1.1025. Model ids are the ones each provider is
+// actually called with: Gemini direct is unprefixed, AICredits is prefixed.
+const AICREDITS_MARGIN = 1.1025
+const viaAiCredits = (inPerM: number, outPerM: number): ModelPrice => ({ inPerM: inPerM * AICREDITS_MARGIN, outPerM: outPerM * AICREDITS_MARGIN })
+
 const DEFAULT_PRICES: Record<string, ModelPrice> = {
+  // Gemini direct (list price, Nov 2026).
   "gemini-3.5-flash-lite": { inPerM: 0.3, outPerM: 2.5 },
-  "google/gemini-3.5-flash-lite": { inPerM: 0.3, outPerM: 2.5 },
-  // Groq's free tier: nothing is billed.
-  "openai/gpt-oss-120b": { inPerM: 0, outPerM: 0 },
+  // AICredits (list price + margin).
+  "google/gemini-3.5-flash-lite": viaAiCredits(0.3, 2.5),
+  "openai/gpt-4o-mini": viaAiCredits(0.15, 0.6),
+  "anthropic/claude-haiku-4.5": viaAiCredits(1, 5),
+  // Groq's paid list price. The free tier bills nothing, but counting it at
+  // list price keeps the page honest about what the same traffic costs once
+  // the free quota runs out. Override with AI_PRICES_JSON if staying free.
+  "openai/gpt-oss-120b": { inPerM: 0.15, outPerM: 0.6 },
 }
 
 // AI_PRICES_JSON='{"openai/gpt-4o-mini":{"inPerM":0.15,"outPerM":0.6}}' adds or overrides models.

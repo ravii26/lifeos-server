@@ -883,6 +883,26 @@ model UserSettings {
   profile   String?
   profileAt DateTime?
 
+  // The current season (build plan Phase 1): a chapter of life with at most
+  // 2 focus areas. Which areas are where lives on Area.tier (MAIN = focus,
+  // SECONDARY = keep going, LATER = parked); this is only the chapter itself.
+  // Ends on seasonEndsAt or when seasonEndEvent happens, whichever is first.
+  seasonNumber    Int       @default(0)
+  seasonName      String?
+  seasonStartedAt DateTime?
+  seasonEndsAt    DateTime?
+  seasonEndEvent  String?
+
+  // The sleep fix (Phase 1, decisions log #13): one fast jump, then gradual,
+  // to a fixed wake time. Times are "HH:MM" in the person's own day. The
+  // current step's wake and sleep are written into DaySchedule, so the
+  // briefing, nudges and wrap-up follow it. Null = no sleep plan.
+  sleepTargetWake String?
+  sleepHours      Int? // minutes asleep wanted (420 = 7 h)
+  sleepFromWake   String? // where they started, for the ladder
+  sleepStep       Int     @default(0) // 1-based week of the ladder; 0 = none
+  sleepStepAt     DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

@@ -33,7 +33,7 @@ const envSchema = z.object({
   // Extra or corrected model prices for the admin page (see config/ai-prices.ts).
   AI_PRICES_JSON: blankIsUnset(z.string().optional()),
   // Rupees per US dollar, for showing AI cost in ₹.
-  AI_USD_INR: blankIsUnset(z.coerce.number().positive().default(88)),
+  AI_USD_INR: blankIsUnset(z.coerce.number().positive().default(94)), // ≈ rate in Nov 2026
 })
 
 const parsed = envSchema.safeParse(process.env)

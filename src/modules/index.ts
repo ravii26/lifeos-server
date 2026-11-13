@@ -32,6 +32,9 @@ import adminRoutes from "./admin/admin.routes.js"
 import goalPlanRoutes from "./goalplan/goalplan.routes.js"
 import getKnowRoutes from "./getknow/getknow.routes.js"
 import logRoutes from "./log/log.routes.js"
+import seasonRoutes from "./season/season.routes.js"
+import sleepRoutes from "./sleep/sleep.routes.js"
+import weekPlanRoutes from "./weekplan/weekplan.routes.js"
 
 const router = Router()
 
@@ -55,6 +58,9 @@ router.use("/focus", focusRoutes)
 router.use("/behavior", behaviorRoutes)
 router.use("/captures", captureRoutes)
 router.use("/settings", settingsRoutes)
+router.use("/season", seasonRoutes)
+router.use("/sleep", sleepRoutes)
+router.use("/weekplan", weekPlanRoutes)
 router.use("/decisions", decisionsRoutes)
 router.use("/graph", graphRoutes)
 router.use("/links", linkRoutes)

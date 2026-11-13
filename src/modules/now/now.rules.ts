@@ -145,6 +145,8 @@ export interface NowCandidate {
   target?: { behind: number; target: number; unit: "min" | "count"; countUnit: string | null }
   count?: number | null // a counted session: "apply to 2 jobs"
   counted?: boolean // a count habit ("8 glasses"): it is the +1 line, not a pick
+  planWhy?: string // "Fitness plan, week 2 of 8. 1 of 3 done this week."
+  detail?: string | null // what exactly to do (a plan session's exercises), for "Not clear what to do"
 }
 
 // Plan 16 §1, Layer 2: after fixed things and musts with deadlines, the basics
@@ -189,6 +191,7 @@ export interface NowOption {
   smaller: boolean
   minimum: string
   why: string
+  detail?: string // the steps, when there is more to it than the title
 }
 
 export type NowKind = "PICK" | "REST" | "EMPTY"
@@ -343,7 +346,10 @@ export const rightNow = (input: NowInput): NowResult => {
     why:
       block.block === "OFFICE"
         ? officeWhy(c, input.todayKey)
-        : whyFromReasons(s.reasons, c.anchor ? anchorWhy(c.anchor) : whyFor({ ...c, sourceType: c.sourceType === "PROJECT" ? "TASK" : c.sourceType, minimumVersion: c.minimum, areaId: null, goalId: null })),
+        : // Part of a plan Ally runs: where you are in it says more than a generic reason.
+          (c.planWhy ??
+          whyFromReasons(s.reasons, c.anchor ? anchorWhy(c.anchor) : whyFor({ ...c, sourceType: c.sourceType === "PROJECT" ? "TASK" : c.sourceType, minimumVersion: c.minimum, areaId: null, goalId: null }))),
+    ...(c.detail && { detail: c.detail }),
   }))
 
   const waiting = focus ? ranked.filter((r) => r.c.sourceId !== focus.sourceId).slice(0, 3).map((r) => r.c.title) : []
