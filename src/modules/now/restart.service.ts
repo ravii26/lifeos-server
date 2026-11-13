@@ -27,7 +27,7 @@ interface PlanMeta {
   [k: string]: unknown
 }
 
-const fitnessPlan = async (userId: string) => {
+export const fitnessPlan = async (userId: string) => {
   const notes = await prisma.allyNote.findMany({ where: { userId, collection: "Fitness", template: "PLAYBOOK" }, orderBy: { createdAt: "desc" }, take: 5 })
   for (const n of notes) {
     const m = (n.meta ?? {}) as PlanMeta

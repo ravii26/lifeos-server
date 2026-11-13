@@ -9,6 +9,7 @@ import { recordActivity, type UndoPayload } from "../activity/activity.service.j
 import { upsertSettings } from "../settings/settings.repository.js"
 import { getDay } from "../now/now.service.js"
 import { projectWeeklyMinutes, habitWeeklyMinutes, taskMinutes } from "../now/pile.rules.js"
+import { fitnessPlan } from "../now/restart.service.js"
 import {
   placesOf,
   checkPlaceChange,
@@ -19,6 +20,10 @@ import {
   seasonOver,
   seasonLine,
   defaultEnd,
+  reviewLines,
+  parkedWhy,
+  nextSeasonPick,
+  extendedEnd,
   CAPS,
   type AreaLite,
   type Tier,
@@ -99,6 +104,10 @@ export interface StartSeasonInput {
   focusIds: string[]
   keepGoingIds: string[]
   parked: { areaId: string; until?: Date | null }[]
+  // Changing places mid-season keeps the chapter (number, start, end), so
+  // "week 4 of 10" and the review's totals stay true. Only setup and the
+  // season review start a new one.
+  sameSeason?: boolean
 }
 
 // POST /season: start the next chapter (setup, or after a season review).
@@ -132,7 +141,8 @@ export const startSeasonService = async (userId: string, input: StartSeasonInput
     },
   })
 
-  const number = (settings?.seasonNumber ?? 0) + 1
+  const keep = !!input.sameSeason && !!settings?.seasonStartedAt
+  const number = keep ? settings!.seasonNumber : (settings?.seasonNumber ?? 0) + 1
   await prisma.$transaction([
     ...areas
       .filter((a) => {
@@ -141,20 +151,99 @@ export const startSeasonService = async (userId: string, input: StartSeasonInput
       })
       .map((a) => prisma.area.updateMany({ where: { id: a.id, userId }, data: next.get(a.id)! })),
   ])
+  const startedAt = keep ? settings!.seasonStartedAt! : now
   await upsertSettings(userId, {
     seasonNumber: number,
     seasonName: input.name?.trim().slice(0, 60) || null,
-    seasonStartedAt: now,
+    seasonStartedAt: startedAt,
     // Always a date, so "event or date, whichever comes first" holds even when only an event was named.
-    seasonEndsAt: input.endsAt ?? defaultEnd(now),
+    seasonEndsAt: input.endsAt ?? (keep ? (settings!.seasonEndsAt ?? defaultEnd(startedAt)) : defaultEnd(now)),
     seasonEndEvent: input.endEvent?.trim().slice(0, 120) || null,
   })
   const event = await recordActivity(userId, {
-    type: "CREATED",
+    type: keep ? "UPDATED" : "CREATED",
     itemType: "SETTING",
-    title: `Started ${input.name?.trim() || `Season ${number}`}`,
+    title: `${keep ? "Changed" : "Started"} ${input.name?.trim() || `Season ${number}`}`,
     source: "APP",
     undo: { kind: "MANY", items: undo },
+  })
+  return { ...(await getSeasonService(userId, now)), activityId: event?.id ?? null }
+}
+
+const DONE_TYPES = ["DONE", "MINIMUM", "LOGGED"] as const
+
+// GET /season/review: what this season did, what is waiting, and the next
+// season pre-filled. Plain counts from the person's own logs, no AI.
+export const getSeasonReviewService = async (userId: string, now = new Date()) => {
+  const current = await getSeasonService(userId, now)
+  const s = current.season
+  if (!s) throw new ValidationError("There's no season to review yet")
+  const since = s.startedAt
+  const parkedIds = current.places.parked.map((p) => p.id)
+  const [done, dropped, tasksDone, habitLogs, openTasks, goals, plan] = await Promise.all([
+    prisma.activityEvent.count({ where: { userId, type: { in: [...DONE_TYPES] }, undoneAt: null, at: { gte: since } } }),
+    prisma.activityEvent.count({ where: { userId, type: "ARCHIVED", undoneAt: null, at: { gte: since } } }),
+    prisma.task.findMany({ where: { userId, completedAt: { gte: since }, areaId: { not: null } }, select: { areaId: true }, take: 5000 }),
+    prisma.habitLog.findMany({ where: { userId, completed: true, date: { gte: since } }, select: { habit: { select: { areaId: true } } }, take: 5000 }),
+    parkedIds.length
+      ? prisma.task.findMany({ where: { userId, areaId: { in: parkedIds }, status: { in: ["TODO", "IN_PROGRESS"] }, archivedAt: null }, select: { areaId: true }, take: 2000 })
+      : Promise.resolve([] as { areaId: string | null }[]),
+    parkedIds.length ? prisma.goal.findMany({ where: { userId, areaId: { in: parkedIds }, status: "ACTIVE" }, select: { areaId: true } }) : Promise.resolve([] as { areaId: string }[]),
+    fitnessPlan(userId),
+  ])
+  const count = (rows: { areaId: string | null }[]) => {
+    const m: Record<string, number> = {}
+    for (const r of rows) if (r.areaId) m[r.areaId] = (m[r.areaId] ?? 0) + 1
+    return m
+  }
+  const doneByArea = count([...tasksDone, ...habitLogs.map((l) => ({ areaId: l.habit.areaId }))])
+  const waiting = count([...openTasks, ...goals])
+
+  // The fitness plan, if one ran: its area continues into the next season,
+  // and its weigh-ins give the honest weight line.
+  const planAreaIds = new Set<string>()
+  let weight: { from: number; to: number; unit: string } | null = null
+  const goalId = typeof plan?.meta.goalId === "string" ? plan.meta.goalId : null
+  const projectId = typeof plan?.meta.projectId === "string" ? plan.meta.projectId : null
+  if (goalId) {
+    const goal = await prisma.goal.findFirst({ where: { id: goalId, userId, status: "ACTIVE" }, select: { areaId: true } })
+    if (goal) planAreaIds.add(goal.areaId)
+  }
+  if (projectId) {
+    const metric = await prisma.metric.findUnique({ where: { projectId }, include: { entries: { where: { at: { gte: since } }, orderBy: { at: "asc" } } } })
+    // Only with a weigh-in this season; the plan's start value alone is no change.
+    if (metric && metric.entries.length) {
+      const before = await prisma.metricEntry.findFirst({ where: { metricId: metric.id, at: { lt: since } }, orderBy: { at: "desc" } })
+      weight = { from: before?.value ?? metric.startValue, to: metric.entries[metric.entries.length - 1]!.value, unit: metric.unit }
+    }
+  }
+
+  const inSeason = [...current.places.focus.map((a) => ({ ...a, place: "FOCUS" })), ...current.places.keepGoing.map((a) => ({ ...a, place: "KEEP_GOING" }))]
+  return {
+    season: s,
+    lines: reviewLines({ done, dropped, weight }),
+    totals: { done, dropped },
+    weight,
+    areas: inSeason.map((a) => ({ ...a, done: doneByArea[a.id] ?? 0 })),
+    parked: current.places.parked.map((p) => ({ ...p, waiting: waiting[p.id] ?? 0, why: parkedWhy(waiting[p.id] ?? 0) })),
+    next: { number: s.number + 1, ...nextSeasonPick(current.places, planAreaIds) },
+    canLightWeek: !!plan,
+  }
+}
+
+// POST /season/extend: "carry it on" when the season ended before its goal.
+// A few more weeks on the same chapter, with Undo.
+export const extendSeasonService = async (userId: string, weeks: number, now = new Date()) => {
+  const settings = await prisma.userSettings.findUnique({ where: { userId } })
+  if (!settings?.seasonStartedAt) throw new ValidationError("There's no season to carry on")
+  const endsAt = extendedEnd(settings.seasonEndsAt, now, weeks)
+  await upsertSettings(userId, { seasonEndsAt: endsAt })
+  const event = await recordActivity(userId, {
+    type: "UPDATED",
+    itemType: "SETTING",
+    title: `${settings.seasonName?.trim() || `Season ${settings.seasonNumber}`}: ${weeks} more weeks`,
+    source: "APP",
+    undo: { kind: "RESTORE_FIELDS", model: "settings", id: userId, prev: { seasonEndsAt: iso(settings.seasonEndsAt) } },
   })
   return { ...(await getSeasonService(userId, now)), activityId: event?.id ?? null }
 }

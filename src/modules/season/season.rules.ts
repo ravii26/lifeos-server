@@ -104,3 +104,44 @@ export const seasonOver = (endsAt: Date | null, now: Date): boolean => !!endsAt 
 // "Switch & Shape · week 2 of 10": the small line under the greeting on Now.
 export const seasonLine = (name: string | null, number: number, week: number, weeks: number): string =>
   `${name?.trim() || `Season ${number}`} · week ${Math.min(week, weeks)} of ${weeks}`
+
+/* ---------------------------------------------------------------------
+   Season-end review (canvas board P1·F). Honest totals, parked areas back
+   as options, and a pre-filled next season the person only confirms.
+   --------------------------------------------------------------------- */
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
+
+// The top lines of the review. Plain counts, no score, no guilt: a quiet
+// season is said plainly and the next one starts smaller.
+export const reviewLines = (t: { done: number; dropped: number; weight: { from: number; to: number; unit: string } | null }): string[] => {
+  const out: string[] = []
+  if (t.done > 0) out.push(`${plural(t.done, "thing")} done this season.`)
+  else out.push("A quiet season. That happens. The next one can start smaller.")
+  if (t.dropped > 0) out.push(`${plural(t.dropped, "thing")} dropped on purpose. That counts too.`)
+  if (t.weight) {
+    const diff = Math.round((t.weight.to - t.weight.from) * 10) / 10
+    const fmt = (v: number) => `${Math.round(v * 10) / 10} ${t.weight!.unit}`.trim()
+    if (diff < 0) out.push(`Weight ${fmt(t.weight.from)} → ${fmt(t.weight.to)}: ${Math.abs(diff)} down.`)
+    else if (diff === 0) out.push(`Weight steady at ${fmt(t.weight.to)}.`)
+    else out.push(`Weight ${fmt(t.weight.from)} → ${fmt(t.weight.to)}. The next season can change the plan.`)
+  }
+  return out
+}
+
+// Why a parked area might be worth bringing back: what is waiting in it.
+export const parkedWhy = (waiting: number): string => (waiting > 0 ? `${plural(waiting, "thing")} waiting` : "Nothing saved yet")
+
+// The next season, pre-filled (decisions log #7 + board P1·F): a focus with a
+// plan still running continues where it is; any other old focus moves to Keep
+// going; old Keep going fills what is left, up to 3. The second focus slot is
+// left for the person, so a parked area can come back.
+export const nextSeasonPick = (places: Places, planAreaIds: Set<string>): { focusIds: string[]; keepGoingIds: string[] } => {
+  const focusIds = places.focus.filter((a) => planAreaIds.has(a.id)).map((a) => a.id).slice(0, CAPS.MAIN)
+  const keepGoingIds = [...places.focus.filter((a) => !planAreaIds.has(a.id)), ...places.keepGoing].map((a) => a.id).slice(0, CAPS.SECONDARY)
+  return { focusIds, keepGoingIds }
+}
+
+// "Carry it on": a few more weeks from the later of today and the old end.
+export const extendedEnd = (endsAt: Date | null, now: Date, weeks: number): Date =>
+  new Date(Math.max(endsAt?.getTime() ?? 0, now.getTime()) + weeks * WEEK)

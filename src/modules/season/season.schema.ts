@@ -10,7 +10,10 @@ export const startSeasonSchema = z.object({
   focusIds: z.array(id).max(2),
   keepGoingIds: z.array(id).max(3).default([]),
   parked: z.array(z.object({ areaId: id, until: z.coerce.date().nullable().optional() })).max(30).default([]),
+  sameSeason: z.boolean().optional(),
 })
+
+export const extendSeasonSchema = z.object({ weeks: z.number().int().min(1).max(8) })
 
 export const moveAreaSchema = z.object({
   tier,
@@ -22,3 +25,4 @@ export const moveAreaSchema = z.object({
 
 export type StartSeasonDto = z.infer<typeof startSeasonSchema>
 export type MoveAreaDto = z.infer<typeof moveAreaSchema>
+export type ExtendSeasonDto = z.infer<typeof extendSeasonSchema>
