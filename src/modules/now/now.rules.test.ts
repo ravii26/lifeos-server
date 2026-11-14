@@ -303,3 +303,18 @@ describe("plan sessions on the Now card", () => {
     expect(r.options[0]?.detail).toBeUndefined()
   })
 })
+
+describe("each option says its area", () => {
+  it("so the app can show it and move that area's ring", () => {
+    const r = rightNow(input({ nowMin: toMin("20:00"), candidates: [
+      cand({ sourceId: "a", areaId: "area-1", areaName: "Health" }),
+      cand({ sourceId: "b" }),
+    ] }))
+    const a = r.options.find((o) => o.sourceId === "a")!
+    expect(a.areaId).toBe("area-1")
+    expect(a.areaName).toBe("Health")
+    const b = r.options.find((o) => o.sourceId === "b")!
+    expect(b.areaId).toBeNull()
+    expect(b.areaName).toBeNull()
+  })
+})

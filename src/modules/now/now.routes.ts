@@ -30,6 +30,8 @@ import { PROACTIVITY } from "./agenda.rules.js"
 import { maybeRefreshHabitStages } from "../progress/progress.service.js"
 import { decidePileService, getPileService, parkedListService, wakeParkedService } from "./pile.service.js"
 import { dumpService } from "./dump.service.js"
+import { freeTimeService } from "./free.service.js"
+import { ENERGIES, PLACES } from "./free.rules.js"
 
 const router = Router()
 router.use(authenticate)
@@ -41,6 +43,21 @@ const parse = <T extends z.ZodType>(schema: T, data: unknown): z.infer<T> => {
 }
 
 const at = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).optional()
+
+// GET /now/free?minutes=45&energy=OKAY&place=HOME — "I've got time": the best use of a
+// free window, one pick per area (the first is the suggestion, the rest are "Something else").
+router.get("/free", async (req: Request, res: Response) => {
+  const q = parse(
+    z.object({
+      minutes: z.coerce.number().int().min(5).max(600),
+      energy: z.enum(ENERGIES).default("OKAY"),
+      place: z.enum(PLACES).default("HOME"),
+      at,
+    }),
+    req.query,
+  )
+  sendSuccess(res, "Free time", await freeTimeService(req.user!.id, q))
+})
 
 // GET /now?minutes=20 — the right thing for right now.
 router.get("/", async (req: Request, res: Response) => {
