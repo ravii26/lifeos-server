@@ -41,6 +41,7 @@ export const createAreaService = async (
     type: input.type ?? "PRIMARY",
     tier: input.tier ?? "MAINTAIN",
     laterUntil: input.laterUntil ?? null,
+    weeklyMinutes: input.weeklyMinutes ?? null,
     color: input.color,
     icon: input.icon,
     order,

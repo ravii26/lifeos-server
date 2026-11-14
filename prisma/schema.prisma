@@ -86,6 +86,12 @@ model Area {
   // doses; LATER is skipped until laterUntil (nothing is dropped, only ordered).
   tier       AreaTier  @default(MAINTAIN)
   laterUntil DateTime?
+  // The tier is shown to the person as a mode: MAIN = Push, SECONDARY = Explore,
+  // MAINTAIN = Maintain, LATER = Rest (area.overview.rules.ts).
+  // Minutes a week the person wants to give this area. Null = not set; the
+  // area's goals' weekly targets are used instead. Compared with free time as
+  // a suggestion, never a cap.
+  weeklyMinutes Int?
   color      String
   icon       String
   order      Int
