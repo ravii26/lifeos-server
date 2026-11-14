@@ -89,9 +89,12 @@ export const freeTime = (input: FreeInput): FreeResult => {
     // Resting areas stay out of the way; counts ("8 glasses") are a +1 line, not a session;
     // office work is not what free time is for; a prep step belongs to its evening.
     .filter((c) => c.tier !== "LATER" && !c.counted && c.block !== "OFFICE" && !/^prep\b/i.test(c.title) && fitsPlace(c, input.place))
+    // A step that takes a lot of energy waits on a low day, unless it has a smaller version to offer.
+    .filter((c) => !(low && c.energy === "HIGH" && !c.minimum?.trim()))
     .map((c) => {
       const natural = c.sizeMinutes ?? DEFAULT_SIZE
-      const size = sizeFor(c, minutes, low && natural > LOW_ENERGY_MAX)
+      const heavy = c.energy === "HIGH"
+      const size = sizeFor(c, minutes, low && (natural > LOW_ENERGY_MAX || heavy))
       if (!size || size.minutes > minutes) return null
 
       const lane = laneOf(c, input.todayKey)
@@ -157,6 +160,9 @@ export const freeTime = (input: FreeInput): FreeResult => {
           break
       }
       if (input.energy === "GOOD" && size.minutes >= 30) bonus += 8
+      // Good energy is the moment for the demanding steps; a light step suits a low day.
+      if (input.energy === "GOOD" && heavy && !size.smaller) bonus += 12
+      if (low && c.energy === "LOW") bonus += 6
       if (low && size.minutes <= LOW_ENERGY_MAX) bonus += 8
 
       const pick: FreePick = {

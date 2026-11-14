@@ -155,3 +155,20 @@ describe("areas on picks", () => {
     expect(r.picks).toHaveLength(2)
   })
 })
+
+describe("energy a step takes", () => {
+  const heavy = c({ sourceId: "hv", title: "Rewrite the chapter", tier: "MAIN", areaName: "Writing", sizeMinutes: 40, energy: "HIGH", areaIdleDays: 9 })
+  const heavyWithSmaller = { ...heavy, sourceId: "hv2", minimum: "Reread the last page" }
+
+  it("on a low day a demanding step with no smaller version waits", () => {
+    expect(ask({ energy: "LOW", candidates: [heavy] }).picks).toEqual([])
+  })
+  it("on a low day a demanding step with a smaller version is offered small", () => {
+    const p = ask({ energy: "LOW", candidates: [heavyWithSmaller] }).picks[0]!
+    expect(p.smaller).toBe(true)
+  })
+  it("on a good day the demanding step comes first", () => {
+    const light = { ...heavy, sourceId: "lt", title: "Tidy the notes", energy: null, areaName: "Notes", areaIdleDays: 9 }
+    expect(ask({ energy: "GOOD", candidates: [light, heavy] }).picks[0]!.sourceId).toBe("hv")
+  })
+})

@@ -299,6 +299,9 @@ model Task {
   windowEnd   DateTime?
   repeatRule  String?
   sizeMinutes Int?
+  // What doing it takes: LOW | NORMAL | HIGH. Null = normal. On a low-energy
+  // day the free-time rules keep HIGH steps out unless they have a smaller version.
+  energy      String?
   // Where in the day this belongs: MORNING | COMMUTE | OFFICE | GYM | EVENING | NIGHT.
   // Null = anytime. Right-now suggestions only use items that fit the current block.
   block       String?

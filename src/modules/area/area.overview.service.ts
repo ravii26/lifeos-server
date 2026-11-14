@@ -26,7 +26,7 @@ export interface AreaOverviewItem {
   value: number
   status: string
   goals: { id: string; title: string }[]
-  nextSteps: { id: string; title: string; minutes: number | null; dueKey: string | null }[]
+  nextSteps: { id: string; title: string; minutes: number | null; dueKey: string | null; energy: string | null; smaller: string | null }[]
   routines: { id: string; title: string; doneThisWeek: number }[]
 }
 
@@ -46,7 +46,7 @@ export const getAreasOverviewService = async (userId: string, now: Date = new Da
     prisma.area.findMany({ where: { userId, isActive: true }, orderBy: { order: "asc" } }),
     prisma.task.findMany({
       where: { userId, archivedAt: null, OR: [{ status: { in: ["TODO", "IN_PROGRESS"] } }, { completedAt: { gte: since } }] },
-      select: { id: true, areaId: true, projectId: true, title: true, status: true, priority: true, dueDate: true, sizeMinutes: true, targetMinutes: true, completedAt: true },
+      select: { id: true, areaId: true, projectId: true, title: true, status: true, priority: true, dueDate: true, sizeMinutes: true, targetMinutes: true, completedAt: true, energy: true, minimumVersion: true },
     }),
     prisma.habit.findMany({
       where: { userId, isActive: true },
@@ -146,7 +146,7 @@ export const getAreasOverviewService = async (userId: string, now: Date = new Da
       value: stand.value,
       status: stand.status,
       goals: goals.filter((g) => g.areaId === a.id).map((g) => ({ id: g.id, title: g.title })),
-      nextSteps: open.slice(0, 3).map((x) => ({ id: x.id, title: x.title, minutes: x.sizeMinutes ?? x.targetMinutes ?? null, dueKey: x.dueDate ? dayKeyInTz(x.dueDate, tz) : null })),
+      nextSteps: open.slice(0, 3).map((x) => ({ id: x.id, title: x.title, minutes: x.sizeMinutes ?? x.targetMinutes ?? null, dueKey: x.dueDate ? dayKeyInTz(x.dueDate, tz) : null, energy: x.energy, smaller: x.minimumVersion })),
       routines: habits
         .filter((h) => h.areaId === a.id && !h.isLimit)
         .map((h) => ({ id: h.id, title: h.title, doneThisWeek: h.logs.filter((l) => { const k = utcDayKey(l.date); return k >= weekStart && k <= todayKey }).length })),

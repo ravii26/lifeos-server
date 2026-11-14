@@ -176,6 +176,7 @@ export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandi
         // A to-do inside a work project is office work unless said otherwise.
         block: asBlock(t.block) ?? (t.project?.kind === "WORK" ? "OFFICE" : null),
         sizeMinutes: t.sizeMinutes ?? t.targetMinutes,
+        energy: t.energy,
         minimum: t.minimumVersion,
         tier: t.goal && t.goal.status !== "ACTIVE" ? "LATER" : (a?.tier ?? "MAINTAIN"),
         priority: t.priority,

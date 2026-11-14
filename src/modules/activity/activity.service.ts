@@ -101,7 +101,7 @@ export const listActivity = (userId: string, since: Date, limit = 200) =>
 // the action happened; the event is marked undone so it can't run twice.
 // Only these fields can be put back by RESTORE_FIELDS; dates travel as ISO strings.
 const RESTORABLE: Record<"task" | "habit" | "project" | "settings" | "goal" | "allyNote" | "area" | "memory", string[]> = {
-  task: ["sizeMinutes", "dueDate", "status", "archivedAt", "remindAt", "windowEnd", "title", "priority"],
+  task: ["sizeMinutes", "dueDate", "status", "archivedAt", "remindAt", "windowEnd", "title", "priority", "minimumVersion", "energy"],
   habit: ["targetMinutes", "frequency", "specificDays", "isActive", "reminderTime", "title", "habitType", "targetCount", "timeBlock"],
   project: ["sessionMinutes", "status", "title", "priority", "deadline"],
   area: ["name", "tier", "isActive", "laterUntil"],

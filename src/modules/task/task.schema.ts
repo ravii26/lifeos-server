@@ -4,6 +4,7 @@ const taskStatus = z.enum(["TODO", "IN_PROGRESS", "COMPLETED", "CANCELLED"])
 const priority = z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"])
 const taskType = z.enum(["BOOLEAN", "COUNT", "TIMER"])
 const recurrence = z.enum(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"])
+export const energyLevel = z.enum(["LOW", "NORMAL", "HIGH"])
 const taskSource = z.enum(["MANUAL", "DUMP", "LEARN", "BACKLOG_REMINDER", "REMINDER", "SAVE"])
 
 export const createTaskSchema = z.object({
@@ -14,6 +15,7 @@ export const createTaskSchema = z.object({
   windowEnd: z.coerce.date().optional(),
   repeatRule: z.string().max(200).optional(),
   sizeMinutes: z.number().int().positive().max(1440).optional(),
+  energy: energyLevel.optional(),
   block: z.enum(["MORNING", "COMMUTE", "OFFICE", "GYM", "EVENING", "NIGHT"]).optional(),
   areaId: z.string().optional(),
   goalId: z.string().optional(),
@@ -40,6 +42,7 @@ export const updateTaskSchema = z.object({
   windowEnd: z.coerce.date().nullable().optional(),
   repeatRule: z.string().max(200).nullable().optional(),
   sizeMinutes: z.number().int().positive().max(1440).nullable().optional(),
+  energy: energyLevel.nullable().optional(),
   block: z.enum(["MORNING", "COMMUTE", "OFFICE", "GYM", "EVENING", "NIGHT"]).nullable().optional(),
   areaId: z.string().nullable().optional(),
   goalId: z.string().nullable().optional(),

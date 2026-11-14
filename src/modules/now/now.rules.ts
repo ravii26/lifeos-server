@@ -128,6 +128,8 @@ export interface NowCandidate {
   title: string
   block: Block | null // null = anytime (but never during office hours)
   sizeMinutes: number | null
+  // What doing it takes: LOW | NORMAL | HIGH. Missing = normal.
+  energy?: string | null
   sizes?: HabitSize[]
   anchor?: string | null // "after my morning coffee"
   minimum: string | null
