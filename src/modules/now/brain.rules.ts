@@ -25,6 +25,7 @@ export interface WeeklyTarget {
   sessionMinutes: number | null
   block: Block | null
   tier: Tier
+  areaId?: string | null
   areaName: string | null
   deadlineKey: string | null // the project's or its goal's deadline
   goalTitle: string | null

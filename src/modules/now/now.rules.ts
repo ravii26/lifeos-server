@@ -135,6 +135,9 @@ export interface NowCandidate {
   priority?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
   dueKey: string | null
   order: number // creation time: earlier project work first on ties
+  // Which area it belongs to. The app uses it to show the area on the focus
+  // screen and move that area's ring when it is done.
+  areaId?: string | null
   areaName: string | null
   goalTitle: string | null
   goalWhy: string | null
@@ -192,6 +195,8 @@ export interface NowOption {
   minimum: string
   why: string
   detail?: string // the steps, when there is more to it than the title
+  areaId: string | null
+  areaName: string | null
 }
 
 export type NowKind = "PICK" | "REST" | "EMPTY"
@@ -350,6 +355,8 @@ export const rightNow = (input: NowInput): NowResult => {
           (c.planWhy ??
           whyFromReasons(s.reasons, c.anchor ? anchorWhy(c.anchor) : whyFor({ ...c, sourceType: c.sourceType === "PROJECT" ? "TASK" : c.sourceType, minimumVersion: c.minimum, areaId: null, goalId: null }))),
     ...(c.detail && { detail: c.detail }),
+    areaId: c.areaId ?? null,
+    areaName: c.areaName,
   }))
 
   const waiting = focus ? ranked.filter((r) => r.c.sourceId !== focus.sourceId).slice(0, 3).map((r) => r.c.title) : []

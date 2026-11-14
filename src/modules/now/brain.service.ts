@@ -84,6 +84,7 @@ export const weeklyTargets = async (userId: string, c: Clock): Promise<WeeklyTar
       sessionMinutes: p.sessionMinutes,
       block: p.timeBlock && BLOCKS.includes(p.timeBlock) ? (p.timeBlock as Block) : null,
       tier: effectiveTier(p.area.tier as Tier, p.area.laterUntil, c.now),
+      areaId: p.areaId,
       areaName: p.area.name,
       deadlineKey: deadline ? utcDayKey(deadline) : null,
       goalTitle: p.goal?.title ?? null,

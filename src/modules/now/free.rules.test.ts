@@ -140,3 +140,18 @@ describe("freeTime", () => {
     expect(r.picks).toEqual([])
   })
 })
+
+describe("areas on picks", () => {
+  it("each pick carries its area id", () => {
+    // 90 minutes, so the hour of music fits too.
+    const r = ask({ minutes: 90, candidates: [{ ...work, areaId: "a-work" }, { ...music, areaId: "a-music" }] })
+    expect(r.picks.map((p) => p.areaId).sort()).toEqual(["a-music", "a-work"])
+  })
+  it("two areas with the same name are still two areas", () => {
+    const r = ask({ candidates: [
+      { ...writing, areaId: "a-1" },
+      { ...writing, sourceId: "x2", title: "Edit the old draft", areaId: "a-2" },
+    ] })
+    expect(r.picks).toHaveLength(2)
+  })
+})

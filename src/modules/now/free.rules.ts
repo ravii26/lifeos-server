@@ -43,6 +43,7 @@ export interface FreePick {
   minimum: string
   why: string
   detail?: string
+  areaId: string | null
   areaName: string | null
   lane: Lane
 }
@@ -169,6 +170,7 @@ export const freeTime = (input: FreeInput): FreeResult => {
         minimum: c.minimum?.trim() || "Just start. 2 minutes on it counts.",
         why,
         ...(c.detail && { detail: c.detail }),
+        areaId: c.areaId ?? null,
         areaName: c.areaName,
         lane,
       }
@@ -181,7 +183,8 @@ export const freeTime = (input: FreeInput): FreeResult => {
   const seen = new Set<string>()
   const picks: FreePick[] = []
   for (const s of scored) {
-    const key = s.pick.areaName ?? "\u0000loose"
+    // By id when known: two areas may share a name.
+    const key = s.pick.areaId ?? s.pick.areaName ??"\u0000loose"
     if (seen.has(key)) continue
     seen.add(key)
     picks.push(s.pick)
