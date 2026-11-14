@@ -272,7 +272,7 @@ export const minutesIn = (text: string | null | undefined): number | null => {
   return n > 0 ? n : null
 }
 
-const sizeFor = (c: NowCandidate, minutes: number, minimumOnly: boolean): { minutes: number; smaller: boolean } | null => {
+export const sizeFor = (c: NowCandidate, minutes: number, minimumOnly: boolean): { minutes: number; smaller: boolean } | null => {
   const natural = c.sizeMinutes ?? DEFAULT_SIZE
   const sizes = [...(c.sizes ?? [])].sort((a, b) => a.minutes - b.minutes)
   // A minimum that says its own length ("30 minutes on the report") is that long, not 2 min.
