@@ -11,6 +11,8 @@ import {
 } from "./area.controller.js"
 import { validate, validateQuery } from "../../shared/middleware/validate.middleware.js"
 import { authenticate } from "../../shared/middleware/auth.middleware.js"
+import { sendSuccess } from "../../shared/utils/response.util.js"
+import { getAreasOverviewService } from "./area.overview.service.js"
 import {
   createAreaSchema,
   updateAreaSchema,
@@ -29,6 +31,12 @@ router.get("/", validateQuery(listAreasSchema), listAreasController)
 // Trends across all areas (direction, delta, weakness) — must be before /:id
 // so the literal "/trends" path isn't captured by the ":id" param route.
 router.get("/trends", getAreaTrendsController)
+
+// Where every area stands this week: mode, time against plan, next steps.
+// Also before /:id, for the same reason.
+router.get("/overview", async (req, res) => {
+  sendSuccess(res, "Areas overview", await getAreasOverviewService(req.user!.id))
+})
 
 router.get("/:id", getAreaController)
 router.patch("/:id", validate(updateAreaSchema), updateAreaController)
