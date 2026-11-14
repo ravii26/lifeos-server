@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # A throwaway database for this run only. Nothing here is a real secret.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: lifeos
+          POSTGRES_PASSWORD: lifeos_ci
+          POSTGRES_DB: lifeos_test
+        ports:
+          - 5435:5432
+        options: >-
+          --health-cmd "pg_isready -U lifeos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://lifeos:lifeos_ci@localhost:5435/lifeos_test?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx tsc --noEmit
+      # The tests read .env.test (not committed), so write one for this run.
+      - run: |
+          cat > .env.test <<EOF
+          DATABASE_URL="$DATABASE_URL"
+          JWT_SECRET="ci-only-not-a-real-secret"
+          NODE_ENV="test"
+          EOF
+      - run: npx prisma migrate deploy
+      - run: npm test
