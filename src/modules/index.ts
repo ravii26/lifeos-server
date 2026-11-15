@@ -6,6 +6,7 @@ import stepRoutes from "./step/step.routes.js"
 import tasteRoutes from "./taste/taste.routes.js"
 import numberRoutes from "./number/number.routes.js"
 import weekRoutes from "./week/week.routes.js"
+import decideRoutes from "./decide/decide.routes.js"
 import habitRoutes from "./habit/habit.routes.js"
 import goalRoutes from "./goal/goal.routes.js"
 import projectRoutes from "./project/project.routes.js"
@@ -54,6 +55,7 @@ router.use("/steps", stepRoutes)
 router.use("/tastes", tasteRoutes)
 router.use("/numbers", numberRoutes)
 router.use("/week", weekRoutes)
+router.use("/decide", decideRoutes)
 router.use("/habits", habitRoutes)
 router.use("/vault", vaultRoutes)
 router.use("/topics", topicRoutes)
