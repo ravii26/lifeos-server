@@ -5,6 +5,8 @@ export interface UserDto {
   email: string
   name: string
   timezone: string
+  // A guest account from first run, not saved with an email yet.
+  guest?: boolean
 }
 
 export interface AuthResponseDto {

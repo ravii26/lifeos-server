@@ -1,3 +1,4 @@
+import { recordActivity } from "../activity/activity.service.js"
 /* =====================================================================
    Many saves at once, the saves summary and "still want these?"
    (Phase D slice D7, ADR 0044). Services over the saves; the wording and
@@ -92,15 +93,25 @@ export const restToLaterService = async (userId: string): Promise<{ count: numbe
 }
 
 // Several undecided or finished saves in one go: only to the queue or to "let go".
-export const decideManyService = async (userId: string, ids: string[], choice: "LATER" | "DROP"): Promise<number> => {
-  let done = 0
+export const decideManyService = async (userId: string, ids: string[], choice: "LATER" | "DROP"): Promise<{ count: number; activityId: string | null }> => {
+  const done: string[] = []
   for (const id of ids.slice(0, 30)) {
     const c = await findCaptureById(id, userId)
     if (!c || (c.suggestedOutputs as StoredLite | null)?.kind !== "SAVE" || c.status !== "PENDING") continue
     await decideSaveService(userId, id, { choice })
-    done++
+    done.push(id)
   }
-  return done
+  // One Undo puts them all back to waiting for a decision.
+  const ev = done.length
+    ? await recordActivity(userId, {
+        type: "UPDATED",
+        itemType: "SAVE",
+        title: choice === "LATER" ? `Put ${done.length} in watch later` : `Let go of ${done.length} saves`,
+        source: "APP",
+        undo: { kind: "RESET_SAVES", ids: done },
+      })
+    : null
+  return { count: done.length, activityId: ev?.id ?? null }
 }
 
 // ---- summary and stale ------------------------------------------------------------------------------

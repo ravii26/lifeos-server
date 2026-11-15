@@ -7,12 +7,86 @@ import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.j
 import { listAllyNotesService, updateAllyNoteService, deleteAllyNoteService } from "./allynote.service.js"
 import { searchAllService } from "../search/search.service.js"
 import prisma from "../../lib/prisma.js"
+import { runWithAiFallback } from "../../lib/ai-fallback.js"
+import { geminiClient, GEMINI_MODEL } from "../../lib/gemini.js"
+import { groqClient } from "../../lib/groq.js"
+import { addUtcDays, dateFromKey, localDayStartMs, utcDayKey } from "../../shared/utils/time.util.js"
+import { recordActivity } from "../activity/activity.service.js"
+import { getClock } from "../now/now.service.js"
+import { cleanDraft, draftPrompt, fallbackDraft, rulesForToday } from "./allynote.extras.rules.js"
 
 const router = Router()
 router.use(authenticate)
 
 // GET /ally-notes — everything you taught Ally.
 router.get("/", async (req: Request, res: Response) => sendSuccess(res, "Notes", await listAllyNotesService(req.user!.id)))
+
+const metaOf = (m: unknown): Record<string, unknown> => (m && typeof m === "object" && !Array.isArray(m) ? (m as Record<string, unknown>) : {})
+
+// GET /ally-notes/for-today — rules switched on to show before an event, when
+// something on today or tomorrow matches what they are for ("party", "interview").
+router.get("/for-today", async (req: Request, res: Response) => {
+  const userId = req.user!.id
+  const c = await getClock(userId)
+  const start = new Date(localDayStartMs(c.todayKey, c.tz))
+  const end = new Date(localDayStartMs(utcDayKey(addUtcDays(dateFromKey(c.todayKey), 2)), c.tz))
+  const [notes, tasks] = await Promise.all([
+    prisma.allyNote.findMany({ where: { userId, collection: { not: "People" } }, select: { id: true, title: true, collection: true, items: true, meta: true } }),
+    prisma.task.findMany({
+      where: {
+        userId,
+        archivedAt: null,
+        status: { in: ["TODO", "IN_PROGRESS"] },
+        OR: [{ dueDate: { gte: dateFromKey(c.todayKey), lt: addUtcDays(dateFromKey(c.todayKey), 2) } }, { remindAt: { gte: start, lt: end } }],
+      },
+      select: { title: true },
+      take: 100,
+    }),
+  ])
+  const rules = notes.map((n) => ({ id: n.id, title: n.title, collection: n.collection, items: n.items, showBefore: metaOf(n.meta).showBefore === true }))
+  sendSuccess(res, "Rules for today", rulesForToday(rules, tasks))
+})
+
+// POST /ally-notes/:id/when-needed — show these rules before a matching event, or stop. Undo puts it back.
+router.post("/:id/when-needed", async (req: Request, res: Response) => {
+  const userId = req.user!.id
+  const on = z.object({ on: z.boolean() }).parse(req.body).on
+  const note = await prisma.allyNote.findFirst({ where: { id: String(req.params.id), userId }, select: { id: true, title: true, meta: true } })
+  if (!note) throw new NotFoundError("Note not found")
+  const meta = metaOf(note.meta)
+  await prisma.allyNote.update({ where: { id: note.id }, data: { meta: { ...meta, showBefore: on } as never } })
+  const ev = await recordActivity(userId, {
+    type: "UPDATED",
+    itemType: "NOTE",
+    itemId: note.id,
+    title: on ? `Show "${note.title}" when needed` : `Stop showing "${note.title}"`,
+    source: "APP",
+    undo: { kind: "RESTORE_FIELDS", model: "allyNote", id: note.id, prev: { meta } },
+  })
+  sendSuccess(res, "Saved", { on, activityId: ev?.id ?? null })
+})
+
+// POST /ally-notes/:id/draft — a message for this person, to copy and send yourself. Ally never sends it.
+router.post("/:id/draft", async (req: Request, res: Response) => {
+  const userId = req.user!.id
+  const note = await prisma.allyNote.findFirst({ where: { id: String(req.params.id), userId, collection: "People" }, select: { title: true, items: true, meta: true } })
+  if (!note) throw new NotFoundError("Person not found")
+  const last = Date.parse(String(metaOf(note.meta).lastContact ?? ""))
+  const days = Number.isFinite(last) ? Math.floor((Date.now() - last) / 86_400_000) : null
+  const prompt = draftPrompt(note.title, note.items, days)
+  const raw = await runWithAiFallback<string | null>(
+    "Person draft",
+    {
+      gemini: geminiClient ? async () => (await geminiClient!.getGenerativeModel({ model: GEMINI_MODEL }).generateContent(prompt)).response.text() : undefined,
+      groq: groqClient
+        ? async () => (await groqClient!.chat.completions.create({ model: "openai/gpt-oss-120b", messages: [{ role: "user", content: prompt }] })).choices[0]?.message?.content ?? null
+        : undefined,
+    },
+    () => null,
+  )
+  const message = cleanDraft(raw)
+  sendSuccess(res, "Draft", { message: message ?? fallbackDraft(note.title, days), byCode: message === null })
+})
 
 const patch = z.object({
   collection: z.string().trim().min(1).max(80).optional(),

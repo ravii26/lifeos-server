@@ -55,8 +55,7 @@ export const batchSavesController = async (req: Request, res: Response) => {
 
 // POST /guide/saves/decide-many — put several undecided saves in Watch later, or let them go.
 export const decideManySavesController = async (req: Request, res: Response) => {
-  const count = await decideManyService(req.user!.id, req.body.ids, req.body.choice)
-  sendSuccess(res, "Decided", { count })
+  sendSuccess(res, "Decided", await decideManyService(req.user!.id, req.body.ids, req.body.choice))
 }
 
 // GET /guide/saves/summary?days=7 — saved, acted on, waiting, and the ones undecided for a month.

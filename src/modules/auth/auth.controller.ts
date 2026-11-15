@@ -1,5 +1,5 @@
 import type { Request, Response } from "express"
-import { registerService, loginService, getMeService, getStatsService } from "./auth.service.js"
+import { registerService, loginService, getMeService, getStatsService, guestService, claimService, isGuestEmail } from "./auth.service.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
 import { HttpStatus } from "../../shared/constants/httpStatus.js"
 import { ValidationError } from "../../shared/utils/errors.util.js"
@@ -20,7 +20,7 @@ export const loginController = async (req: Request, res: Response) => {
 export const meController = async (req: Request, res: Response) => {
   const user = await getMeService(req.user!.id)
   // The web app shows the admin page link only to admins (the API checks again).
-  sendSuccess(res, "Success", { ...user, isAdmin: isAdminEmail(user.email, env.ADMIN_EMAILS) })
+  sendSuccess(res, "Success", { ...user, guest: isGuestEmail(user.email), isAdmin: isAdminEmail(user.email, env.ADMIN_EMAILS) })
 }
 
 export const statsController = async (req: Request, res: Response) => {
@@ -39,4 +39,14 @@ export const deleteAccountController = async (req: Request, res: Response) => {
   if ((req.body as { confirm?: unknown })?.confirm !== "DELETE") throw new ValidationError('Send {"confirm":"DELETE"} to delete the account')
   await deleteAccountService(req.user!.id)
   sendSuccess(res, "Account deleted")
+}
+
+export const guestController = async (req: Request, res: Response) => {
+  const result = await guestService((req.body as { timezone?: string })?.timezone)
+  sendSuccess(res, "Started", result, HttpStatus.CREATED)
+}
+
+export const claimController = async (req: Request, res: Response) => {
+  const result = await claimService(req.user!.id, req.body)
+  sendSuccess(res, "Account saved", result)
 }
