@@ -41,6 +41,8 @@ export const updateHabitSchema = z.object({
   specificDays: z.array(day).optional(),
   reminderTime: z.string().regex(/^\d{2}:\d{2}$/, "reminderTime must be HH:MM").nullable().optional(),
   isActive: z.boolean().optional(),
+  // When in the day it happens; null = anytime.
+  timeBlock: z.enum(["MORNING", "COMMUTE", "OFFICE", "GYM", "EVENING", "NIGHT"]).nullable().optional(),
 })
 
 export const listHabitsSchema = z.object({
