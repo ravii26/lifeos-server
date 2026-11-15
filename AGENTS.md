@@ -29,11 +29,11 @@ src/
   evals/                    scenarios.ts, run-evals.ts
 prisma/schema.prisma, prisma/migrations/
 ```
-**Key modules:** `assistant` (chat with actions, memory, patterns), `guide` (today's one thing, saves → action),
-`activity` (event log + undo), `task`, `habit`, `area`, `goal`, `project`, `settings`. Older modules (`capture`, `vault`,
-`knowledge`, `document`, `decisions`, …) still exist. Don't extend them unless the plan says so.
-**Plan (Nov 2026):** what Ally does is in `../reports/Ally decisions log.md`, the phase order in `../reports/Ally build plan.md`.
-Legacy modules are frozen: no new features there.
+**Key modules:** `assistant` (chat with actions, memory, patterns), `guide` (saves → action), `activity` (event log + undo),
+`area` (incl. `/areas/overview`, modes, planned mode changes), `step`, `taste`, `number`, `week`, `goalplan`, `now` (free time, day),
+`firstrun` (sort into areas, modes, apply), `decide`, `auth` (incl. guest start and claim), `task`, `habit`, `goal`, `settings`.
+Older modules (`capture`, `vault`, `knowledge`, `document`, `decisions`, …) still exist. Don't extend them.
+**Plan:** `../ALLY.md` is the single source of truth for what is built and what is next; it wins over this file.
 
 ## Conventions (follow these when adding code)
 - **Route → controller → service → repository.** Controllers stay thin. Validate input with Zod via
