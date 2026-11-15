@@ -2,12 +2,14 @@
    (free.rules.ts). Reads only: nothing is written and no AI is called. */
 import { freeTime, type Energy, type FreeResult, type Place } from "./free.rules.js"
 import { getClock, getMode, loadCandidates } from "./now.service.js"
+import { applyPlannedModes } from "../area/area.planned.service.js"
 
 export const freeTimeService = async (
   userId: string,
   opts: { minutes: number; energy: Energy; place: Place; at?: string },
 ): Promise<FreeResult> => {
   const c = await getClock(userId, opts.at)
+  await applyPlannedModes(userId).catch(() => 0)
   const [{ mode }, candidates] = await Promise.all([getMode(userId, c.now), loadCandidates(userId, c)])
   return freeTime({
     minutes: Math.min(opts.minutes, 600),

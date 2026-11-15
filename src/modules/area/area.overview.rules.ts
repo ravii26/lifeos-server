@@ -93,3 +93,16 @@ export const capacity = (planned: { mode: AreaMode; plannedMinutes: number }[], 
     note: over ? `This week asks for ${span(needed)} and you have about ${span(freeMinutes)} free. Moving one area to Maintain would make it fit.` : null,
   }
 }
+
+// A planned mode change is due on its day (keys are YYYY-MM-DD in the person's time).
+export const plannedDue = (onKey: string | null, todayKey: string): boolean => onKey !== null && onKey <= todayKey
+
+// Reworking without doing: steps in an area edited or moved this many times
+// since anything was last done there, within a week. Shown as one gentle line.
+export const REWORK_EDITS = 3
+const WEEK_MS = 7 * 86_400_000
+
+export const reworking = (editsAtMs: number[], lastDoneMs: number | null, nowMs: number): boolean => {
+  const from = Math.max(lastDoneMs ?? 0, nowMs - WEEK_MS)
+  return editsAtMs.filter((t) => t > from).length >= REWORK_EDITS
+}

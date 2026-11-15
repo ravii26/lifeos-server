@@ -1,4 +1,4 @@
-import { NotFoundError } from "../../shared/utils/errors.util.js"
+import { NotFoundError, ValidationError } from "../../shared/utils/errors.util.js"
 import {
   createArea,
   findAreasByUser,
@@ -90,6 +90,13 @@ export const updateAreaService = async (
   input: UpdateAreaDto,
 ): Promise<AreaDto> => {
   await getOwnedArea(id, userId)
+  // A planned change needs both a mode and a day after today; null for either cancels it.
+  if (input.nextTier !== undefined || input.nextTierOn !== undefined) {
+    const cancel = input.nextTier === null || input.nextTierOn === null
+    if (!cancel && (!input.nextTier || !input.nextTierOn)) throw new ValidationError("Say which mode and from which day.")
+    if (!cancel && input.nextTierOn!.getTime() <= Date.now()) throw new ValidationError("Pick a day after today.")
+    if (cancel) input = { ...input, nextTier: null, nextTierOn: null }
+  }
   await updateArea(id, userId, input)
   return getOwnedArea(id, userId)
 }

@@ -5,7 +5,12 @@ import prisma from "../../lib/prisma.js"
 import { getUserTimezone } from "../auth/auth.repository.js"
 import { getScheduleService } from "../now/now.service.js"
 import { addUtcDays, dateFromKey, dayKeyInTz, todayKeyInTz, utcDayKey } from "../../shared/utils/time.util.js"
-import { capacity, itemMinutes, modeOfTier, standing, weekStartKey, type AreaMode, type Capacity } from "./area.overview.rules.js"
+import { tasteRounds } from "../taste/taste.service.js"
+import { TASTES_KIND } from "../taste/taste.rules.js"
+import { capacity, itemMinutes, modeOfTier, reworking, standing, weekStartKey, type AreaMode, type Capacity } from "./area.overview.rules.js"
+import { applyPlannedModes } from "./area.planned.service.js"
+import { metricStand } from "../progress/progress.rules.js"
+import { lastPoints } from "../number/number.rules.js"
 
 // How far back "last touched" looks.
 const LOOKBACK_DAYS = 60
@@ -28,6 +33,26 @@ export interface AreaOverviewItem {
   goals: { id: string; title: string }[]
   nextSteps: { id: string; title: string; minutes: number | null; dueKey: string | null; energy: string | null; smaller: string | null }[]
   routines: { id: string; title: string; doneThisWeek: number }[]
+  // Three small tastes going in this area, or null.
+  tastes: { done: number; total: number; decide: boolean } | null
+  // A mode change planned for a day, or null.
+  planned: { mode: AreaMode; on: string } | null
+  // Steps here reworked three or more times since anything was done: one gentle line.
+  reworking: boolean
+  // Tracked numbers: where each started, is, and is going, with the last readings.
+  numbers: {
+    projectId: string
+    name: string
+    unit: string
+    start: number
+    latest: number
+    target: number
+    percent: number
+    weeklyChange: number | null
+    trend: string
+    message: string
+    points: { value: number; at: string }[]
+  }[]
 }
 
 export interface AreasOverview {
@@ -37,12 +62,14 @@ export interface AreasOverview {
 }
 
 export const getAreasOverviewService = async (userId: string, now: Date = new Date()): Promise<AreasOverview> => {
+  // A mode change planned for today or earlier happens before anything is read.
+  await applyPlannedModes(userId, now)
   const tz = await getUserTimezone(userId)
   const todayKey = todayKeyInTz(tz, now)
   const weekStart = weekStartKey(todayKey)
   const since = addUtcDays(dateFromKey(todayKey), -LOOKBACK_DAYS)
 
-  const [areas, tasks, habits, projects, goals, timed, sessions, schedule] = await Promise.all([
+  const [areas, tasks, habits, projects, goals, timed, sessions, schedule, rounds, edits] = await Promise.all([
     prisma.area.findMany({ where: { userId, isActive: true }, orderBy: { order: "asc" } }),
     prisma.task.findMany({
       where: { userId, archivedAt: null, OR: [{ status: { in: ["TODO", "IN_PROGRESS"] } }, { completedAt: { gte: since } }] },
@@ -52,8 +79,12 @@ export const getAreasOverviewService = async (userId: string, now: Date = new Da
       where: { userId, isActive: true },
       select: { id: true, areaId: true, title: true, targetMinutes: true, isLimit: true, logs: { where: { date: { gte: since }, completed: true }, select: { date: true, minutes: true } } },
     }),
-    prisma.project.findMany({ where: { userId, status: "ACTIVE" }, select: { id: true, areaId: true, weeklyTargetMinutes: true } }),
-    prisma.goal.findMany({ where: { userId, status: "ACTIVE" }, select: { id: true, areaId: true, title: true }, orderBy: { createdAt: "asc" } }),
+    prisma.project.findMany({
+      where: { userId, status: "ACTIVE" },
+      select: { id: true, areaId: true, weeklyTargetMinutes: true, kind: true, metric: { include: { entries: { orderBy: { at: "desc" }, take: 60 } } } },
+    }),
+    // A round of tastes is not a goal to show; it is reported as `tastes` below.
+    prisma.goal.findMany({ where: { userId, status: "ACTIVE", OR: [{ kind: null }, { kind: { not: TASTES_KIND } }] }, select: { id: true, areaId: true, title: true }, orderBy: { createdAt: "asc" } }),
     prisma.timeEntry.findMany({
       where: { userId, date: { gte: since }, minutes: { not: null }, itemId: { not: null } },
       select: { itemType: true, itemId: true, minutes: true, date: true },
@@ -64,6 +95,12 @@ export const getAreasOverviewService = async (userId: string, now: Date = new Da
       select: { itemId: true, minutes: true, at: true },
     }),
     getScheduleService(userId),
+    tasteRounds(userId),
+    // Step edits and moves this week, for "reworking without doing".
+    prisma.activityEvent.findMany({
+      where: { userId, type: "UPDATED", itemType: "TASK", undoneAt: null, at: { gte: new Date(now.getTime() - 7 * 86_400_000) } },
+      select: { itemId: true, at: true },
+    }),
   ])
 
   const areaOfProject = new Map(projects.map((p) => [p.id, p.areaId]))
@@ -106,6 +143,15 @@ export const getAreasOverviewService = async (userId: string, now: Date = new Da
     if (!s.itemId) continue
     touch(areaOfProject.get(s.itemId), dayKeyInTz(s.at, tz), `PROJECT:${s.itemId}`, s.minutes ?? 0, "logged", true)
   }
+
+  // When anything was last done in each area, to the minute where known.
+  const lastDoneAt = new Map<string, number>()
+  const doneAt = (areaId: string | null | undefined, ms: number) => {
+    if (areaId && ms > (lastDoneAt.get(areaId) ?? 0)) lastDoneAt.set(areaId, ms)
+  }
+  for (const t of tasks) if (t.status === "COMPLETED" && t.completedAt) doneAt(areaOfTask.get(t.id), t.completedAt.getTime())
+  for (const s of sessions) if (s.itemId) doneAt(areaOfProject.get(s.itemId), s.at.getTime())
+  for (const h of habits) for (const l of h.logs) doneAt(h.areaId, l.date.getTime())
 
   const items: AreaOverviewItem[] = areas.map((a) => {
     const t = tallies.get(a.id)
@@ -150,6 +196,35 @@ export const getAreasOverviewService = async (userId: string, now: Date = new Da
       routines: habits
         .filter((h) => h.areaId === a.id && !h.isLimit)
         .map((h) => ({ id: h.id, title: h.title, doneThisWeek: h.logs.filter((l) => { const k = utcDayKey(l.date); return k >= weekStart && k <= todayKey }).length })),
+      tastes: (() => {
+        const r = rounds.get(a.id)
+        return r ? { done: r.done, total: r.total, decide: r.decide } : null
+      })(),
+      planned: a.nextTier && a.nextTierOn ? { mode: modeOfTier(a.nextTier), on: utcDayKey(a.nextTierOn) } : null,
+      numbers: projects
+        .filter((p) => p.areaId === a.id && p.kind === "OUTCOME" && p.metric)
+        .map((p) => {
+          const m = p.metric!
+          const s = metricStand({ name: m.name, unit: m.unit, startValue: m.startValue, targetValue: m.targetValue }, m.entries, now)
+          return {
+            projectId: p.id,
+            name: m.name,
+            unit: m.unit,
+            start: s.start,
+            latest: s.latest,
+            target: s.target,
+            percent: s.percent,
+            weeklyChange: s.weeklyChange,
+            trend: s.trend,
+            message: s.message,
+            points: lastPoints(m.entries),
+          }
+        }),
+      reworking: reworking(
+        edits.filter((e) => e.itemId && areaOfTask.get(e.itemId) === a.id).map((e) => e.at.getTime()),
+        lastDoneAt.get(a.id) ?? null,
+        now.getTime(),
+      ),
     }
   })
 

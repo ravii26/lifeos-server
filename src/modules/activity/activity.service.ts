@@ -104,13 +104,13 @@ const RESTORABLE: Record<"task" | "habit" | "project" | "settings" | "goal" | "a
   task: ["sizeMinutes", "dueDate", "status", "archivedAt", "remindAt", "windowEnd", "title", "priority", "minimumVersion", "energy"],
   habit: ["targetMinutes", "frequency", "specificDays", "isActive", "reminderTime", "title", "habitType", "targetCount", "timeBlock"],
   project: ["sessionMinutes", "status", "title", "priority", "deadline"],
-  area: ["name", "tier", "isActive", "laterUntil"],
+  area: ["name", "tier", "isActive", "laterUntil", "weeklyMinutes", "nextTier", "nextTierOn"],
   memory: ["sensitive"],
   allyNote: ["title", "meta"],
   settings: ["busyUntil", "focus", "directness", "proactivity", "seasonNumber", "seasonName", "seasonStartedAt", "seasonEndsAt", "seasonEndEvent", "sleepTargetWake", "sleepHours", "sleepFromWake", "sleepStep", "sleepStepAt"],
   goal: ["status", "parkedAt"],
 }
-const DATE_FIELDS = new Set(["dueDate", "archivedAt", "busyUntil", "parkedAt", "remindAt", "windowEnd", "deadline", "laterUntil", "seasonStartedAt", "seasonEndsAt", "sleepStepAt"])
+const DATE_FIELDS = new Set(["nextTierOn", "dueDate", "archivedAt", "busyUntil", "parkedAt", "remindAt", "windowEnd", "deadline", "laterUntil", "seasonStartedAt", "seasonEndsAt", "sleepStepAt"])
 
 const restoreFields = async (userId: string, undo: Extract<UndoPayload, { kind: "RESTORE_FIELDS" }>) => {
   const data: Record<string, unknown> = {}

@@ -7,7 +7,7 @@ import { getClock, getScheduleService } from "../now/now.service.js"
 import { weeklyTargets } from "../now/brain.service.js"
 import { targetPace } from "../now/brain.rules.js"
 import { proposePlanAi } from "./goalplan.ai.js"
-import { cautionFor, cleanPlan, fitPlan, type GoalPlan, type PlanCaution, type PlanFit } from "./goalplan.rules.js"
+import { answersText, cautionFor, cleanPlan, fallbackPlan, fitPlan, type GoalAnswers, type GoalPlan, type PlanCaution, type PlanFit } from "./goalplan.rules.js"
 
 export interface GoalPlanProposal {
   plan: GoalPlan | null
@@ -15,6 +15,8 @@ export interface GoalPlanProposal {
   caution: PlanCaution | null
   // Planning needs general knowledge; false when no AI answered.
   aiAvailable: boolean
+  // CODE when no AI answered and the plan was built from the answers by code.
+  draftedBy?: "AI" | "CODE"
 }
 
 const hrs = (m: number) => `~${(m / 60).toFixed(1).replace(/\.0$/, "")} h`
@@ -38,9 +40,11 @@ const freeTime = async (userId: string) => {
   return { total, description: parts.join(", ") }
 }
 
-export const proposeGoalPlanService = async (userId: string, goalText: string): Promise<GoalPlanProposal> => {
-  const text = goalText.trim()
-  if (text.length < 3) throw new ValidationError("Tell me the goal in a few words.")
+export const proposeGoalPlanService = async (userId: string, goalText: string, answers: Omit<GoalAnswers, "text"> = {}): Promise<GoalPlanProposal> => {
+  const bare = goalText.trim()
+  if (bare.length < 3) throw new ValidationError("Tell me the goal in a few words.")
+  const asked = answers.why != null || answers.done != null || answers.weeklyMinutes != null
+  const text = asked ? answersText({ text: bare, ...answers }) : bare
   const c = await getClock(userId)
   const [free, targets, areas] = await Promise.all([
     freeTime(userId),
@@ -56,12 +60,13 @@ export const proposeGoalPlanService = async (userId: string, goalText: string): 
     otherTargets,
     areas: areas.map((a) => a.name),
   })
-  if (raw === null) return { plan: null, fit: null, caution: null, aiAvailable: false }
-  const cleaned = cleanPlan(raw, c.todayKey)
+  // With the three answers, a plan is always drafted: by code when no AI answered.
+  if (raw === null && !asked) return { plan: null, fit: null, caution: null, aiAvailable: false }
+  const cleaned = raw === null ? fallbackPlan({ text: bare, ...answers }) : cleanPlan(raw, c.todayKey)
   if (!cleaned) return { plan: null, fit: null, caution: null, aiAvailable: true }
   // Minutes already promised to other weekly targets (counted ones at 15 min each).
   const committed = targets.reduce((s, t) => s + (t.unit === "min" ? t.target : t.target * Math.min(60, t.sessionMinutes ?? 15)), 0)
-  const { plan, fit } = fitPlan(cleaned, free.total, committed)
+  const { plan, fit } = fitPlan(cleaned, free.total, committed, answers.weeklyMinutes ?? null)
   const caution = cautionFor(
     targets.map((t) => {
       const p = targetPace(t)
@@ -69,7 +74,7 @@ export const proposeGoalPlanService = async (userId: string, goalText: string): 
     }),
     c.todayKey,
   )
-  return { plan, fit, caution, aiAvailable: true }
+  return { plan, fit, caution, aiAvailable: raw !== null, draftedBy: raw === null ? "CODE" : "AI" }
 }
 
 // Keep the plan: one goal, one weekly-target project per line, and the
@@ -129,9 +134,18 @@ export const acceptGoalPlanService = async (
     })
     projects.push(m.id)
   }
+  // The first steps, in order, as to-dos in the area under this goal. Parked: none yet.
+  const steps: { id: string; title: string; minutes: number }[] = []
+  if (!parked) {
+    for (const s of plan.steps) {
+      const t = await prisma.task.create({ data: { userId, areaId, goalId: goal.id, title: s.title, sizeMinutes: s.minutes } })
+      steps.push({ id: t.id, title: t.title, minutes: s.minutes })
+    }
+  }
   const undo: UndoPayload = {
     kind: "MANY",
     items: [
+      ...steps.map((s) => ({ kind: "ARCHIVE_TASK" as const, taskId: s.id })),
       ...projects.map((projectId) => ({ kind: "ARCHIVE_PROJECT" as const, projectId })),
       { kind: "RESTORE_FIELDS", model: "goal", id: goal.id, prev: { status: "ABANDONED" } },
     ],
@@ -139,5 +153,5 @@ export const acceptGoalPlanService = async (
   const ev = await recordActivity(userId, {
     type: "CREATED", itemType: "PROJECT", itemId: goal.id, title: parked ? `${plan.title} (parked)` : `${plan.title}: ${plan.targets.length} weekly targets`, source, undo,
   })
-  return { goalId: goal.id, projectIds: projects, parked, activityId: ev?.id }
+  return { goalId: goal.id, projectIds: projects, parked, steps, firstStep: steps[0] ?? null, activityId: ev?.id }
 }

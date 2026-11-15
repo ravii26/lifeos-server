@@ -15,10 +15,19 @@ const parse = <T extends z.ZodType>(schema: T, data: unknown): z.infer<T> => {
   return r.data
 }
 
-// POST /goal-plan/propose — a goal in your words → weekly targets (nothing saved).
+// POST /goal-plan/propose — a goal in your words → weekly targets and first steps (nothing saved).
+// With why / done / weeklyMinutes ("make a goal concrete"), a plan is always drafted, by code if AI is down.
 router.post("/propose", async (req: Request, res: Response) => {
-  const b = parse(z.object({ text: z.string().min(3).max(2000) }), req.body)
-  sendSuccess(res, "Proposal", await proposeGoalPlanService(req.user!.id, b.text))
+  const b = parse(
+    z.object({
+      text: z.string().min(3).max(2000),
+      why: z.string().max(300).nullish(),
+      done: z.string().max(300).nullish(),
+      weeklyMinutes: z.number().int().min(15).max(3000).nullish(),
+    }),
+    req.body,
+  )
+  sendSuccess(res, "Proposal", await proposeGoalPlanService(req.user!.id, b.text, { why: b.why, done: b.done, weeklyMinutes: b.weeklyMinutes }))
 })
 
 // POST /goal-plan/accept — keep the (possibly edited) plan, or park it.

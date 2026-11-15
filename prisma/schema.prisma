@@ -92,6 +92,11 @@ model Area {
   // area's goals' weekly targets are used instead. Compared with free time as
   // a suggestion, never a cap.
   weeklyMinutes Int?
+  // A mode change planned for a date ("after the job switch, Career goes to
+  // Maintain"). Applied the first time anything reads the areas on or after
+  // that day (applyPlannedModes), then cleared.
+  nextTier   AreaTier?
+  nextTierOn DateTime?
   color      String
   icon       String
   order      Int
@@ -148,6 +153,9 @@ model Goal {
   // ("active for 6 days", "parked 3 weeks ago") and ordering.
   activatedAt DateTime?
   parkedAt    DateTime?
+  // TASTES: three small tries in an area someone is unsure about, then a
+  // decision (keep, change direction, drop). Null = an ordinary goal.
+  kind        String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

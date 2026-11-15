@@ -33,6 +33,9 @@ export const updateAreaSchema = z.object({
   order: z.number().int().nonnegative().optional(),
   isDefault: z.boolean().optional(),
   isActive: z.boolean().optional(),
+  // A planned change: both set, or both null to cancel.
+  nextTier: z.enum(["MAIN", "SECONDARY", "MAINTAIN", "LATER"]).nullable().optional(),
+  nextTierOn: z.coerce.date().nullable().optional(),
 })
 
 export type CreateAreaDto = z.infer<typeof createAreaSchema>

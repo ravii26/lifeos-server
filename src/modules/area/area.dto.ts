@@ -6,6 +6,8 @@ export interface AreaDto {
   tier: string
   laterUntil: Date | null
   weeklyMinutes: number | null
+  nextTier: string | null
+  nextTierOn: Date | null
   color: string
   icon: string
   order: number

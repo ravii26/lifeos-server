@@ -20,7 +20,7 @@ export interface GoalPlanContext {
 
 const PROMPT = (c: GoalPlanContext) => `You plan goals for Ally, a personal assistant. Turn the person's goal into a weekly plan they can actually keep.
 Return JSON only:
-{"title": string, "why": string|null, "deadline": "YYYY-MM-DD"|null, "targets": [{"title": string, "unit": "min"|"count", "perWeek": number, "countUnit": string|null, "sessionMinutes": number|null, "block": "MORNING"|"COMMUTE"|"EVENING"|"NIGHT"|"GYM"|null, "note": string}], "milestones": [string], "question": string|null}
+{"title": string, "why": string|null, "deadline": "YYYY-MM-DD"|null, "targets": [{"title": string, "unit": "min"|"count", "perWeek": number, "countUnit": string|null, "sessionMinutes": number|null, "block": "MORNING"|"COMMUTE"|"EVENING"|"NIGHT"|"GYM"|null, "note": string}], "milestones": [string], "steps": [{"title": string, "minutes": number}], "question": string|null}
 Rules:
 - 1 to 5 targets. Each is something done every week: "min" = minutes per week (practice, study), "count" = things per week (applications, calls, mock interviews) with countUnit plural ("applications").
 - Use general knowledge of how this kind of goal is done well (e.g. exam prep: daily problem practice, weekly mock tests near the end; fitness: 3-4 sessions a week; a new language: short daily sessions plus one weekly conversation; saving money: a weekly amount and one weekly check). Fit the plan to THEIR goal and field, never a default one. Short daily sessions beat one long weekly one.
@@ -29,6 +29,8 @@ Rules:
 - deadline: only if they said one or a time span ("in 2 months" from today ${c.todayKey}, ${c.weekday}). If they gave a date or span, never ask when. If a deadline matters and they gave none, set "question" to one short question about this goal only asking when, and still propose targets.
 - milestones: 0 to 5 checkpoints in order, only if the goal has natural stages.
 - note: one short line on how to spread it ("≈ 50 min most mornings").
+- steps: the first 3 concrete things to do, in order, each 5 to 60 minutes. The FIRST step must take 15 minutes or less and be doable today with no preparation (e.g. "List 5 topics you could explain", not "Research the field"). Specific to their goal and words.
+- If they said how much time a week they can give, plan to that, not more.
 - Use their words for titles; keep titles short ("Practice problems", "Applications"). Never invent facts about them.
 Their areas: ${c.areas.join(", ") || "none yet"}.`
 

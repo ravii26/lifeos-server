@@ -31,6 +31,7 @@ import { maybeRefreshHabitStages } from "../progress/progress.service.js"
 import { decidePileService, getPileService, parkedListService, wakeParkedService } from "./pile.service.js"
 import { dumpService } from "./dump.service.js"
 import { freeTimeService } from "./free.service.js"
+import { applyPlannedModes } from "../area/area.planned.service.js"
 import { ENERGIES, PLACES } from "./free.rules.js"
 
 const router = Router()
@@ -63,6 +64,7 @@ router.get("/free", async (req: Request, res: Response) => {
 router.get("/", async (req: Request, res: Response) => {
   const q = parse(z.object({ minutes: z.coerce.number().int().positive().optional(), at, smallest: z.enum(["true", "false"]).optional() }), req.query)
   const clock = await getClock(req.user!.id, q.at)
+  await applyPlannedModes(req.user!.id).catch(() => 0)
   await maybeRefreshHabitStages(req.user!.id, clock)
   await wakeParkedService(req.user!.id, clock.todayKey).catch(() => undefined)
   const [now, meal] = await Promise.all([

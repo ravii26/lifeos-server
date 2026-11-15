@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { cautionFor, cleanPlan, fitPlan } from "./goalplan.rules.js"
+import { answersText, cautionFor, cleanPlan, fallbackPlan, fitPlan, FIRST_STEP_MAX } from "./goalplan.rules.js"
 
 const today = "2026-10-15"
 
@@ -74,5 +74,64 @@ describe("cautionFor (not now)", () => {
     expect(cautionFor([{ title: "A", tier: "MAIN", deadlineKey: "2026-11-19", behind: false }], today)).toBeNull()
     expect(cautionFor([{ title: "A", tier: "MAIN", deadlineKey: "2027-03-01", behind: true }], today)).toBeNull()
     expect(cautionFor([{ title: "A", tier: "SECONDARY", deadlineKey: "2026-11-19", behind: true }], today)).toBeNull()
+  })
+})
+
+describe("first steps (make a goal concrete)", () => {
+  const base = { title: "Start writing online", targets: [{ title: "Writing", unit: "min", perWeek: 120 }] }
+
+  it("step one is cut to 15 minutes by code, whatever was proposed", () => {
+    const p = cleanPlan({ ...base, steps: [{ title: "Draft the first post", minutes: 60 }, { title: "Publish it", minutes: 30 }] }, today)!
+    expect(p.steps[0]).toEqual({ title: "Draft the first post", minutes: FIRST_STEP_MAX })
+    expect(p.steps[1]!.minutes).toBe(30)
+  })
+
+  it("broken lengths become 15, empty steps are dropped, at most 5", () => {
+    const p = cleanPlan({ ...base, steps: [{ title: "" }, { title: "A", minutes: 500 }, ...Array.from({ length: 8 }, (_, i) => ({ title: `S${i}`, minutes: 20 }))] }, today)!
+    expect(p.steps[0]).toEqual({ title: "A", minutes: 15 })
+    expect(p.steps).toHaveLength(5)
+  })
+
+  it("with no steps proposed there is still a step one", () => {
+    const p = cleanPlan(base, today)!
+    expect(p.steps).toHaveLength(1)
+    expect(p.steps[0]!.minutes).toBe(15)
+    expect(p.steps[0]!.title).toContain("Start writing online")
+  })
+})
+
+describe("the answers", () => {
+  it("become one message, leaving out what was not said", () => {
+    expect(answersText({ text: "Learn to swim", why: "Holidays", weeklyMinutes: 90 })).toBe(
+      "Learn to swim\nWhy it matters: Holidays\nTime I can give each week: about 90 minutes",
+    )
+  })
+
+  it("without AI, code drafts a plan from them", () => {
+    const p = fallbackPlan({ text: "Learn to swim.", why: "Holidays", done: "Swim one length", weeklyMinutes: 90 })
+    expect(p.title).toBe("Learn to swim.")
+    expect(p.targets).toEqual([expect.objectContaining({ unit: "min", perWeek: 90, sessionMinutes: 30 })])
+    expect(p.milestones).toEqual(["Swim one length"])
+    expect(p.steps).toEqual([{ title: "Write down the first three things to do for Learn to swim", minutes: 15 }])
+  })
+
+  it("a code plan stays within sensible bounds", () => {
+    expect(fallbackPlan({ text: "Something", weeklyMinutes: 5 }).targets[0]!.perWeek).toBe(30)
+    expect(fallbackPlan({ text: "Something" }).targets[0]!.perWeek).toBe(120)
+  })
+})
+
+describe("the time they said", () => {
+  const plan = cleanPlan({ title: "Music", targets: [{ title: "Practice", unit: "min", perWeek: 300 }] }, today)!
+
+  it("is never planned past, even with lots of free time", () => {
+    const { plan: p, fit } = fitPlan(plan, 3000, 0, 120)
+    expect(p.targets[0]!.perWeek).toBe(132) // a little over 2 h is fine
+    expect(fit.message).toContain("You said about 2 h")
+  })
+
+  it("free time still wins when it is the smaller", () => {
+    const { fit } = fitPlan(plan, 200, 0, 600)
+    expect(fit.message).toContain("free after your other goals")
   })
 })

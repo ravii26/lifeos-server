@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { capacity, itemMinutes, modeOfTier, span, standing, tierOfMode, weekStartKey, type AreaWeek } from "./area.overview.rules.js"
+import { capacity, itemMinutes, modeOfTier, plannedDue, reworking, span, standing, tierOfMode, weekStartKey, type AreaWeek } from "./area.overview.rules.js"
 
 const week = (over: Partial<AreaWeek>): AreaWeek => ({
   mode: "PUSH", weeklyMinutes: null, projectMinutes: 0, minutes: 0, activeDays: 0, lastKey: null, todayKey: "2026-11-14", restUntilKey: null, ...over,
@@ -81,5 +81,30 @@ describe("hours needed against free", () => {
   it("says nothing when it fits, or when free time is not known", () => {
     expect(capacity(plan, 900).note).toBeNull()
     expect(capacity(plan, 0).over).toBe(false)
+  })
+})
+
+describe("a planned mode change", () => {
+  it("happens on its day, not before", () => {
+    expect(plannedDue("2026-12-01", "2026-11-30")).toBe(false)
+    expect(plannedDue("2026-12-01", "2026-12-01")).toBe(true)
+    expect(plannedDue("2026-12-01", "2026-12-05")).toBe(true)
+    expect(plannedDue(null, "2026-12-05")).toBe(false)
+  })
+})
+
+describe("reworking without doing", () => {
+  const now = Date.parse("2026-11-20T12:00:00Z")
+  const h = (n: number) => now - n * 3_600_000
+
+  it("three edits since the last done thing, this week", () => {
+    expect(reworking([h(1), h(5), h(30)], h(48), now)).toBe(true)
+    expect(reworking([h(1), h(5)], null, now)).toBe(false)
+  })
+  it("doing something resets it", () => {
+    expect(reworking([h(10), h(20), h(30)], h(5), now)).toBe(false)
+  })
+  it("edits older than a week do not count", () => {
+    expect(reworking([h(1), h(200), h(300)], null, now)).toBe(false)
   })
 })

@@ -17,14 +17,26 @@ export interface PlanTarget {
   note: string | null // "≈ 50 min most mornings"
 }
 
+// One thing to do now, sized in minutes. The first is always small enough
+// to start today ("clarity by doing": the plan improves from what is done).
+export interface PlanStep {
+  title: string
+  minutes: number
+}
+
 export interface GoalPlan {
   title: string
   why: string | null
   deadline: string | null // YYYY-MM-DD
   targets: PlanTarget[]
   milestones: string[]
+  steps: PlanStep[]
   question: string | null // one thing the AI needs to know (e.g. the deadline)
 }
+
+// Step one is never longer than this.
+export const FIRST_STEP_MAX = 15
+const MAX_STEPS = 5
 
 export interface PlanCaution {
   kind: "MAIN_GOAL_TIGHT"
@@ -76,9 +88,62 @@ export const cleanPlan = (raw: unknown, todayKey: string): GoalPlan | null => {
     if (targets.length >= MAX_TARGETS) break
   }
   const milestones = (Array.isArray(r.milestones) ? r.milestones : []).map((m) => str(m, 120)).filter(Boolean).slice(0, 8)
+  const steps: PlanStep[] = []
+  for (const s of Array.isArray(r.steps) ? r.steps : []) {
+    const x = (s ?? {}) as Record<string, unknown>
+    const sTitle = str(x.title, 120)
+    if (!sTitle) continue
+    const m = Math.round(num(x.minutes))
+    const minutes = m >= 5 && m <= 90 ? m : 15
+    // The first step must be startable now: cut it to size by code, whatever was proposed.
+    steps.push({ title: sTitle, minutes: steps.length === 0 ? Math.min(minutes, FIRST_STEP_MAX) : minutes })
+    if (steps.length >= MAX_STEPS) break
+  }
   const question = str(r.question, 200) || null
   if (!targets.length && !question) return null
-  return { title, why: str(r.why, 300) || null, deadline, targets, milestones, question }
+  return { title, why: str(r.why, 300) || null, deadline, targets, milestones, steps: steps.length ? steps : [firstStepFor(title)], question }
+}
+
+// When nothing better was proposed: a first step that makes the next ones clear.
+export const firstStepFor = (title: string): PlanStep => ({
+  title: `Write down the first three things to do for ${title.replace(/[.!]+$/, "")}`.slice(0, 120),
+  minutes: FIRST_STEP_MAX,
+})
+
+export interface GoalAnswers {
+  text: string
+  why?: string | null
+  done?: string | null // what "done" looks like in about 8 weeks
+  weeklyMinutes?: number | null // what they said they can give
+}
+
+// The goal in their words, plus the answers, as one message for the planner.
+export const answersText = (a: GoalAnswers): string =>
+  [
+    a.text.trim(),
+    a.why?.trim() ? `Why it matters: ${a.why.trim()}` : "",
+    a.done?.trim() ? `In about 8 weeks, done looks like: ${a.done.trim()}` : "",
+    a.weeklyMinutes ? `Time I can give each week: about ${a.weeklyMinutes} minutes` : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
+
+// Without AI the core still works: one weekly block of the time they said,
+// in sittings they can manage, and a first step that turns the goal into steps.
+export const fallbackPlan = (a: GoalAnswers): GoalPlan => {
+  const title = a.text.trim().replace(/\s+/g, " ").slice(0, 120)
+  const perWeek = Math.max(30, Math.min(600, Math.round(a.weeklyMinutes ?? 120)))
+  return {
+    title,
+    why: a.why?.trim() || null,
+    deadline: null,
+    targets: [
+      { title: "Time on it", unit: "min", perWeek, countUnit: null, sessionMinutes: Math.max(15, Math.min(60, Math.round(perWeek / 3 / 5) * 5)), block: null, note: null },
+    ],
+    milestones: a.done?.trim() ? [a.done.trim().slice(0, 120)] : [],
+    steps: [firstStepFor(title)],
+    question: null,
+  }
 }
 
 // Minutes a counted target takes in a week: its sessions, or 15 min a thing.
@@ -88,9 +153,17 @@ const weeklyMinutesOf = (t: PlanTarget): number =>
 // The plan must fit the free time left after the person's other weekly
 // targets. If it doesn't, every target is scaled down by the same share,
 // and the person is told plainly (a better way, decided by code).
-export const fitPlan = (plan: GoalPlan, weeklyFreeMinutes: number, alreadyCommitted: number): { plan: GoalPlan; fit: PlanFit } => {
+export const fitPlan = (
+  plan: GoalPlan,
+  weeklyFreeMinutes: number,
+  alreadyCommitted: number,
+  said: number | null = null, // what the person said they can give; never planned past it
+): { plan: GoalPlan; fit: PlanFit } => {
   const planned = plan.targets.reduce((s, t) => s + weeklyMinutesOf(t), 0)
-  const room = Math.max(0, Math.round(weeklyFreeMinutes * 0.8) - alreadyCommitted) // leave a fifth for rest and life
+  const free = Math.max(0, Math.round(weeklyFreeMinutes * 0.8) - alreadyCommitted) // leave a fifth for rest and life
+  // Their own number wins when it is smaller; a little over it is fine.
+  const capped = said != null && said > 0 && Math.round(said * 1.1) < free
+  const room = capped ? Math.round(said * 1.1) : free
   if (!planned || planned <= room) {
     return { plan, fit: { weeklyFreeMinutes, alreadyCommitted, plannedMinutes: planned, scaled: false, message: null } }
   }
@@ -105,7 +178,9 @@ export const fitPlan = (plan: GoalPlan, weeklyFreeMinutes: number, alreadyCommit
       alreadyCommitted,
       plannedMinutes: after,
       scaled: true,
-      message: `That needs about ${hrs(planned)} a week, but you have about ${hrs(room)} free after your other goals. I scaled each part down to fit; a plan you keep beats a bigger one you drop.`,
+      message: capped
+        ? `That would take about ${hrs(planned)} a week. You said about ${hrs(said!)}, so each part is scaled to that.`
+        : `That needs about ${hrs(planned)} a week, but you have about ${hrs(room)} free after your other goals. I scaled each part down to fit; a plan you keep beats a bigger one you drop.`,
     },
   }
 }
