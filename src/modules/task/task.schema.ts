@@ -5,6 +5,8 @@ const priority = z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"])
 const taskType = z.enum(["BOOLEAN", "COUNT", "TIMER"])
 const recurrence = z.enum(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"])
 export const energyLevel = z.enum(["LOW", "NORMAL", "HIGH"])
+export const dueKind = z.enum(["ON", "BY"])
+export const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a time like 06:30")
 const taskSource = z.enum(["MANUAL", "DUMP", "LEARN", "BACKLOG_REMINDER", "REMINDER", "SAVE"])
 
 export const createTaskSchema = z.object({
@@ -26,6 +28,9 @@ export const createTaskSchema = z.object({
   targetCount: z.number().int().positive().optional(),
   targetMinutes: z.number().int().positive().optional(),
   dueDate: z.coerce.date().optional(),
+  dueKind: dueKind.optional(),
+  windowFrom: hhmm.optional(),
+  windowTo: hhmm.optional(),
   isRecurring: z.boolean().optional(),
   recurrence: recurrence.optional(),
   // Provenance — lets the client create a task "↳ from Learn" (a Note) or
@@ -53,6 +58,9 @@ export const updateTaskSchema = z.object({
   targetCount: z.number().int().positive().nullable().optional(),
   targetMinutes: z.number().int().positive().nullable().optional(),
   dueDate: z.coerce.date().nullable().optional(),
+  dueKind: dueKind.nullable().optional(),
+  windowFrom: hhmm.nullable().optional(),
+  windowTo: hhmm.nullable().optional(),
   isRecurring: z.boolean().optional(),
   recurrence: recurrence.nullable().optional(),
 })

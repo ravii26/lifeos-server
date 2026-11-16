@@ -33,7 +33,48 @@ describe("first run: sorting", () => {
     )
     expect(items).toEqual([
       { title: "Get a new job", kind: "GOAL", areaName: "Work", due: "2027-02-01" },
-      { title: "Call the gym", kind: "TASK", areaName: "Health", due: null },
+      { title: "Call the gym", kind: "TASK", areaName: "Health", due: null , dueKind: null, windowFrom: null, windowTo: null },
+    ])
+  })
+})
+
+describe("first run: where each item came from", () => {
+  const text = "I want to switch job in 3 months, reduce my scrolling at night. Also call the bank tomorrow"
+  const areas = [{ name: "Career", type: "PRIMARY" as const, icon: "briefcase" as const, color: "#1a56ff" as const }]
+  const sort = (actions: Parameters<typeof fromExtraction>[0]["actions"]) => fromExtraction({ areas, actions }, today, text)
+
+  it("their own words are 'said', with the part of the text it came from", () => {
+    const [job] = sort([{ itemType: "GOAL", title: "Switch job", areaName: "Career", said: "switch job in 3 months" }])
+    expect(job).toMatchObject({ origin: "SAID", said: "switch job in 3 months", ideaFor: null })
+  })
+  it("a quote that is not in the text is replaced by the real part", () => {
+    const [job] = sort([{ itemType: "GOAL", title: "Switch job", areaName: "Career", said: "I dream of a new career" }])
+    expect(job).toMatchObject({ origin: "SAID", said: "I want to switch job in 3 months" })
+  })
+  it("a task the AI made out of a wish is Ally's idea, whatever the AI calls it", () => {
+    const [idea] = sort([
+      { itemType: "TASK", title: "Draft a personal weekly schedule to reduce scrolling", areaName: "Career", detail: "A plan for the evening leaves less room to scroll.", suggested: false },
+    ])
+    expect(idea).toMatchObject({ origin: "IDEA", said: null, ideaFor: "reduce my scrolling at night", reason: "A plan for the evening leaves less room to scroll." })
+  })
+  it("an idea the AI marks itself keeps what it is for, when those words are theirs", () => {
+    const [idea] = sort([{ itemType: "TASK", title: "Update the resume", areaName: "Career", suggested: true, for: "switch job", detail: "Needed before applying." }])
+    expect(idea).toMatchObject({ origin: "IDEA", ideaFor: "switch job", reason: "Needed before applying." })
+  })
+  it("an idea with nothing of theirs behind it is dropped, and at most three ideas are kept", () => {
+    expect(sort([{ itemType: "TASK", title: "Meditate daily", areaName: "Career", suggested: true }])).toEqual([])
+    const many = sort([1, 2, 3, 4, 5].map((n) => ({ itemType: "TASK" as const, title: `Idea ${n}`, areaName: "Career", suggested: true, for: "switch job" })))
+    expect(many).toHaveLength(3)
+  })
+  it("when is read from their words even when the title leaves the day out", () => {
+    const [call] = sort([{ itemType: "TASK", title: "Call the bank", areaName: "Career", said: "call the bank tomorrow" }])
+    expect(call).toMatchObject({ origin: "SAID", due: "2026-11-16", dueKind: "ON" })
+  })
+  it("without AI everything is their own words", () => {
+    const items = fallbackSort("pay the electricity bill\nlearn guitar maybe", today)
+    expect(items.map((i) => [i.origin, i.said])).toEqual([
+      ["SAID", "pay the electricity bill"],
+      ["SAID", "learn guitar maybe"],
     ])
   })
 })

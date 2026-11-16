@@ -111,7 +111,7 @@ describe("the answers", () => {
     const p = fallbackPlan({ text: "Learn to swim.", why: "Holidays", done: "Swim one length", weeklyMinutes: 90 })
     expect(p.title).toBe("Learn to swim.")
     expect(p.targets).toEqual([expect.objectContaining({ unit: "min", perWeek: 90, sessionMinutes: 30 })])
-    expect(p.milestones).toEqual(["Swim one length"])
+    expect(p.milestones).toEqual(["First steps done", "Halfway to: swim one length", "Swim one length"])
     expect(p.steps).toEqual([{ title: "Write down the first three things to do for Learn to swim", minutes: 15 }])
   })
 

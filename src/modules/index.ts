@@ -36,6 +36,7 @@ import progressRoutes from "./progress/progress.routes.js"
 import allyNoteRoutes, { searchRouter } from "./allynote/allynote.routes.js"
 import adminRoutes from "./admin/admin.routes.js"
 import goalPlanRoutes from "./goalplan/goalplan.routes.js"
+import milestoneRoutes from "./milestone/milestone.routes.js"
 import getKnowRoutes from "./getknow/getknow.routes.js"
 import logRoutes from "./log/log.routes.js"
 import seasonRoutes from "./season/season.routes.js"
@@ -82,6 +83,7 @@ router.use("/assistant", assistantRoutes)
 router.use("/guide", guideRoutes)
 router.use("/admin", adminRoutes)
 router.use("/goal-plan", goalPlanRoutes)
+router.use("/milestones", milestoneRoutes)
 router.use("/activity", activityRoutes)
 router.use("/now", nowRoutes)
 router.use("/know", getKnowRoutes)

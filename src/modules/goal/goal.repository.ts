@@ -12,7 +12,8 @@ export const findGoalsByUser = (
   take?: number,
 ) => {
   return prisma.goal.findMany({
-    where: { userId, ...filters },
+    // Milestones are small goals under a big one; they are listed with it, not here.
+    where: { userId, parentId: null, ...filters },
     orderBy: { createdAt: "desc" },
     skip,
     take,
@@ -20,7 +21,7 @@ export const findGoalsByUser = (
 }
 
 export const countGoalsByUser = (userId: string, filters: Prisma.GoalWhereInput = {}) => {
-  return prisma.goal.count({ where: { userId, ...filters } })
+  return prisma.goal.count({ where: { userId, parentId: null, ...filters } })
 }
 
 export const findGoalById = (id: string, userId: string) => {
@@ -39,14 +40,14 @@ export const deleteGoal = (id: string, userId: string) => {
 
 // How many goals the user currently has ACTIVE (the thing we cap).
 export const countActiveGoals = (userId: string) => {
-  return prisma.goal.count({ where: { userId, status: "ACTIVE" } })
+  return prisma.goal.count({ where: { userId, parentId: null, status: "ACTIVE" } })
 }
 
 // The active goals themselves — returned in the "you're full, pick one to
 // park" conflict payload so the frontend can render the chooser directly.
 export const findActiveGoals = (userId: string) => {
   return prisma.goal.findMany({
-    where: { userId, status: "ACTIVE" },
+    where: { userId, parentId: null, status: "ACTIVE" },
     orderBy: { activatedAt: "asc" },
   })
 }

@@ -66,6 +66,7 @@ import { loadPatternFacts, detectPatterns } from "./assistant.patterns.js"
 import { recallMemories, recallPastMemories, saveMemories, forgetMemories, type MemoryWrite } from "./assistant.memory.js"
 import { currentMemoryWhere } from "./assistant.memory.rules.js"
 import { todayKeyInTz, weekdayInTz, dateFromKey, dayKeyInTz } from "../../shared/utils/time.util.js"
+import { whenFor } from "../step/when.rules.js"
 import logger from "../../lib/logger.js"
 
 // refs: what an assistant turn made or touched, so "move it" knows what "it" is.
@@ -737,7 +738,11 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
           skipped++
           continue
         }
-        const dueKey = dayOnly(a.due)
+        // On a day or by it, and any hours: read from the words (when.rules.ts). With one
+        // thing added, the whole message is those words; with several, only its own title.
+        const said = planned.filter((p) => p.type === "ADD_TASK").length === 1 ? `${message} ${a.title}` : a.title
+        const when = whenFor(said, { dueKey: dayOnly(a.due) }, ctx.todayKey)
+        const dueKey = when.dueKey
         const task = await createTaskService(
           userId,
           {
@@ -745,6 +750,9 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
             minimumVersion: a.minimum?.trim() || undefined,
             areaId: a.areaId && areaIds.has(a.areaId) ? a.areaId : undefined,
             dueDate: dueKey ? dateFromKey(dueKey) : undefined,
+            dueKind: when.dueKind ?? undefined,
+            windowFrom: when.windowFrom ?? undefined,
+            windowTo: when.windowTo ?? undefined,
             priority: prio(a.priority),
             sizeMinutes: size(a.sizeMinutes),
             block: blockOf(a.block),

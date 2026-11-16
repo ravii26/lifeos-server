@@ -28,8 +28,31 @@ describe("parseDumpJson", () => {
       ],
     })
     expect(parseDumpJson(raw, ctx)).toEqual([
-      { title: "Book exam date", due: "2026-11-20", minutes: 10, areaId: "career", soon: false },
-      { title: "Pay rent", due: null, minutes: null, areaId: null, soon: true },
+      { title: "Book exam date", due: "2026-11-20", dueKind: "ON", windowFrom: null, windowTo: null, minutes: 10, areaId: "career", soon: false },
+      { title: "Pay rent", due: null, dueKind: null, windowFrom: null, windowTo: null, minutes: null, areaId: null, soon: true },
+    ])
+  })
+
+  it("reads when: by a day from the person's words, hours from the AI or the words", () => {
+    const raw = JSON.stringify({
+      items: [
+        { title: "Send the resume", said: "send the resume by Friday", due: "2026-11-20" },
+        { title: "Go running", said: "go running 6 to 8 am" },
+        { title: "Guitar practice", from: "19:00", to: "20:00" },
+      ],
+    })
+    expect(parseDumpJson(raw, ctx)).toMatchObject([
+      { title: "Send the resume", due: "2026-11-20", dueKind: "BY" },
+      { title: "Go running", due: null, windowFrom: "06:00", windowTo: "08:00" },
+      { title: "Guitar practice", windowFrom: "19:00", windowTo: "20:00" },
+    ])
+  })
+
+  it("without AI, when is read from each line and taken out of the name", () => {
+    expect(splitDump("call the bank tomorrow; run 6 to 8 am; study between 6 and 8 pm", ctx.todayKey)).toMatchObject([
+      { title: "Call the bank", dueKind: "ON" },
+      { title: "Run", windowFrom: "06:00", windowTo: "08:00" },
+      { title: "Study", windowFrom: "18:00", windowTo: "20:00" },
     ])
   })
 

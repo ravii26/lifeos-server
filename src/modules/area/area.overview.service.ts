@@ -11,6 +11,9 @@ import { capacity, itemMinutes, modeOfTier, reworking, standing, weekStartKey, t
 import { applyPlannedModes } from "./area.planned.service.js"
 import { metricStand } from "../progress/progress.rules.js"
 import { lastPoints } from "../number/number.rules.js"
+import { kindOf, whenWords } from "../step/when.rules.js"
+import { progressOf } from "../milestone/milestone.service.js"
+import type { GoalProgress, MilestoneState } from "../milestone/milestone.rules.js"
 
 // How far back "last touched" looks.
 const LOOKBACK_DAYS = 60
@@ -30,8 +33,16 @@ export interface AreaOverviewItem {
   doneCount: number
   value: number
   status: string
-  goals: { id: string; title: string }[]
-  nextSteps: { id: string; title: string; minutes: number | null; dueKey: string | null; energy: string | null; smaller: string | null }[]
+  goals: {
+    id: string
+    title: string
+    // Milestones (5.0 #44), or null for a goal without them.
+    milestones: { id: string; title: string; state: MilestoneState; stepsDone: number; stepsTotal: number }[] | null
+    progress: { index: number; total: number; reached: number; ready: boolean; currentId: string | null; line: string } | null
+  }[]
+  // The first goal's milestone line, shown under the area: "Milestone 2 of 5: … · 3 of 6 steps done".
+  progressLine: string | null
+  nextSteps: { id: string; title: string; minutes: number | null; dueKey: string | null; dueKind: "ON" | "BY" | null; windowFrom: string | null; windowTo: string | null; when: string | null; energy: string | null; smaller: string | null }[]
   routines: { id: string; title: string; doneThisWeek: number }[]
   // Three small tastes going in this area, or null.
   tastes: { done: number; total: number; decide: boolean } | null
@@ -73,7 +84,7 @@ export const getAreasOverviewService = async (userId: string, now: Date = new Da
     prisma.area.findMany({ where: { userId, isActive: true }, orderBy: { order: "asc" } }),
     prisma.task.findMany({
       where: { userId, archivedAt: null, OR: [{ status: { in: ["TODO", "IN_PROGRESS"] } }, { completedAt: { gte: since } }] },
-      select: { id: true, areaId: true, projectId: true, title: true, status: true, priority: true, dueDate: true, sizeMinutes: true, targetMinutes: true, completedAt: true, energy: true, minimumVersion: true },
+      select: { id: true, areaId: true, projectId: true, goalId: true, title: true, status: true, priority: true, dueDate: true, dueKind: true, windowFrom: true, windowTo: true, sizeMinutes: true, targetMinutes: true, completedAt: true, energy: true, minimumVersion: true },
     }),
     prisma.habit.findMany({
       where: { userId, isActive: true },
@@ -84,7 +95,7 @@ export const getAreasOverviewService = async (userId: string, now: Date = new Da
       select: { id: true, areaId: true, weeklyTargetMinutes: true, kind: true, metric: { include: { entries: { orderBy: { at: "desc" }, take: 60 } } } },
     }),
     // A round of tastes is not a goal to show; it is reported as `tastes` below.
-    prisma.goal.findMany({ where: { userId, status: "ACTIVE", OR: [{ kind: null }, { kind: { not: TASTES_KIND } }] }, select: { id: true, areaId: true, title: true }, orderBy: { createdAt: "asc" } }),
+    prisma.goal.findMany({ where: { userId, status: "ACTIVE", parentId: null, OR: [{ kind: null }, { kind: { not: TASTES_KIND } }] }, select: { id: true, areaId: true, title: true }, orderBy: { createdAt: "asc" } }),
     prisma.timeEntry.findMany({
       where: { userId, date: { gte: since }, minutes: { not: null }, itemId: { not: null } },
       select: { itemType: true, itemId: true, minutes: true, date: true },
@@ -102,6 +113,20 @@ export const getAreasOverviewService = async (userId: string, now: Date = new Da
       select: { itemId: true, at: true },
     }),
   ])
+
+  // Milestones of each goal; steps of milestones not yet open (or already reached) are not next steps.
+  const progress = await progressOf(userId, goals.map((g) => g.id))
+  const waiting = new Set<string>()
+  for (const p of progress.values()) for (const m of p.milestones) if (m.state !== "CURRENT") waiting.add(m.id)
+  const goalView = (g: { id: string; title: string }): AreaOverviewItem["goals"][number] => {
+    const p: GoalProgress | undefined = progress.get(g.id)
+    return {
+      id: g.id,
+      title: g.title,
+      milestones: p ? p.milestones.map((m) => ({ id: m.id, title: m.title, state: m.state, stepsDone: m.stepsDone, stepsTotal: m.stepsTotal })) : null,
+      progress: p ? { index: p.index, total: p.total, reached: p.reached, ready: p.ready, currentId: p.current?.id ?? null, line: p.line } : null,
+    }
+  }
 
   const areaOfProject = new Map(projects.map((p) => [p.id, p.areaId]))
   const areaOfTask = new Map(tasks.map((t) => [t.id, t.areaId ?? (t.projectId ? areaOfProject.get(t.projectId) ?? null : null)]))
@@ -170,7 +195,7 @@ export const getAreasOverviewService = async (userId: string, now: Date = new Da
       restUntilKey: restUntil,
     })
     const open = tasks
-      .filter((x) => (x.status === "TODO" || x.status === "IN_PROGRESS") && areaOfTask.get(x.id) === a.id)
+      .filter((x) => (x.status === "TODO" || x.status === "IN_PROGRESS") && areaOfTask.get(x.id) === a.id && !(x.goalId && waiting.has(x.goalId)))
       .sort((x, y) => {
         // Dated first and soonest first, then by priority.
         const dx = x.dueDate?.getTime() ?? Number.POSITIVE_INFINITY
@@ -191,8 +216,13 @@ export const getAreasOverviewService = async (userId: string, now: Date = new Da
       doneCount: t?.done ?? 0,
       value: stand.value,
       status: stand.status,
-      goals: goals.filter((g) => g.areaId === a.id).map((g) => ({ id: g.id, title: g.title })),
-      nextSteps: open.slice(0, 3).map((x) => ({ id: x.id, title: x.title, minutes: x.sizeMinutes ?? x.targetMinutes ?? null, dueKey: x.dueDate ? dayKeyInTz(x.dueDate, tz) : null, energy: x.energy, smaller: x.minimumVersion })),
+      goals: goals.filter((g) => g.areaId === a.id).map(goalView),
+      progressLine: goals.filter((g) => g.areaId === a.id).map((g) => progress.get(g.id)?.line).find(Boolean) ?? null,
+      nextSteps: open.slice(0, 3).map((x) => {
+        const w = { dueKey: x.dueDate ? utcDayKey(x.dueDate) : null, dueKind: x.dueKind as "ON" | "BY" | null, windowFrom: x.windowFrom, windowTo: x.windowTo }
+        // The kind is always said to the app (an older date with none reads as "by"), with the words to show.
+        return { id: x.id, title: x.title, minutes: x.sizeMinutes ?? x.targetMinutes ?? null, ...w, dueKind: kindOf(w), when: whenWords(w, todayKey), energy: x.energy, smaller: x.minimumVersion }
+      }),
       routines: habits
         .filter((h) => h.areaId === a.id && !h.isLimit)
         .map((h) => ({ id: h.id, title: h.title, doneThisWeek: h.logs.filter((l) => { const k = utcDayKey(l.date); return k >= weekStart && k <= todayKey }).length })),

@@ -27,9 +27,9 @@ Rules:
 - sessionMinutes: one sitting, 15 to 90. block: when it fits best given their free time below. Never during their work or study hours.
 - The whole plan must fit their free time: about ${Math.round(c.weeklyFreeMinutes / 60)} h a week free (${c.freeByBlock}), minus their other targets (${c.otherTargets.join("; ") || "none"}). Leave room to rest.
 - deadline: only if they said one or a time span ("in 2 months" from today ${c.todayKey}, ${c.weekday}). If they gave a date or span, never ask when. If a deadline matters and they gave none, set "question" to one short question about this goal only asking when, and still propose targets.
-- milestones: 0 to 5 checkpoints in order, only if the goal has natural stages.
+- milestones: 3 to 6 small goals in order, each reachable in 1 to 4 weeks, each a result they can see is reached ("Run 5 km without stopping"), not an activity. The last one is the goal reached. For a goal that takes under 2 weeks, [].
 - note: one short line on how to spread it ("≈ 50 min most mornings").
-- steps: the first 3 concrete things to do, in order, each 5 to 60 minutes. The FIRST step must take 15 minutes or less and be doable today with no preparation (e.g. "List 5 topics you could explain", not "Research the field"). Specific to their goal and words.
+- steps: the first 3 concrete things to do, in order, all towards the FIRST milestone, each 5 to 60 minutes. The FIRST step must take 15 minutes or less and be doable today with no preparation (e.g. "List 5 topics you could explain", not "Research the field"). Specific to their goal and words.
 - If they said how much time a week they can give, plan to that, not more.
 - Use their words for titles; keep titles short ("Practice problems", "Applications"). Never invent facts about them.
 Their areas: ${c.areas.join(", ") || "none yet"}.`

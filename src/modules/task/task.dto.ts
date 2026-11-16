@@ -19,6 +19,9 @@ export interface TaskDto {
   completedCount: number
   targetMinutes: number | null
   dueDate: Date | null
+  dueKind: string | null
+  windowFrom: string | null
+  windowTo: string | null
   isRecurring: boolean
   recurrence: string | null
   source: string

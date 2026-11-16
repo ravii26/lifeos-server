@@ -4,9 +4,12 @@ import { z } from "zod"
 import { authenticate } from "../../shared/middleware/auth.middleware.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
 import { ValidationError } from "../../shared/utils/errors.util.js"
-import { energyLevel } from "../task/task.schema.js"
+import { dueKind, energyLevel, hhmm } from "../task/task.schema.js"
 import { MOVES } from "./step.rules.js"
 import { addStepService, editStepService, letGoStepService, moveStepService } from "./step.service.js"
+import { parseWhen } from "./when.rules.js"
+import { clearerStepService, stepBriefService } from "./brief.service.js"
+import { getClock } from "../now/now.service.js"
 import prisma from "../../lib/prisma.js"
 import { NotFoundError } from "../../shared/utils/errors.util.js"
 import { recordActivity } from "../activity/activity.service.js"
@@ -27,15 +30,28 @@ const fields = {
   minimumVersion: z.string().max(200).nullable().optional(),
 }
 
-// POST /steps — a new step in an area.
+// On a day, by a day, a window of hours; all empty = anytime.
+const when = z.object({
+  dueKind: dueKind.nullable().optional(),
+  dueKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  windowFrom: hhmm.nullable().optional(),
+  windowTo: hhmm.nullable().optional(),
+})
+
+// POST /steps — a new step in an area. With no "when" sent, it is read from
+// the words ("call the bank tomorrow") and taken out of the name.
 router.post("/", async (req: Request, res: Response) => {
-  const b = parse(z.object({ areaId: z.string().min(1), title: z.string().min(1).max(200), ...fields }), req.body)
+  const b = parse(z.object({ areaId: z.string().min(1), goalId: z.string().min(1).nullish(), title: z.string().min(1).max(200), when: when.optional(), ...fields }), req.body)
+  if (!b.when) {
+    const p = parseWhen(b.title, (await getClock(req.user!.id)).todayKey)
+    if (p.dueKey || p.windowFrom) Object.assign(b, { title: p.rest, when: p })
+  }
   sendSuccess(res, "Step added", await addStepService(req.user!.id, b), 201)
 })
 
-// PATCH /steps/:id — name, length, energy, smaller version. Undo puts back what changed.
+// PATCH /steps/:id — name, length, energy, smaller version, and when. Undo puts back what changed.
 router.patch("/:id", async (req: Request, res: Response) => {
-  const b = parse(z.object({ title: z.string().min(1).max(200).optional(), ...fields }), req.body)
+  const b = parse(z.object({ title: z.string().min(1).max(200).optional(), when: when.optional(), ...fields }), req.body)
   sendSuccess(res, "Step saved", await editStepService(req.user!.id, String(req.params.id), b))
 })
 
@@ -48,6 +64,17 @@ router.post("/:id/move", async (req: Request, res: Response) => {
 // POST /steps/:id/let-go — archived, not destroyed; Undo brings it back.
 router.post("/:id/let-go", async (req: Request, res: Response) => {
   sendSuccess(res, "Let go", await letGoStepService(req.user!.id, String(req.params.id)))
+})
+
+// GET /steps/:id/brief — for the "doing it" screen: what it is part of, a first
+// two-minute move, and what done looks like. Works without AI.
+router.get("/:id/brief", async (req: Request, res: Response) => {
+  sendSuccess(res, "Brief", await stepBriefService(req.user!.id, String(req.params.id)))
+})
+
+// GET /steps/:id/clearer — a clearer wording for a step that isn't clear. Nothing is saved.
+router.get("/:id/clearer", async (req: Request, res: Response) => {
+  sendSuccess(res, "Clearer", await clearerStepService(req.user!.id, String(req.params.id)))
 })
 
 // GET /steps/to-sort — to-dos with no area (from chat or a brain dump), oldest

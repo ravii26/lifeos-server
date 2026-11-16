@@ -156,6 +156,13 @@ model Goal {
   // TASTES: three small tries in an area someone is unsure about, then a
   // decision (keep, change direction, drop). Null = an ordinary goal.
   kind        String?
+  // Milestones (5.0 #44): a small goal under a big one, in order. Null =
+  // a goal of its own. Status says the milestone's state: COMPLETED reached,
+  // ACTIVE current, PAUSED still to come, ABANDONED let go.
+  parentId    String?
+  parent      Goal?   @relation("GoalMilestones", fields: [parentId], references: [id], onDelete: Cascade)
+  milestones  Goal[]  @relation("GoalMilestones")
+  order       Int?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -165,6 +172,7 @@ model Goal {
   tasks    Task[]
 
   @@index([userId, status])
+  @@index([parentId])
 }
 
 model Project {
@@ -299,6 +307,13 @@ model Task {
   targetMinutes  Int?
 
   dueDate DateTime?
+  // What the date means: ON (that day; hidden until then) | BY (any day until
+  // then). Null with a date = an older to-do, treated as BY.
+  dueKind    String?
+  // Hours of the day this belongs to ("06:00" to "08:00"). Suggested only
+  // inside them. Null = anytime.
+  windowFrom String?
+  windowTo   String?
 
   // A to-do with a time is a reminder. remindAt alone = "at 7"; with
   // windowEnd = "sometime between remindAt and windowEnd". repeatRule is an

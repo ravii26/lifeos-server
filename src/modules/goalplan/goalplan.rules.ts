@@ -6,6 +6,7 @@
    Nothing is saved until the person keeps it.
    ===================================================================== */
 import { BLOCKS, type Block } from "../now/now.rules.js"
+import { cleanMilestones, fallbackMilestones } from "../milestone/milestone.rules.js"
 
 export interface PlanTarget {
   title: string
@@ -87,7 +88,8 @@ export const cleanPlan = (raw: unknown, todayKey: string): GoalPlan | null => {
     })
     if (targets.length >= MAX_TARGETS) break
   }
-  const milestones = (Array.isArray(r.milestones) ? r.milestones : []).map((m) => str(m, 120)).filter(Boolean).slice(0, 8)
+  // Small goals of 1 to 4 weeks each (5.0 #44); at most six, kept as written.
+  const milestones = cleanMilestones(r.milestones)
   const steps: PlanStep[] = []
   for (const s of Array.isArray(r.steps) ? r.steps : []) {
     const x = (s ?? {}) as Record<string, unknown>
@@ -140,7 +142,7 @@ export const fallbackPlan = (a: GoalAnswers): GoalPlan => {
     targets: [
       { title: "Time on it", unit: "min", perWeek, countUnit: null, sessionMinutes: Math.max(15, Math.min(60, Math.round(perWeek / 3 / 5) * 5)), block: null, note: null },
     ],
-    milestones: a.done?.trim() ? [a.done.trim().slice(0, 120)] : [],
+    milestones: fallbackMilestones(title, a.done),
     steps: [firstStepFor(title)],
     question: null,
   }

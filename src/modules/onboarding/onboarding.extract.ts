@@ -47,6 +47,15 @@ export interface OnboardingAction {
   targetMinutes?: number
   priority?: "LOW" | "MEDIUM" | "HIGH"
   dueDate?: string
+  // For a TASK: ON that day or BY it, and hours of the day ("HH:MM"). Checked by the caller.
+  dueKind?: string
+  windowFrom?: string
+  windowTo?: string
+  // Where it came from: the user's exact words for it, or (suggested) what
+  // of theirs the model's own idea is for. Checked against the text by the caller.
+  said?: string
+  suggested?: boolean
+  for?: string
 }
 
 export interface OnboardingExtraction {
@@ -75,9 +84,12 @@ ${existingAreaNames.length ? existingAreaNames.join(", ") : "None — this user 
 5. Classify each into exactly one type:
    - GOAL: a measurable outcome or target (e.g. "Run a 10k under 50 minutes").
    - HABIT: a recurring behaviour on a schedule (e.g. "Stretch every morning") — set "frequency" (DAILY/WEEKLY/CUSTOM) and "targetMinutes" if implied.
-   - TASK: a concrete one-off action to do soon (e.g. "Book a gym trial") — set "priority" (LOW/MEDIUM/HIGH); set "dueDate" (YYYY-MM-DD, absolute) only if a concrete or clearly-implied near-term date makes sense, else null.
+   - TASK: a concrete one-off action to do soon (e.g. "Book a gym trial") — set "priority" (LOW/MEDIUM/HIGH); set "dueDate" (YYYY-MM-DD, absolute) only if the user named a day or date, else null; set "dueKind" to ON if it happens on that day ("tomorrow", "on Saturday") or BY if the day is a deadline ("by Friday", "before the 20th"); set "windowFrom"/"windowTo" (24h HH:MM) only if the user gave hours or a part of the day ("run 6 to 8 am" = 06:00 and 08:00; morning = 06:00-09:00, afternoon = 12:00-16:00, evening = 18:00-21:00, night = 21:00-23:00), else null.
 6. Every Goal/Habit/Task's "areaName" must exactly match one of the Area names you proposed (or an existing area name from the list above) — never invent an area name in an action that isn't also a proposed/existing Area.
-7. Write clean, concise, imperative titles (max 80 chars) and a one-sentence "detail" rationale.
+7. Titles stay close to the user's OWN words (max 80 chars): tidy them, do not rephrase a wish into a different task. "reduce my scrolling" stays "Reduce scrolling", never "Draft a personal weekly schedule to reduce scrolling". Leave the day or time out of the title.
+7a. For every item set "said" to the user's exact words it came from (copied from their text) and "suggested" to false.
+7b. You may add at most 3 ideas of your own in total: a small first step towards something they said. For each, set "suggested" to true, "for" to the few words of theirs it is for (copied from their text), and "detail" to one plain sentence saying why it helps. Never present your own idea as something they said.
+7c. "detail" is a one-sentence rationale.
 8. If the user's text is too vague or short to say anything concrete, return fewer items rather than inventing generic ones ("exercise more", "be productive") — a short, honest starter beats a padded generic one.
 9. Respond with raw JSON only — no markdown code fences.
 </rules>
@@ -96,7 +108,13 @@ ${existingAreaNames.length ? existingAreaNames.join(", ") : "None — this user 
       "frequency": "DAILY" | "WEEKLY" | "CUSTOM" | null,
       "targetMinutes": number | null,
       "priority": "LOW" | "MEDIUM" | "HIGH" | null,
-      "dueDate": "YYYY-MM-DD" | null
+      "dueDate": "YYYY-MM-DD" | null,
+      "dueKind": "ON" | "BY" | null,
+      "windowFrom": "HH:MM" | null,
+      "windowTo": "HH:MM" | null,
+      "said": "string" | null,
+      "suggested": true | false,
+      "for": "string" | null
     }
   ]
 }
@@ -155,6 +173,12 @@ const parseExtraction = (rawJson: string): OnboardingExtraction => {
           ? e.priority
           : undefined,
       dueDate: typeof e.dueDate === "string" ? e.dueDate : undefined,
+      dueKind: typeof e.dueKind === "string" ? e.dueKind : undefined,
+      windowFrom: typeof e.windowFrom === "string" ? e.windowFrom : undefined,
+      windowTo: typeof e.windowTo === "string" ? e.windowTo : undefined,
+      said: typeof e.said === "string" ? e.said : undefined,
+      suggested: e.suggested === true,
+      for: typeof e.for === "string" ? e.for : undefined,
     })
     if (actions.length >= MAX_ACTIONS) break
   }

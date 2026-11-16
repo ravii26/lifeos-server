@@ -11,6 +11,7 @@ import { authenticate } from "../../shared/middleware/auth.middleware.js"
 import { sendSuccess } from "../../shared/utils/response.util.js"
 import { ValidationError } from "../../shared/utils/errors.util.js"
 import { dateFromKey } from "../../shared/utils/time.util.js"
+import { hhmm } from "../task/task.schema.js"
 import { recordActivity, type UndoPayload } from "../activity/activity.service.js"
 import { AREA_COLORS, AREA_ICON_NAMES, extractOnboardingSetup } from "../onboarding/onboarding.extract.js"
 import { fallbackSort, fromExtraction, MAX_AREAS, MAX_ITEMS, startingMinutes, suggestModes, TIER, type Mode } from "./firstrun.rules.js"
@@ -28,9 +29,9 @@ router.post("/sort", async (req: Request, res: Response) => {
   const b = parse(z.object({ text: z.string().trim().min(3, "Say a little more: a few things you want.").max(4000) }), req.body)
   const now = await getUserNow(req.user!.id)
   const x = await extractOnboardingSetup(b.text, [], now)
-  let items = fromExtraction(x, now.isoDate)
+  let items = fromExtraction(x, now.isoDate, b.text)
   const byCode = items.length === 0
-  if (byCode) items = fallbackSort(b.text)
+  if (byCode) items = fallbackSort(b.text, now.isoDate)
   if (!items.length) throw new ValidationError("I couldn't find separate things in that. Try one thing per line.")
   sendSuccess(res, "Sorted", { items, areas: suggestModes(items, b.text, now.isoDate), byCode })
 })
@@ -47,7 +48,7 @@ router.post("/apply", async (req: Request, res: Response) => {
         .min(1)
         .max(MAX_AREAS),
       items: z
-        .array(z.object({ title: z.string().trim().min(1).max(200), kind: z.enum(["GOAL", "TASK", "HABIT"]), areaName: z.string().trim().min(1).max(60), due: day.nullish() }))
+        .array(z.object({ title: z.string().trim().min(1).max(200), kind: z.enum(["GOAL", "TASK", "HABIT"]), areaName: z.string().trim().min(1).max(60), due: day.nullish(), dueKind: z.enum(["ON", "BY"]).nullish(), windowFrom: hhmm.nullish(), windowTo: hhmm.nullish() }))
         .max(MAX_ITEMS),
     }),
     req.body,
@@ -102,7 +103,7 @@ router.post("/apply", async (req: Request, res: Response) => {
       undo.push({ kind: "ARCHIVE_HABIT", habitId: h.id })
       habits++
     } else {
-      const t = await prisma.task.create({ data: { userId, areaId: id, title: i.title, dueDate: i.due ? dateFromKey(i.due) : null, sizeMinutes: 25, source: "DUMP" } })
+      const t = await prisma.task.create({ data: { userId, areaId: id, title: i.title, dueDate: i.due ? dateFromKey(i.due) : null, dueKind: i.due ? (i.dueKind ?? "ON") : null, windowFrom: i.windowFrom && i.windowTo ? i.windowFrom : null, windowTo: i.windowFrom && i.windowTo ? i.windowTo : null, sizeMinutes: 25, source: "DUMP" } })
       undo.push({ kind: "ARCHIVE_TASK", taskId: t.id })
       tasks++
     }

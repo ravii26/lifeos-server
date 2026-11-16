@@ -47,7 +47,7 @@ const splitWithAi = async (text: string, areas: { id: string; name: string }[], 
           }
         : undefined,
     },
-    () => ({ items: splitDump(text), fromAi: false }),
+    () => ({ items: splitDump(text, todayKey), fromAi: false }),
   )
 }
 
@@ -71,6 +71,9 @@ export const dumpService = async (userId: string, text: string) => {
         title: i.title,
         areaId: i.areaId,
         dueDate: i.due ? dateFromKey(i.due) : null,
+        dueKind: i.due ? (i.dueKind ?? "ON") : null,
+        windowFrom: i.windowFrom && i.windowTo ? i.windowFrom : null,
+        windowTo: i.windowFrom && i.windowTo ? i.windowTo : null,
         sizeMinutes: i.minutes ?? DEFAULT_ITEM_MINUTES,
         source: "DUMP",
       }),

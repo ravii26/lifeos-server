@@ -6,6 +6,7 @@
    answers the dump is still split by plain code.
    ===================================================================== */
 import { daysBetweenKeys } from "../../shared/utils/time.util.js"
+import { parseWhen, whenFor, type DueKind } from "../step/when.rules.js"
 
 export const DUMP_MAX_ITEMS = 25
 export const DEFAULT_ITEM_MINUTES = 25
@@ -15,6 +16,9 @@ export const PLANNED_SHARE = 0.7
 export interface DumpItem {
   title: string
   due: string | null // YYYY-MM-DD
+  dueKind?: DueKind | null // ON that day, or BY it
+  windowFrom?: string | null // "HH:MM"
+  windowTo?: string | null
   minutes: number | null
   areaId: string | null
   soon: boolean // said as this week / today / urgent
@@ -35,20 +39,23 @@ const tidy = (s: string) => {
 }
 
 // Without AI: one thing per line, sentence, comma, "and" or "aur".
-export const splitDump = (text: string): DumpItem[] => {
+export const splitDump = (text: string, todayKey?: string): DumpItem[] => {
   const out: DumpItem[] = []
   const seen = new Set<string>()
   const parts = text
-    .split(/\n|;|,|\.\s+|\s+(?:and|aur|also|plus|then|phir)\s+/i)
+    // "between 6 and 8" is one thing, not two.
+    .split(/\n|;|,|\.\s+|\s+(?:and|aur|also|plus|then|phir)\s+(?!\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm|baje)?(?:\s|$))/i)
     .map((p) => p.trim())
     .filter(Boolean)
   for (const raw of parts) {
     if (FEELING.test(raw)) continue
-    const title = tidy(raw).slice(0, 200)
+    // With a day to count from, "when" is read from the words and taken out of the name.
+    const w = todayKey ? parseWhen(tidy(raw), todayKey) : null
+    const title = tidy(w?.rest ?? raw).slice(0, 200)
     const key = norm(title)
     if (title.length < 3 || seen.has(key)) continue
     seen.add(key)
-    out.push({ title, due: null, minutes: null, areaId: null, soon: SOON.test(raw) })
+    out.push({ title, due: w?.dueKey ?? null, dueKind: w?.dueKind ?? null, windowFrom: w?.windowFrom ?? null, windowTo: w?.windowTo ?? null, minutes: null, areaId: null, soon: SOON.test(raw) })
     if (out.length >= DUMP_MAX_ITEMS) break
   }
   return out
@@ -74,9 +81,14 @@ export const parseDumpJson = (raw: string, ctx: { areaIds: Set<string>; todayKey
     seen.add(key)
     const due = typeof o.due === "string" && /^\d{4}-\d{2}-\d{2}$/.test(o.due) && !Number.isNaN(Date.parse(`${o.due}T00:00:00Z`)) && daysBetweenKeys(ctx.todayKey, o.due) >= 0 && daysBetweenKeys(ctx.todayKey, o.due) <= 730 ? o.due : null
     const m = Number(o.minutes)
+    // The kind and the hours come from the AI when valid, else from the person's own words.
+    const w = whenFor(`${typeof o.said === "string" ? o.said : ""} ${title}`, { dueKey: due, dueKind: o.when === "BY" || o.when === "ON" ? o.when : undefined, windowFrom: o.from, windowTo: o.to }, ctx.todayKey)
     out.push({
       title,
-      due,
+      due: w.dueKey,
+      dueKind: w.dueKind,
+      windowFrom: w.windowFrom,
+      windowTo: w.windowTo,
       minutes: Number.isFinite(m) && m >= 5 && m <= 600 ? Math.round(m) : null,
       areaId: typeof o.areaId === "string" && ctx.areaIds.has(o.areaId) ? o.areaId : null,
       soon: o.soon === true,
@@ -107,9 +119,11 @@ export const timeCheck = (weeklyMinutes: number, freeMinutes: number): { fits: b
 export const dumpPrompt = (text: string, areas: { id: string; name: string }[], todayKey: string, weekday: string): string =>
   [
     "Split this person's brain dump into separate things to do. Return JSON only:",
-    '{"items":[{"title":"short action in their own words","due":"YYYY-MM-DD or null","minutes":number or null,"areaId":"one id from the list or null","soon":true|false}]}',
+    '{"items":[{"title":"short action in their own words, without the day or time","said":"their exact words for this item","due":"YYYY-MM-DD or null","when":"ON or BY or null","from":"HH:MM or null","to":"HH:MM or null","minutes":number or null,"areaId":"one id from the list or null","soon":true|false}]}',
     "Rules: one item per separate thing; keep their words (English or Hinglish); never invent things they didn't say;",
     "skip feelings and filler ('so much to do'); due only when they named a day or date;",
+    "when = ON if it happens on that day ('tomorrow', 'on Saturday', 'kal'), BY if that day is a deadline ('by Friday', 'before the 20th', 'Friday tak');",
+    "from/to (24h) only when they gave hours or a part of the day: 'run 6 to 8 am' = 06:00 to 08:00, morning = 06:00 to 09:00, afternoon = 12:00 to 16:00, evening = 18:00 to 21:00, night = 21:00 to 23:00;",
     "soon = true only for today/tomorrow/this week/urgent; minutes only when they said or it is obvious (a call = 10).",
     `Today is ${weekday} ${todayKey}. Areas: ${JSON.stringify(areas)}`,
     `Dump:\n${text.slice(0, 4000)}`,

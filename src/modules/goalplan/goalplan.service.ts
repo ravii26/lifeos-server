@@ -7,6 +7,7 @@ import { getClock, getScheduleService } from "../now/now.service.js"
 import { weeklyTargets } from "../now/brain.service.js"
 import { targetPace } from "../now/brain.rules.js"
 import { proposePlanAi } from "./goalplan.ai.js"
+import { createMilestones } from "../milestone/milestone.service.js"
 import { answersText, cautionFor, cleanPlan, fallbackPlan, fitPlan, type GoalAnswers, type GoalPlan, type PlanCaution, type PlanFit } from "./goalplan.rules.js"
 
 export interface GoalPlanProposal {
@@ -124,21 +125,16 @@ export const acceptGoalPlanService = async (
     })
     projects.push(p.id)
   }
-  if (plan.milestones.length) {
-    const m = await prisma.project.create({
-      data: {
-        userId, areaId, goalId: goal.id, title: `${plan.title}: stages`.slice(0, 200), kind: "MILESTONE", deadline,
-        status: parked ? "PAUSED" : "ACTIVE",
-        milestones: { create: plan.milestones.map((title, order) => ({ title, order })) },
-      },
-    })
-    projects.push(m.id)
-  }
-  // The first steps, in order, as to-dos in the area under this goal. Parked: none yet.
+  // Milestones are small goals under this one (5.0 #44); the first opens now.
+  // One alone is not a split, so it stays out.
+  const milestones = plan.milestones.length >= 2 ? await createMilestones(userId, { id: goal.id, areaId }, plan.milestones, false) : null
+  // The first steps, in order, as to-dos in the area under the first milestone
+  // (or the goal). Parked: none yet.
+  const stepGoalId = milestones?.ids[0] ?? goal.id
   const steps: { id: string; title: string; minutes: number }[] = []
   if (!parked) {
     for (const s of plan.steps) {
-      const t = await prisma.task.create({ data: { userId, areaId, goalId: goal.id, title: s.title, sizeMinutes: s.minutes } })
+      const t = await prisma.task.create({ data: { userId, areaId, goalId: stepGoalId, title: s.title, sizeMinutes: s.minutes } })
       steps.push({ id: t.id, title: t.title, minutes: s.minutes })
     }
   }
@@ -147,11 +143,12 @@ export const acceptGoalPlanService = async (
     items: [
       ...steps.map((s) => ({ kind: "ARCHIVE_TASK" as const, taskId: s.id })),
       ...projects.map((projectId) => ({ kind: "ARCHIVE_PROJECT" as const, projectId })),
+      ...(milestones?.undo ?? []),
       { kind: "RESTORE_FIELDS", model: "goal", id: goal.id, prev: { status: "ABANDONED" } },
     ],
   }
   const ev = await recordActivity(userId, {
     type: "CREATED", itemType: "PROJECT", itemId: goal.id, title: parked ? `${plan.title} (parked)` : `${plan.title}: ${plan.targets.length} weekly targets`, source, undo,
   })
-  return { goalId: goal.id, projectIds: projects, parked, steps, firstStep: steps[0] ?? null, activityId: ev?.id }
+  return { goalId: goal.id, milestoneIds: milestones?.ids ?? [], projectIds: projects, parked, steps, firstStep: steps[0] ?? null, activityId: ev?.id }
 }

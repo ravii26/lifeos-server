@@ -3,6 +3,7 @@
    rules (now.rules.ts) and applies the few side effects (mode, schedule,
    moving to-dos), each logged and undoable.
    ===================================================================== */
+import { stepOffered } from "../milestone/milestone.rules.js"
 import type { ActivitySource, Prisma } from "@prisma/client"
 import prisma from "../../lib/prisma.js"
 import { recordActivity, type UndoPayload } from "../activity/activity.service.js"
@@ -42,6 +43,7 @@ import { adviseNow, targetPace, targetSession } from "./brain.rules.js"
 import { asDirectness, asFocus, wantsAdvice } from "../settings/personalization.rules.js"
 import { areaIdleDays, mondayOf, savesToday, skipsOf, weeklyTargets } from "./brain.service.js"
 import { activeHolds } from "./hold.service.js"
+import { kindOf, whenAllows } from "../step/when.rules.js"
 
 const WEEKDAY_CODES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
 const PRIORITY_RANK = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as const
@@ -147,7 +149,7 @@ export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandi
       where: { userId, status: { in: ["TODO", "IN_PROGRESS"] }, archivedAt: null, remindAt: null },
       include: {
         project: { select: { kind: true, status: true, deadline: true, goal: { select: { title: true, deadline: true } } } },
-        goal: { select: { title: true, why: true, status: true, areaId: true, deadline: true } },
+        goal: { select: { title: true, why: true, status: true, areaId: true, deadline: true, parentId: true } },
       },
       orderBy: { createdAt: "asc" },
       take: 200,
@@ -166,6 +168,10 @@ export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandi
 
   const fromTasks: NowCandidate[] = tasks
     .filter((t) => t.project?.status !== "ABANDONED" && t.project?.status !== "PAUSED")
+    // Steps of a milestone still to come wait until it opens (milestone.rules.ts).
+    .filter((t) => stepOffered(t.goal))
+    // "On Saturday" waits for Saturday; "6 to 8 am" is only offered inside those hours (when.rules.ts).
+    .filter((t) => whenAllows({ dueKind: t.dueKind as "ON" | "BY" | null, dueKey: t.dueDate ? utcDayKey(t.dueDate) : null, windowFrom: t.windowFrom, windowTo: t.windowTo }, c.todayKey, c.nowMin))
     .map((t, i) => {
       const areaId = t.areaId ?? t.goal?.areaId ?? null
       const a = areaId ? area.get(areaId) : undefined
@@ -180,7 +186,8 @@ export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandi
         minimum: t.minimumVersion,
         tier: t.goal && t.goal.status !== "ACTIVE" ? "LATER" : (a?.tier ?? "MAINTAIN"),
         priority: t.priority,
-        dueKey: t.dueDate ? utcDayKey(t.dueDate) : null,
+        // A day that was "on" and has come (or gone by) is simply today: it was never a deadline.
+        dueKey: t.dueDate ? (kindOf({ dueKind: t.dueKind as "ON" | "BY" | null, dueKey: utcDayKey(t.dueDate) }) === "ON" ? c.todayKey : utcDayKey(t.dueDate)) : null,
         order: i,
         areaId: a ? areaId : null,
         areaName: a?.name ?? null,
