@@ -67,6 +67,7 @@ import { recallMemories, recallPastMemories, saveMemories, forgetMemories, type 
 import { currentMemoryWhere } from "./assistant.memory.rules.js"
 import { todayKeyInTz, weekdayInTz, dateFromKey, dayKeyInTz } from "../../shared/utils/time.util.js"
 import { whenFor } from "../step/when.rules.js"
+import { provenance, type Origin } from "./assistant.origin.js"
 import logger from "../../lib/logger.js"
 
 // refs: what an assistant turn made or touched, so "move it" knows what "it" is.
@@ -74,13 +75,13 @@ export type ChatTurn = { role: "user" | "assistant"; text: string; refs?: ChatRe
 
 // activityId lets the app offer Undo for the action (see /activity/:id/undo).
 export type ChatAction = (
-  | { type: "TASK_ADDED"; id: string; title: string }
+  | ({ type: "TASK_ADDED"; id: string; title: string } & Partial<Origin>)
   | { type: "TASK_COMPLETED"; id: string; title: string }
   | { type: "HABIT_LOGGED"; id: string; title: string }
   | { type: "REMINDER_SET"; id: string; text: string; remindAt: string; windowEnd?: string; repeatRule?: string }
-  | { type: "HABIT_ADDED"; id: string; title: string; timeBlock?: string; prep?: string; anchor?: string; sizes?: { minutes: number; label: string }[] }
-  | { type: "PROJECT_ADDED"; id: string; title: string; kind: string; deadline?: string; priority: string; tasks: number }
-  | { type: "NOTE_ADDED"; id: string; title: string; collection: string; template: string; items: string[] }
+  | ({ type: "HABIT_ADDED"; id: string; title: string; timeBlock?: string; prep?: string; anchor?: string; sizes?: { minutes: number; label: string }[] } & Partial<Origin>)
+  | ({ type: "PROJECT_ADDED"; id: string; title: string; kind: string; deadline?: string; priority: string; tasks: number } & Partial<Origin>)
+  | ({ type: "NOTE_ADDED"; id: string; title: string; collection: string; template: string; items: string[] } & Partial<Origin>)
   // The right-now answer from the rules engine (sized options, never invented).
   | { type: "NOW_PICK"; kind: string; options: { id: string; sourceType: string; title: string; minutes: number; smaller: boolean; minimum: string }[] }
   | { type: "COMFORT_SHOWN"; feeling: string; item: { id: string; title: string; url: string | null }; step: string | null }
@@ -348,6 +349,7 @@ Action rules:
 - When they say they finished something, complete the matching task or habit.
 - When they ask to be reminded, set a reminder. When they clearly mention something they need to do, add a task (ask nothing unless truly unclear).
 - HARD RULE for lists: when they list several things to do, count them first and emit exactly one ADD_TASK per item (up to 12). Never summarise or merge items, and never stop early. Give each a realistic sizeMinutes.
+- If you add a to-do, habit, project or note the person did NOT ask for (a prep step, a smaller step, a helpful extra), add "suggested":true, "for":"the exact words of theirs it helps with", "detail":"one short line on why" to that action. Anything they asked for needs none of these.
 - HARD RULE for prep: whenever they say something must be prepared the night or evening before ("prep the night before", "soak the oats at night", "raat ko tayyari"), you MUST emit an extra ADD_HABIT titled "Prep <the thing>" with timeBlock EVENING and reminderTime 21:30 (or the time they said), in addition to the habit or note itself. Never skip it, and never fold it into another habit.
 - One long message can hold many things: emit one action per thing (up to 12). Do not merge unrelated things and do not invent extra ones. Do not duplicate what activeProjects, habits or openTasks already hold.
 - When they say a goal ("I want to switch jobs in 6 months"), create the project (MILESTONE for a goal with stages, with 3-5 stage names in milestones, why, a deadline from the timeframe) plus EXACTLY 3 starter to-dos in "tasks" (concrete first steps, never fewer than 3). Do NOT add a habit for it yourself: put exactly one fitting habit in "suggest" for them to confirm.
@@ -380,6 +382,10 @@ Return JSON only: {"role": "FRIEND"|"ASSISTANT"|"MENTOR"|"COACH"|"GUIDE", "reply
 
 interface PlannedAction {
   type?: string
+  // Set by the model when it adds something the person did not ask for (see provenance).
+  suggested?: boolean
+  for?: string
+  detail?: string
   title?: string
   minimum?: string | null
   areaId?: string | null
@@ -761,7 +767,7 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
           { source: "CHAT" },
         )
         openTitles.add(norm(task.title))
-        done.push({ type: "TASK_ADDED", id: task.id, title: task.title, activityId: task.activityId })
+        done.push({ type: "TASK_ADDED", id: task.id, title: task.title, activityId: task.activityId, ...provenance(message, a) })
       } else if (a.type === "COMPLETE_TASK" && a.taskId && taskIds.has(a.taskId)) {
         // Confidence tier: with more than one plausible to-do we ask, never guess.
         const options = isAmbiguousCompletion(message, ctx.tasks, a.taskId)
@@ -939,6 +945,7 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
         habitTitles.add(norm(habit.title))
         done.push({
           type: "HABIT_ADDED",
+          ...provenance(message, a),
           id: habit.id,
           title: habit.title,
           ...(habit.timeBlock && { timeBlock: habit.timeBlock }),
@@ -997,6 +1004,7 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
         }
         done.push({
           type: "PROJECT_ADDED",
+          ...provenance(message, a),
           id: project.id,
           title: project.title,
           kind: project.kind,
@@ -1023,6 +1031,7 @@ const execute = async (userId: string, ctx: Ctx, planned: PlannedAction[], messa
         )
         done.push({
           type: "NOTE_ADDED",
+          ...provenance(message, a),
           id: note.id,
           title: note.title,
           collection: note.collection,
