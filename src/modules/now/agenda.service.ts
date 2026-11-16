@@ -86,7 +86,7 @@ const dayInput = async (
     o.busyUntil && o.busyUntil.getTime() > c.now.getTime() ? Math.round((o.busyUntil.getTime() - localDayStartMs(c.todayKey, c.tz)) / 60_000) : null
   const [gapDays, candidates, due, done, week] = await Promise.all([
     lastActiveGapDays(userId, c),
-    loadCandidates(userId, c),
+    loadCandidates(userId, c, { ahead: true }),
     dueSoon(userId, c),
     o.isToday ? doneOn(userId, c) : Promise.resolve([]),
     c.weekday === 0 ? weekLines(userId, c) : Promise.resolve([]),

@@ -43,7 +43,7 @@ import { adviseNow, targetPace, targetSession } from "./brain.rules.js"
 import { asDirectness, asFocus, wantsAdvice } from "../settings/personalization.rules.js"
 import { areaIdleDays, mondayOf, savesToday, skipsOf, weeklyTargets } from "./brain.service.js"
 import { activeHolds } from "./hold.service.js"
-import { kindOf, whenAllows } from "../step/when.rules.js"
+import { blockForWindow, kindOf, whenAllows, whenAllowsAhead } from "../step/when.rules.js"
 
 const WEEKDAY_CODES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
 const PRIORITY_RANK = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as const
@@ -141,7 +141,9 @@ const planHabits = async (userId: string, todayKey: string): Promise<Map<string,
   return out
 }
 
-export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandidate[]> => {
+// `ahead`: for planning the rest of the day, where a window that has not ended yet is
+// placed in its part of the day; right now it is only offered inside its hours.
+export const loadCandidates = async (userId: string, c: Clock, opts: { ahead?: boolean } = {}): Promise<NowCandidate[]> => {
   const plans = await planHabits(userId, c.todayKey)
   const [areas, tasks, habits, targets, skips, idle, holds] = await Promise.all([
     prisma.area.findMany({ where: { userId, isActive: true }, select: { id: true, name: true, tier: true, laterUntil: true } }),
@@ -171,7 +173,7 @@ export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandi
     // Steps of a milestone still to come wait until it opens (milestone.rules.ts).
     .filter((t) => stepOffered(t.goal))
     // "On Saturday" waits for Saturday; "6 to 8 am" is only offered inside those hours (when.rules.ts).
-    .filter((t) => whenAllows({ dueKind: t.dueKind as "ON" | "BY" | null, dueKey: t.dueDate ? utcDayKey(t.dueDate) : null, windowFrom: t.windowFrom, windowTo: t.windowTo }, c.todayKey, c.nowMin))
+    .filter((t) => (opts.ahead ? whenAllowsAhead : whenAllows)({ dueKind: t.dueKind as "ON" | "BY" | null, dueKey: t.dueDate ? utcDayKey(t.dueDate) : null, windowFrom: t.windowFrom, windowTo: t.windowTo }, c.todayKey, c.nowMin))
     .map((t, i) => {
       const areaId = t.areaId ?? t.goal?.areaId ?? null
       const a = areaId ? area.get(areaId) : undefined
@@ -180,7 +182,7 @@ export const loadCandidates = async (userId: string, c: Clock): Promise<NowCandi
         sourceId: t.id,
         title: t.title,
         // A to-do inside a work project is office work unless said otherwise.
-        block: asBlock(t.block) ?? (t.project?.kind === "WORK" ? "OFFICE" : null),
+        block: asBlock(t.block) ?? (opts.ahead ? blockForWindow(t.windowFrom) : null) ?? (t.project?.kind === "WORK" ? "OFFICE" : null),
         sizeMinutes: t.sizeMinutes ?? t.targetMinutes,
         energy: t.energy,
         minimum: t.minimumVersion,
@@ -390,7 +392,7 @@ export const getDaySuggestionsService = async (userId: string, at?: string): Pro
     getMode(userId, c.now),
     getDay(userId, c.weekday),
     lastActiveGapDays(userId, c),
-    loadCandidates(userId, c),
+    loadCandidates(userId, c, { ahead: true }),
     prisma.userSettings.findUnique({ where: { userId }, select: { busyUntil: true } }).then((s) => s?.busyUntil ?? null),
   ])
   const from = busy && busy.getTime() > c.now.getTime() ? Math.round((busy.getTime() - localDayStartMs(c.todayKey, c.tz)) / 60_000) : c.nowMin

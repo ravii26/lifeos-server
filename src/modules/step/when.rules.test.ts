@@ -114,3 +114,31 @@ describe("checking what was sent", () => {
     expect(whenFor("Go running 6 to 8 am", {}, TODAY)).toEqual(w({ windowFrom: "06:00", windowTo: "08:00" }))
   })
 })
+
+describe("planning the day with windows (5.0 #45 o)", () => {
+  const w = (windowFrom: string | null, windowTo: string | null, dueKey: string | null = null, dueKind: "ON" | "BY" | null = null) => ({ dueKind, dueKey, windowFrom, windowTo })
+
+  it("a window that has not ended is still part of the day; one that has ended is not", async () => {
+    const { whenAllowsAhead } = await import("./when.rules.js")
+    expect(whenAllowsAhead(w("18:00", "20:00"), "2026-11-16", 15 * 60)).toBe(true) // not yet begun: planned
+    expect(whenAllowsAhead(w("06:00", "08:00"), "2026-11-16", 7 * 60)).toBe(true) // inside it
+    expect(whenAllowsAhead(w("06:00", "08:00"), "2026-11-16", 9 * 60)).toBe(false) // over for today
+    expect(whenAllowsAhead(w("22:00", "01:00"), "2026-11-16", 23 * 60)).toBe(true) // past midnight
+    expect(whenAllowsAhead(w(null, null), "2026-11-16", 23 * 60)).toBe(true)
+  })
+
+  it("an 'on a day' step still waits for its day", async () => {
+    const { whenAllowsAhead } = await import("./when.rules.js")
+    expect(whenAllowsAhead(w("06:00", "08:00", "2026-11-17", "ON"), "2026-11-16", 5 * 60)).toBe(false)
+    expect(whenAllowsAhead(w("06:00", "08:00", "2026-11-16", "ON"), "2026-11-16", 5 * 60)).toBe(true)
+  })
+
+  it("a window falls in the part of the day it begins in", async () => {
+    const { blockForWindow } = await import("./when.rules.js")
+    expect(blockForWindow("06:00")).toBe("MORNING")
+    expect(blockForWindow("18:00")).toBe("EVENING")
+    expect(blockForWindow("21:30")).toBe("NIGHT")
+    expect(blockForWindow("13:00")).toBeNull()
+    expect(blockForWindow(null)).toBeNull()
+  })
+})

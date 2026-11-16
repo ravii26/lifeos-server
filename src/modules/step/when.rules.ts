@@ -66,6 +66,30 @@ export const whenAllows = (w: When, todayKey: string, nowMin: number): boolean =
   return inWindow(w, nowMin)
 }
 
+/**
+ * For planning the day (not "right now"): a window that has not finished yet
+ * still belongs to the day, so it is placed where its hours fall instead of
+ * waiting out of sight until they begin. "On a day" still waits for its day.
+ */
+export const whenAllowsAhead = (w: When, todayKey: string, nowMin: number): boolean => {
+  if (kindOf(w) === "ON" && w.dueKey! > todayKey) return false
+  if (!w.windowFrom || !w.windowTo) return true
+  const from = minutesOf(w.windowFrom)
+  const to = minutesOf(w.windowTo)
+  // A window past midnight is never over before the day ends.
+  return from > to || nowMin < to
+}
+
+/** The part of the day a window falls in, as a day block ("6 to 8 am" is MORNING); null when no block fits (the afternoon). */
+export const blockForWindow = (windowFrom: string | null | undefined): "MORNING" | "EVENING" | "NIGHT" | null => {
+  if (!windowFrom || !isHhmm(windowFrom)) return null
+  const m = minutesOf(windowFrom)
+  if (m >= 21 * 60 || m < 4 * 60) return "NIGHT"
+  if (m >= 17 * 60) return "EVENING"
+  if (m < 11 * 60) return "MORNING"
+  return null
+}
+
 const hourWords = (hhmm: string): string => {
   const m = minutesOf(hhmm)
   const h = Math.floor(m / 60)
